@@ -34,14 +34,5 @@ class EvalResult(BaseModel):
     agent_answer: dict | None = None
 
 
-class GraderResult(BaseModel):
-    """Structured result from grading an evaluation."""
-    score: float = Field(ge=0.0, le=1.0, description="Score from 0.0 to 1.0")
-    passed: bool = Field(description="Whether the eval passed")
-    reasoning: str = Field(description="Detailed reasoning for the score")
-    successes: list[str] = Field(default_factory=list, description="List of things the agent did correctly")
-    failures: list[str] = Field(default_factory=list, description="List of things the agent failed to do or did incorrectly")
-
-
 # Backward compatibility alias
 TestResult = EvalResult

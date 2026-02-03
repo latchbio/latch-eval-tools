@@ -1,6 +1,6 @@
 """latch-eval-tools: Shared evaluation harness tools for biology AI benchmarks."""
 
-from latch_eval_tools.types import Eval, EvalResult, TestCase, TestResult, GraderResult
+from latch_eval_tools.types import Eval, EvalResult, TestCase, TestResult
 from latch_eval_tools.linter import lint_eval, lint_directory, LintResult
 from latch_eval_tools.harness import (
     EvalRunner,
@@ -13,6 +13,20 @@ from latch_eval_tools.harness import (
     setup_workspace,
     cleanup_workspace,
 )
+from latch_eval_tools.graders import (
+    BinaryGrader,
+    GraderResult,
+    get_nested_value,
+    NumericToleranceGrader,
+    MarkerGenePrecisionRecallGrader,
+    MarkerGeneSeparationGrader,
+    LabelSetJaccardGrader,
+    DistributionComparisonGrader,
+    SpatialAdjacencyGrader,
+    MultipleChoiceGrader,
+    GRADER_REGISTRY,
+    get_grader,
+)
 
 __all__ = [
     # Core types
@@ -20,7 +34,6 @@ __all__ = [
     "EvalResult",
     "TestCase",  # Backward compatibility alias
     "TestResult",  # Backward compatibility alias
-    "GraderResult",
     # Linter
     "lint_eval",
     "lint_directory",
@@ -35,6 +48,19 @@ __all__ = [
     "batch_download_datasets",
     "setup_workspace",
     "cleanup_workspace",
+    # Graders
+    "BinaryGrader",
+    "GraderResult",
+    "get_nested_value",
+    "NumericToleranceGrader",
+    "MarkerGenePrecisionRecallGrader",
+    "MarkerGeneSeparationGrader",
+    "LabelSetJaccardGrader",
+    "DistributionComparisonGrader",
+    "SpatialAdjacencyGrader",
+    "MultipleChoiceGrader",
+    "GRADER_REGISTRY",
+    "get_grader",
 ]
 
 __version__ = "0.1.0"

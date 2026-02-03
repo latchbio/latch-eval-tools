@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from latch_eval_tools.types import TestCase, TestResult, EvalResult
-from eval_graders import GRADER_REGISTRY
+from latch_eval_tools.graders import GRADER_REGISTRY, GraderResult
 from latch_eval_tools.harness.utils import download_data, setup_workspace, cleanup_workspace
 
 
@@ -145,7 +145,6 @@ Example eval_answer.json:
                 try:
                     grader_result = grader.evaluate_answer(agent_answer, grader_config)
                 except Exception as e:
-                    from eval_graders import GraderResult
                     import traceback
                     grader_result = GraderResult(
                         passed=False,
