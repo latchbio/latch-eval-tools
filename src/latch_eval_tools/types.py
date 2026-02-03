@@ -17,10 +17,6 @@ TestCase = Eval
 
 
 class EvalResult(BaseModel):
-    """Result from running an evaluation.
-    
-    Combines fields from both latch-plots-eval-harness and scbench/spatialbench.
-    """
     eval_id: str
     conversation_history: list[dict] = Field(default_factory=list)
     trajectory: list[dict] = Field(default_factory=list)
