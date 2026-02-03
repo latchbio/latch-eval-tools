@@ -1,5 +1,3 @@
-"""Evaluation harness for running agent-based benchmarks."""
-
 from latch_eval_tools.harness.runner import EvalRunner
 from latch_eval_tools.harness.utils import (
     get_project_root,
