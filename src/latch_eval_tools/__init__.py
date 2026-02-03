@@ -1,5 +1,3 @@
-"""latch-eval-tools: Shared evaluation harness tools for biology AI benchmarks."""
-
 from latch_eval_tools.types import Eval, EvalResult, TestCase, TestResult
 from latch_eval_tools.linter import lint_eval, lint_directory, LintResult
 from latch_eval_tools.harness import (
@@ -29,7 +27,7 @@ from latch_eval_tools.graders import (
 )
 
 __all__ = [
-    # Core types
+    # Types
     "Eval",
     "EvalResult",
     "TestCase",  # Backward compatibility alias
