@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "latch-eval-tools"
 version = "0.1.0"
-description = "Shared evaluation harness tools for biology AI benchmarks"
+description = "Shared eval tools for single-cell bench, spatial bench, and future biology benchmarks."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
