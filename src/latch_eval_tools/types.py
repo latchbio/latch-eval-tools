@@ -2,10 +2,6 @@ from pydantic import BaseModel, Field
 
 
 class Eval(BaseModel):
-    """Evaluation test case definition.
-    
-    Alias: TestCase (for backward compatibility with scbench/spatialbench)
-    """
     id: str
     task: str
     data_node: str | list[str] | None = None
@@ -16,7 +12,7 @@ class Eval(BaseModel):
     notes: str | None = None
 
 
-# Backward compatibility alias
+# Backward compatibility alias for scbench/spatialbench
 TestCase = Eval
 
 
@@ -34,5 +30,5 @@ class EvalResult(BaseModel):
     agent_answer: dict | None = None
 
 
-# Backward compatibility alias
+# Backward compatibility alias for scbench/spatialbench
 TestResult = EvalResult
