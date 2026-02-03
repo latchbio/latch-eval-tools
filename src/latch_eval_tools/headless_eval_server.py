@@ -9,8 +9,8 @@ from pathlib import Path
 
 import aiohttp
 import websockets
-from eval_graders import GRADER_REGISTRY
 
+from latch_eval_tools.graders import GRADER_REGISTRY
 from latch_eval_tools.answer_extraction import extract_answer_from_conversation
 from latch_eval_tools.types import Eval, EvalResult
 

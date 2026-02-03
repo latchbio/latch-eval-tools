@@ -15,7 +15,7 @@ from pathlib import Path
 import websockets
 import websockets.server
 from latch_eval_tools.types import Eval, EvalResult
-from eval_graders import GRADER_REGISTRY
+from latch_eval_tools.graders import GRADER_REGISTRY
 from latch_eval_tools.answer_extraction import extract_answer_from_conversation
 from latch_eval_tools.headless_eval_server import run_eval_batch_headless
 
