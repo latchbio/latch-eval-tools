@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from latch_eval_tools.types import TestCase, TestResult, EvalResult
+from latch_eval_tools.types import TestCase
 from latch_eval_tools.graders import GRADER_REGISTRY, GraderResult
 from latch_eval_tools.harness.utils import download_data, setup_workspace, cleanup_workspace
 
