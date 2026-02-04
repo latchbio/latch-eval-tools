@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from latch_eval_tools.harness._cli_runner import _run_cli_agent, EVAL_TIMEOUT
 
@@ -16,6 +17,15 @@ def run_openaicodex_task(
     model_name: str | None = None,
     eval_timeout: int = EVAL_TIMEOUT,
 ) -> dict:
+    openai_key = os.environ.get("OPENAI_API_KEY")
+    codex_key = os.environ.get("CODEX_API_KEY")
+
+    if openai_key is None and codex_key is None:
+        raise ValueError("OPENAI_API_KEY or CODEX_API_KEY environment variable is required for OpenAI Codex")
+
+    if openai_key is not None and codex_key is None:
+        os.environ["CODEX_API_KEY"] = openai_key
+
     return _run_cli_agent(
         agent_type="openaicodex",
         cli_command=["codex", "exec"],

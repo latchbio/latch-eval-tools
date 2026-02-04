@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from latch_eval_tools.harness._cli_runner import _run_cli_agent, EVAL_TIMEOUT
 
@@ -16,6 +17,9 @@ def run_claudecode_task(
     model_name: str | None = None,
     eval_timeout: int = EVAL_TIMEOUT,
 ) -> dict:
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        raise ValueError("ANTHROPIC_API_KEY environment variable is required for Claude Code")
+
     return _run_cli_agent(
         agent_type="claudecode",
         cli_command=["claude"],
