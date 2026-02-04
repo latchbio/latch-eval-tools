@@ -140,8 +140,10 @@ CRITICAL INSTRUCTIONS:
 2. You must write eval_answer.json BEFORE printing the completion signal.
 3. Correct order: Perform analysis -> Write eval_answer.json -> Print 'COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT' as your FINAL line of output."""
 
-        if model_name:
-            os.environ['MSWEA_MODEL_NAME'] = model_name
+        if model_name is None:
+            model_name = "anthropic/claude-sonnet-4"
+
+        os.environ['MSWEA_MODEL_NAME'] = model_name
 
         model = get_model()
         env = LocalEnvironment(timeout=operation_timeout)
