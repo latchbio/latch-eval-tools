@@ -49,27 +49,6 @@ Correct order: 1) Perform analysis 2) Write eval_answer.json with your answer 3)
         claude_model = MODEL_MAP.get(model_name, model_name)
         cmd.extend(["--model", claude_model])
 
-    run_as_claude_user = os.geteuid() == 0
-    if run_as_claude_user:
-        import pwd
-        import shutil
-        import stat
-        try:
-            pwd.getpwnam("claude")
-            home_dir = Path.home()
-            current_mode = home_dir.stat().st_mode
-            home_dir.chmod(current_mode | stat.S_IXOTH)
-            eval_cache_dir = home_dir / ".eval_cache"
-            if eval_cache_dir.exists():
-                shutil.chown(eval_cache_dir, user="claude", group="claude")
-                for item in eval_cache_dir.rglob("*"):
-                    try:
-                        shutil.chown(item, user="claude", group="claude")
-                    except PermissionError:
-                        pass
-        except KeyError:
-            run_as_claude_user = False
-
     env = os.environ.copy()
 
     start_time = time.time()
@@ -78,9 +57,6 @@ Correct order: 1) Perform analysis 2) Write eval_answer.json with your answer 3)
     trajectory = []
 
     try:
-        if run_as_claude_user:
-            env_vars = [f"{k}={v}" for k, v in env.items() if k.endswith("_API_KEY")]
-            cmd = ["runuser", "-u", "claude", "--", "env"] + env_vars + cmd
 
         process = subprocess.Popen(
             cmd,
