@@ -1,6 +1,9 @@
 import json
 import os
+import pwd
 import re
+import shutil
+import stat
 import subprocess
 import time
 from pathlib import Path
@@ -26,7 +29,6 @@ def _run_cli_agent(
         )
     except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         cli_name = " ".join(cli_command)
-        print(f"❌ Error: {cli_name} is not installed or not in PATH.")
         raise FileNotFoundError(f"{cli_name} CLI not found. Please install it first.")
 
     agent_log_file = work_dir / "agent_output.log"
@@ -54,9 +56,6 @@ Correct order: 1) Perform analysis 2) Write eval_answer.json with your answer 3)
 
     run_as_claude_user = agent_type == "claudecode" and os.geteuid() == 0
     if run_as_claude_user:
-        import pwd
-        import shutil
-        import stat
         try:
             pwd.getpwnam("claude")
             home_dir = Path.home()
@@ -118,7 +117,7 @@ Correct order: 1) Perform analysis 2) Write eval_answer.json with your answer 3)
                         event = json.loads(line)
                         trajectory.append(event)
                     except json.JSONDecodeError:
-                        pass
+                        print(f"Warning: Failed to parse JSON: {line}")
 
         except subprocess.TimeoutExpired:
             timed_out = True
