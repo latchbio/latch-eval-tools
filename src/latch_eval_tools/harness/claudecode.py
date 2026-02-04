@@ -38,9 +38,9 @@ def run_claudecode_task(
         agent_log_file.unlink()
 
     enhanced_prompt = _enhance_prompt_with_local_files(task_prompt, work_dir)
-    enhanced_prompt += """
+    enhanced_prompt += f"""
 
-CRITICAL: You must write eval_answer.json BEFORE signaling completion.
+CRITICAL: You must write eval_answer.json BEFORE signaling completion in the {work_dir}.
 Correct order: 1) Perform analysis 2) Write eval_answer.json with your answer 3) Exit"""
 
     cmd = ["claude", "--print", "--dangerously-skip-permissions", "--verbose", "--output-format", "stream-json"]
@@ -48,6 +48,30 @@ Correct order: 1) Perform analysis 2) Write eval_answer.json with your answer 3)
     if model_name:
         claude_model = MODEL_MAP.get(model_name, model_name)
         cmd.extend(["--model", claude_model])
+
+    run_as_claude_user = os.geteuid() == 0
+    if run_as_claude_user:
+        import pwd
+        import shutil
+        import stat
+        try:
+            pwd.getpwnam("claude")
+            home_dir = Path.home()
+            current_mode = home_dir.stat().st_mode
+            home_dir.chmod(current_mode | stat.S_IXOTH)
+
+            eval_cache_dir = home_dir / ".eval_cache"
+            if eval_cache_dir.exists():
+                shutil.chown(eval_cache_dir, user="claude", group="claude")
+                for item in eval_cache_dir.rglob("*"):
+                    try:
+                        shutil.chown(item, user="claude", group="claude")
+                    except PermissionError:
+                        pass
+
+            work_dir.chmod(0o777)
+        except KeyError:
+            run_as_claude_user = False
 
     env = os.environ.copy()
 
@@ -57,6 +81,9 @@ Correct order: 1) Perform analysis 2) Write eval_answer.json with your answer 3)
     trajectory = []
 
     try:
+        if run_as_claude_user:
+            env_vars = [f"{k}={v}" for k, v in env.items() if k.endswith("_API_KEY")]
+            cmd = ["runuser", "-u", "claude", "--", "env"] + env_vars + cmd
 
         process = subprocess.Popen(
             cmd,
