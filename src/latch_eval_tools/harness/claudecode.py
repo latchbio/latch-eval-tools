@@ -43,10 +43,8 @@ def run_claudecode_task(
         )
     except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         print(
-            "❌ Error: Claude CLI is not installed or not in PATH.\n\n"
-            "To install the Claude CLI, run:\n"
-            "  npm install -g @anthropic-ai/claude-cli\n\n"
-            "Or visit: https://docs.anthropic.com/en/docs/developer-tools/claude-cli"
+            "❌ Error: Claude code is not installed or not in PATH.\n\n",
+            "To install the Claude code, visit https://code.claude.com/docs/en/quickstart:\n",
         )
         raise FileNotFoundError("claude CLI not found. Please install it first.")
 
