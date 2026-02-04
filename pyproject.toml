@@ -21,7 +21,6 @@ dependencies = [
     "openai>=1.0.0",
     "anthropic>=0.72.0",
     "latch>=2.0.0",
-    "latch_config>=0.1.0",
     "mini-swe-agent",
 ]
 
