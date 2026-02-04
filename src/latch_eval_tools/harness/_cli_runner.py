@@ -79,9 +79,7 @@ Correct order: 1) Perform analysis 2) Write eval_answer.json with your answer 3)
     env = os.environ.copy()
     
     if agent_type == "openaicodex":
-        if "CODEX_API_KEY" in env:
-            pass
-        elif "OPENAI_API_KEY" in env:
+        if "CODEX_API_KEY" not in env and "OPENAI_API_KEY" in env:
             env["CODEX_API_KEY"] = env["OPENAI_API_KEY"]
 
     start_time = time.time()
