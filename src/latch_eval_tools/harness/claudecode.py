@@ -33,6 +33,23 @@ def run_claudecode_task(
     Returns:
         dict with keys "answer" (parsed JSON or None) and "metadata"
     """
+
+    try:
+        subprocess.run(
+            ["claude", "--version"],
+            capture_output=True,
+            check=True,
+            timeout=5
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        print(
+            "❌ Error: Claude CLI is not installed or not in PATH.\n\n"
+            "To install the Claude CLI, run:\n"
+            "  npm install -g @anthropic-ai/claude-cli\n\n"
+            "Or visit: https://docs.anthropic.com/en/docs/developer-tools/claude-cli"
+        )
+        raise FileNotFoundError("claude CLI not found. Please install it first.")
+
     agent_log_file = work_dir / "agent_output.log"
     if agent_log_file.exists():
         agent_log_file.unlink()
