@@ -38,8 +38,18 @@ def _run_cli_agent(
     enhanced_prompt = _enhance_prompt_with_local_files(task_prompt, work_dir)
     enhanced_prompt += f"""
 
-CRITICAL: You must write eval_answer.json BEFORE signaling completion in the {work_dir}.
-Correct order: 1) Perform analysis 2) Write eval_answer.json with your answer 3) Exit"""
+IMPORTANT: When you have completed this task:
+1. Write your final answer as a JSON object to a file named `eval_answer.json` in the working directory
+2. The file should contain ONLY the JSON object with the required fields
+3. After writing the file, you have completed the task
+
+Example eval_answer.json:
+{{
+  "field1": value1,
+  "field2": value2
+}}
+
+The eval_answer.json file must be created in: {work_dir}"""
 
     if agent_type == "claudecode":
         cmd = cli_command + ["--print", "--dangerously-skip-permissions", "--verbose", "--output-format", "stream-json"]
