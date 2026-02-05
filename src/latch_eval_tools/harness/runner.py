@@ -84,13 +84,15 @@ class EvalRunner:
 
         if agent_function is None:
             print("\nNo agent function provided. To run this eval, pass an agent_function that:")
-            print("  1. Takes (task_prompt: str, work_dir: Path) as arguments")
-            print("  2. Adds its own submission instructions to the task_prompt")
-            print("  3. Returns dict with 'answer' key containing the parsed JSON answer")
+            print("  Takes (task_prompt: str, work_dir: Path) as arguments")
+            print("  Returns dict with 'answer' key containing the parsed JSON answer")
             print(f"\nExample:")
-            print(f"  from latch_eval_tools.harness import run_plotsagent_task")
-            print(f"  runner = EvalRunner(eval_path)")
-            print(f"  runner.run(agent_function=run_plotsagent_task)")
+            print(f"  def my_agent(task, work_dir):")
+            print(f"      # Run your agent which write eval_answer.json to work_dir")
+            print(f"      answer_file = work_dir / 'eval_answer.json'")
+            print(f"      return json.loads(answer_file.read_text())")
+            print(f"\n  runner = EvalRunner(eval_path)")
+            print(f"  runner.run(agent_function=my_agent)")
         else:
             try:
                 result = agent_function(task_prompt, work_dir)
