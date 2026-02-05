@@ -133,7 +133,7 @@ def run_minisweagent_task(
 
         enhanced_prompt = _enhance_prompt_with_local_files(task_prompt, work_dir)
 
-        enhanced_prompt += f"""
+        enhanced_prompt += """
 
 CRITICAL INSTRUCTIONS:
 1. Do NOT wrap your code in try/except blocks. Let errors propagate so you can see them and fix them in subsequent steps.
