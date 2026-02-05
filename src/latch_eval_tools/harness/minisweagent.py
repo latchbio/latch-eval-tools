@@ -140,7 +140,7 @@ CRITICAL INSTRUCTIONS:
 2. You must write eval_answer.json BEFORE printing the completion signal.
 3. Correct order: Perform analysis -> Write eval_answer.json -> Print 'COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT' as your FINAL line of output.
 
-IMPORTANT: File instruction: The file eval_answer.json should contain ONLY the JSON object with the required fields
+The file eval_answer.json should contain ONLY the JSON object with the required fields
 
 Example eval_answer.json:
 {
