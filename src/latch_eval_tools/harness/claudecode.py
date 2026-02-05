@@ -3,6 +3,7 @@ from pathlib import Path
 from latch_eval_tools.harness._cli_runner import _run_cli_agent, EVAL_TIMEOUT
 
 MODEL_MAP = {
+    "anthropic/claude-opus-4-6": "claude-opus-4-6-20260204",
     "anthropic/claude-opus-4-5": "opus",
     "anthropic/claude-sonnet-4-5": "sonnet",
     "anthropic/claude-sonnet-4": "claude-sonnet-4-20250514",
