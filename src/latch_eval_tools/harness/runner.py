@@ -46,7 +46,7 @@ class EvalRunner:
         
         Args:
             agent_function: Callable that takes (task_prompt: str, work_dir: Path)
-                          and returns dict with keys "answer" and optionally "metadata"
+                          and returns dict with keys "answer" and optionally "metadata".
         
         Returns:
             dict with test results including test_id, agent_answer, grader_result, passed
@@ -73,19 +73,7 @@ class EvalRunner:
         if contextual_data:
             data_context = f"\n\nHere is the context of the selected nodes the user would like to use: <ContextualNodeData>{json.dumps(contextual_data)}</ContextualNodeData>"
 
-        task_prompt = f"""{self.test_case.task}
-
-IMPORTANT: When you have completed this task:
-1. Write your final answer as a JSON object to a file named `eval_answer.json`
-2. The file should contain ONLY the JSON object with the required fields
-3. After writing the file, you have completed the task
-
-Example eval_answer.json:
-{{
-  "field1": value1,
-  "field2": value2
-}}
-{data_context}"""
+        task_prompt = f"""{self.test_case.task}\n{data_context}"""
 
         print("\n" + "=" * 80)
         print("Running agent on task...")
@@ -96,12 +84,11 @@ Example eval_answer.json:
 
         if agent_function is None:
             print("\nNo agent function provided. To run this eval, pass an agent_function that:")
-            print("  1. Takes (task_prompt: str, work_dir: Path) as arguments")
-            print("  2. Returns the parsed agent answer dict")
+            print("  Takes (task_prompt: str, work_dir: Path) as arguments")
+            print("  Returns dict with 'answer' key containing the parsed JSON answer")
             print(f"\nExample:")
             print(f"  def my_agent(task, work_dir):")
-            print(f"      # Run your agent")
-            print(f"      # Agent should write eval_answer.json to work_dir")
+            print(f"      # Run your agent which write eval_answer.json to work_dir")
             print(f"      answer_file = work_dir / 'eval_answer.json'")
             print(f"      return json.loads(answer_file.read_text())")
             print(f"\n  runner = EvalRunner(eval_path)")

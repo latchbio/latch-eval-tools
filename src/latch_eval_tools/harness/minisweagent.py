@@ -133,12 +133,20 @@ def run_minisweagent_task(
 
         enhanced_prompt = _enhance_prompt_with_local_files(task_prompt, work_dir)
 
-        enhanced_prompt += """
+        enhanced_prompt += f"""
 
 CRITICAL INSTRUCTIONS:
 1. Do NOT wrap your code in try/except blocks. Let errors propagate so you can see them and fix them in subsequent steps.
 2. You must write eval_answer.json BEFORE printing the completion signal.
-3. Correct order: Perform analysis -> Write eval_answer.json -> Print 'COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT' as your FINAL line of output."""
+3. Correct order: Perform analysis -> Write eval_answer.json -> Print 'COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT' as your FINAL line of output.
+
+The file eval_answer.json should contain ONLY the JSON object with the required fields
+
+Example eval_answer.json:
+{
+  "field1": value1,
+  "field2": value2
+}"""
 
         if model_name is not None:
             os.environ['MSWEA_MODEL_NAME'] = model_name

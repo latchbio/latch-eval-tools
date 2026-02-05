@@ -250,14 +250,19 @@ class EvalServer:
         initial_query = textwrap.dedent(f"""
             {eval_case.task}
 
-            IMPORTANT: When you finish this task, include your answer in your submit_response summary as raw JSON (no markdown code fences) wrapped in <EVAL_ANSWER></EVAL_ANSWER> tags.
+            IMPORTANT: When you have completed this task:
+            1. Include your answer in your submit_response summary wrapped in <EVAL_ANSWER></EVAL_ANSWER> tags
+            2. The content should be ONLY the JSON object with the required fields
 
-            Example format for your summary:
+            Example format for your submit_response summary:
             <EVAL_ANSWER>
             {{"field1": value1, "field2": value2}}
             </EVAL_ANSWER>
 
-            Do NOT use markdown code fences (```json) inside the EVAL_ANSWER tags - use raw JSON only.
+            CRITICAL: 
+            - Do NOT use markdown code fences (```json) inside the EVAL_ANSWER tags - use raw JSON only
+            - Put the answer directly in your submit_response tool call summary
+            - The answer extraction relies on finding <EVAL_ANSWER> tags in your submit_response summary
             {data_context}
         """).strip()
 
