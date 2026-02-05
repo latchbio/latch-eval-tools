@@ -47,7 +47,6 @@ class EvalRunner:
         Args:
             agent_function: Callable that takes (task_prompt: str, work_dir: Path)
                           and returns dict with keys "answer" and optionally "metadata".
-                          The agent function is responsible for adding its own submission instructions.
         
         Returns:
             dict with test results including test_id, agent_answer, grader_result, passed
@@ -74,8 +73,7 @@ class EvalRunner:
         if contextual_data:
             data_context = f"\n\nHere is the context of the selected nodes the user would like to use: <ContextualNodeData>{json.dumps(contextual_data)}</ContextualNodeData>"
 
-        # Build task prompt without submission instructions - each agent harness adds its own
-        task_prompt = f"""{self.test_case.task}{data_context}"""
+        task_prompt = f"""{self.test_case.task}\n{data_context}"""
 
         print("\n" + "=" * 80)
         print("Running agent on task...")

@@ -39,7 +39,7 @@ def _run_cli_agent(
     enhanced_prompt += f"""
 
 IMPORTANT: When you have completed this task:
-1. Write your final answer as a JSON object to a file named `eval_answer.json` in the working directory
+1. Write your final answer as a JSON object to a file named `eval_answer.json` in the working directory {work_dir}
 2. The file should contain ONLY the JSON object with the required fields
 3. After writing the file, you have completed the task
 
@@ -47,9 +47,7 @@ Example eval_answer.json:
 {{
   "field1": value1,
   "field2": value2
-}}
-
-The eval_answer.json file must be created in: {work_dir}"""
+}}"""
 
     if agent_type == "claudecode":
         cmd = cli_command + ["--print", "--dangerously-skip-permissions", "--verbose", "--output-format", "stream-json"]

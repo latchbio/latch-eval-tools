@@ -253,7 +253,6 @@ class EvalServer:
             IMPORTANT: When you have completed this task:
             1. Include your answer in your submit_response summary wrapped in <EVAL_ANSWER></EVAL_ANSWER> tags
             2. The content should be ONLY the JSON object with the required fields
-            3. Do NOT write the answer to a file (e.g., eval_answer.json, eval_result.json)
 
             Example format for your submit_response summary:
             <EVAL_ANSWER>
@@ -263,7 +262,7 @@ class EvalServer:
             CRITICAL: 
             - Do NOT use markdown code fences (```json) inside the EVAL_ANSWER tags - use raw JSON only
             - Put the answer directly in your submit_response tool call summary
-            - The answer extraction relies on finding <EVAL_ANSWER> tags in your submit_response
+            - The answer extraction relies on finding <EVAL_ANSWER> tags in your submit_response summary
             {data_context}
         """).strip()
 
