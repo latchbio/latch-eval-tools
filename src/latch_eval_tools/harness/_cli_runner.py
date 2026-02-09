@@ -5,6 +5,7 @@ import re
 import shutil
 import stat
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -92,48 +93,85 @@ Example eval_answer.json:
     start_time = time.time()
     timed_out = False
     trajectory = []
+    trajectory_file = work_dir / "trajectory.json"
+    trajectory_file.write_text(json.dumps(trajectory, indent=2))
+
+    trajectory_lock = threading.Lock()
+
+    def persist_trajectory():
+        with trajectory_lock:
+            trajectory_file.write_text(json.dumps(trajectory, indent=2))
 
     try:
         if run_as_claude_user:
             env_vars = [f"{k}={v}" for k, v in env.items() if k.endswith("_API_KEY")]
             cmd = ["runuser", "-u", "claude", "--", "env"] + env_vars + cmd
 
-        process = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=str(work_dir),
-            env=env,
-            text=True,
-        )
-
-        try:
-            stdout, stderr = process.communicate(
-                input=enhanced_prompt,
-                timeout=eval_timeout
+        with open(agent_log_file, "w") as log_file:
+            process = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=str(work_dir),
+                env=env,
+                text=True,
+                bufsize=1,
             )
 
-            with open(agent_log_file, 'w') as log_file:
-                log_file.write(stdout)
-                if stderr:
-                    log_file.write(f"\n\nSTDERR:\n{stderr}")
+            stderr_header_written = False
+            stderr_lock = threading.Lock()
 
-            for line in stdout.strip().split('\n'):
-                if line:
+            def stream_stdout():
+                if process.stdout is None:
+                    return
+                for line in process.stdout:
+                    log_file.write(line)
+                    log_file.flush()
+
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
                     try:
-                        event = json.loads(line)
-                        trajectory.append(event)
+                        event = json.loads(stripped)
+                        with trajectory_lock:
+                            trajectory.append(event)
+                        persist_trajectory()
                     except json.JSONDecodeError:
-                        print(f"Warning: Failed to parse JSON: {line}")
+                        print(f"Warning: Failed to parse JSON: {stripped}")
 
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            process.kill()
-            stdout, stderr = process.communicate()
-            with open(agent_log_file, 'w') as log_file:
-                log_file.write(stdout)
-                log_file.write(f"\n\nAgent timed out after {eval_timeout} seconds")
+            def stream_stderr():
+                nonlocal stderr_header_written
+                if process.stderr is None:
+                    return
+                for line in process.stderr:
+                    with stderr_lock:
+                        if not stderr_header_written:
+                            log_file.write("\n\nSTDERR:\n")
+                            stderr_header_written = True
+                        log_file.write(line)
+                        log_file.flush()
+
+            stdout_thread = threading.Thread(target=stream_stdout, daemon=True)
+            stderr_thread = threading.Thread(target=stream_stderr, daemon=True)
+            stdout_thread.start()
+            stderr_thread.start()
+
+            if process.stdin is not None:
+                process.stdin.write(enhanced_prompt)
+                process.stdin.close()
+
+            try:
+                process.wait(timeout=eval_timeout)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                process.kill()
+                process.wait()
+                log_file.write(f"\n\nAgent timed out after {eval_timeout} seconds\n")
+                log_file.flush()
+
+            stdout_thread.join(timeout=5)
+            stderr_thread.join(timeout=5)
 
     except Exception as e:
         with open(agent_log_file, 'a') as f:
@@ -143,8 +181,7 @@ Example eval_answer.json:
     print(f"Agent output saved to: {agent_log_file}")
 
     if trajectory:
-        trajectory_file = work_dir / "trajectory.json"
-        trajectory_file.write_text(json.dumps(trajectory, indent=2))
+        persist_trajectory()
         print(f"Trajectory saved to: {trajectory_file}")
 
     eval_answer_file = work_dir / "eval_answer.json"
