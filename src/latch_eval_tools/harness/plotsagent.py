@@ -59,6 +59,7 @@ def run_plotsagent_task(
     env = {
         **os.environ,
         "LATCH_PLOTS_FAAS_PATH": os.environ.get("LATCH_PLOTS_FAAS_PATH", "/root/latch-plots-faas"),
+        "LATCH_EVAL_OUTPUT_DIR": str(work_dir),
     }
 
     start_time = time.time()

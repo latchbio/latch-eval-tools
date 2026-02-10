@@ -361,7 +361,8 @@ class HeadlessEvalServer:
         })
 
     def _init_eval_output_files(self, eval_id: str):
-        eval_dir = Path.cwd() / "workspaces" / eval_id
+        output_root = Path(os.environ.get("LATCH_EVAL_OUTPUT_DIR", str(Path.cwd())))
+        eval_dir = output_root / "workspaces" / eval_id
         eval_dir.mkdir(parents=True, exist_ok=True)
         self.trajectory_file_path = eval_dir / "trajectory.json"
         self.agent_log_file_path = eval_dir / "agent_output.log"
