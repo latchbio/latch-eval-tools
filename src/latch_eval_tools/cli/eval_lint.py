@@ -29,7 +29,9 @@ def format_console_rich(results: list[LintResult]) -> str:
 
             if explanation:
                 lines.append(f"")
-                lines.append(f"  Fix: {explanation.example_before} → {explanation.example_after}")
+                lines.append(
+                    f"  Fix: {explanation.example_before} → {explanation.example_after}"
+                )
                 if explanation.doc_link:
                     lines.append(f"  Docs: {explanation.doc_link}")
 
@@ -92,7 +94,15 @@ def format_json_output(results: list[LintResult]) -> str:
     return json.dumps(output, indent=2)
 
 
-VALID_CATEGORIES = ["qc", "normalization", "dimensionality_reduction", "clustering", "cell_typing", "differential_expression", "spatial_analysis"]
+VALID_CATEGORIES = [
+    "qc",
+    "normalization",
+    "dimensionality_reduction",
+    "clustering",
+    "cell_typing",
+    "differential_expression",
+    "spatial_analysis",
+]
 
 
 def main():
@@ -105,6 +115,7 @@ Examples:
   eval-lint path/to/eval.json           # Lint single file
   eval-lint evals/my_dataset/           # Lint directory
   eval-lint evals/ --category qc        # Lint only QC evals
+  eval-lint evals/ --category all       # Lint all evals (no category filter)
   eval-lint evals/ --format json        # JSON output for CI/CD
   eval-lint evals/ -q                   # Quiet mode (exit code only)
 
@@ -119,18 +130,21 @@ Exit codes:
         help="Path to eval JSON file or directory containing eval files",
     )
     parser.add_argument(
-        "--category", "-c",
-        choices=VALID_CATEGORIES,
-        help="Only lint evals with this metadata.task category",
+        "--category",
+        "-c",
+        choices=VALID_CATEGORIES + ["all"],
+        help="Only lint evals with this metadata.task category. Use 'all' to lint all evals (no category filter).",
     )
     parser.add_argument(
-        "--format", "-f",
+        "--format",
+        "-f",
         choices=["console", "json"],
         default="console",
         help="Output format (default: console)",
     )
     parser.add_argument(
-        "--quiet", "-q",
+        "--quiet",
+        "-q",
         action="store_true",
         help="Quiet mode: only show summary and exit code",
     )
@@ -141,6 +155,9 @@ Exit codes:
     )
 
     args = parser.parse_args()
+
+    if args.category == "all":
+        args.category = None
 
     if not args.path.exists():
         print(f"Error: Path not found: {args.path}", file=sys.stderr)
