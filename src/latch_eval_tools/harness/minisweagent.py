@@ -36,7 +36,17 @@ class StreamingLogFile:
         return self.buffer.getvalue()
 
 
-def _patch_agent_for_progress(log_file, agent_class):
+def _persist_agent_trajectory(agent, trajectory_file: Path):
+    trajectory_data = {
+        "messages": getattr(agent, "messages", []),
+        "actions": getattr(agent, "actions", []),
+    }
+    temp_file = trajectory_file.with_suffix(".tmp")
+    temp_file.write_text(json.dumps(trajectory_data, indent=2))
+    temp_file.replace(trajectory_file)
+
+
+def _patch_agent_for_progress(log_file, trajectory_file: Path, agent_class):
     original_add_message = agent_class.add_message
 
     def patched_add_message(self, role, content, **kwargs):
@@ -50,6 +60,8 @@ def _patch_agent_for_progress(log_file, agent_class):
             elif role == "user" and len(self.messages) > 2:
                 f.write(f"Observation: {content}\n")
             f.flush()
+
+        _persist_agent_trajectory(self, trajectory_file)
 
     agent_class.add_message = patched_add_message
 
@@ -100,7 +112,9 @@ def run_minisweagent_task(
     original_dir = os.getcwd()
 
     agent_log_file = work_dir / "agent_output.log"
-    _patch_agent_for_progress(agent_log_file, FlexibleAgent)
+    trajectory_file = work_dir / "trajectory.json"
+    trajectory_file.write_text(json.dumps({"messages": [], "actions": []}, indent=2))
+    _patch_agent_for_progress(agent_log_file, trajectory_file, FlexibleAgent)
     if agent_log_file.exists():
         agent_log_file.unlink()
 
@@ -182,12 +196,7 @@ Example eval_answer.json:
             print(f"Agent output saved to: {agent_log_file}")
 
             if hasattr(agent, "messages"):
-                trajectory_file = work_dir / "trajectory.json"
-                trajectory_data = {
-                    "messages": agent.messages,
-                    "actions": getattr(agent, "actions", [])
-                }
-                trajectory_file.write_text(json.dumps(trajectory_data, indent=2))
+                _persist_agent_trajectory(agent, trajectory_file)
                 print(f"Agent trajectory saved to: {trajectory_file}")
                 print(f"  Total message exchanges: {len(agent.messages)}")
 

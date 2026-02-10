@@ -172,6 +172,8 @@ class HeadlessEvalServer:
         self.current_usage: dict | None = None
         self.turn_number: int = 0
         self.eval_start_time: float = 0
+        self.trajectory_file_path: Path | None = None
+        self.agent_log_file_path: Path | None = None
 
     async def start_server(self):
         print("[headless] Starting runtime server via wrapper...")
@@ -335,7 +337,8 @@ class HeadlessEvalServer:
         self.trajectory = []
         self.turn_number = 0
         self.eval_start_time = time.time()
-        self.trajectory.append({
+        self._init_eval_output_files(eval_id)
+        self._record_trajectory_event({
             "type": "system",
             "subtype": "init",
             "timestamp": self.eval_start_time,
@@ -357,9 +360,35 @@ class HeadlessEvalServer:
             "uuid": str(uuid.uuid4()),
         })
 
+    def _init_eval_output_files(self, eval_id: str):
+        output_root = Path(os.environ.get("LATCH_EVAL_OUTPUT_DIR", str(Path.cwd())))
+        eval_dir = output_root / "workspaces" / eval_id
+        eval_dir.mkdir(parents=True, exist_ok=True)
+        self.trajectory_file_path = eval_dir / "trajectory.json"
+        self.agent_log_file_path = eval_dir / "agent_output.log"
+        self.trajectory_file_path.write_text("[]")
+        self.agent_log_file_path.write_text("")
+
+    def _persist_trajectory(self):
+        if self.trajectory_file_path is None:
+            return
+        self.trajectory_file_path.write_text(json.dumps(self.trajectory, indent=2))
+
+    def _append_agent_log(self, event: dict):
+        if self.agent_log_file_path is None:
+            return
+        with open(self.agent_log_file_path, "a") as log_file:
+            log_file.write(json.dumps(event) + "\n")
+            log_file.flush()
+
+    def _record_trajectory_event(self, event: dict):
+        self.trajectory.append(event)
+        self._persist_trajectory()
+        self._append_agent_log(event)
+
     def add_assistant_to_trajectory(self, message: dict):
         self.turn_number += 1
-        self.trajectory.append({
+        self._record_trajectory_event({
             "type": "assistant",
             "message": {
                 "role": "assistant",
@@ -395,7 +424,7 @@ class HeadlessEvalServer:
         }
         if cell_id:
             entry["cell_id"] = cell_id
-        self.trajectory.append(entry)
+        self._record_trajectory_event(entry)
 
     def add_to_history(self, msg: dict):
         msg_type = msg.get("type")

@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -39,6 +40,11 @@ def run_plotsagent_task(
     eval_file.write_text(json.dumps(eval_config, indent=2))
 
     output_file = work_dir / "eval_output.json"
+    eval_id = work_dir.name
+    workspace_dir = output_file.parent / "workspaces" / eval_id
+    trajectory_src = workspace_dir / "trajectory.json"
+    trajectory_dst = work_dir / "trajectory.json"
+    trajectory_dst.write_text("[]")
 
     faas_python = Path(os.environ.get("PLOTS_FAAS_PYTHON", "/root/plots-faas-venv/bin/python"))
 
@@ -53,6 +59,7 @@ def run_plotsagent_task(
     env = {
         **os.environ,
         "LATCH_PLOTS_FAAS_PATH": os.environ.get("LATCH_PLOTS_FAAS_PATH", "/root/latch-plots-faas"),
+        "LATCH_EVAL_OUTPUT_DIR": str(work_dir),
     }
 
     start_time = time.time()
@@ -60,13 +67,49 @@ def run_plotsagent_task(
 
     try:
         with open(agent_log_file, "w") as log_f:
-            subprocess.run(
+            process = subprocess.Popen(
                 cmd,
                 env=env,
-                stdout=log_f,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                timeout=eval_timeout,
+                text=True,
+                bufsize=1,
             )
+
+            def stream_output():
+                if process.stdout is None:
+                    return
+                for line in process.stdout:
+                    log_f.write(line)
+                    log_f.flush()
+
+            stream_thread = threading.Thread(target=stream_output, daemon=True)
+            stream_thread.start()
+
+            start_wait = time.monotonic()
+            while True:
+                if trajectory_src.exists():
+                    try:
+                        trajectory_dst.write_text(trajectory_src.read_text())
+                    except OSError:
+                        pass
+
+                if process.poll() is not None:
+                    break
+
+                if time.monotonic() - start_wait > eval_timeout:
+                    timed_out = True
+                    process.kill()
+                    process.wait()
+                    break
+
+                time.sleep(0.5)
+
+            stream_thread.join(timeout=5)
+
+            if timed_out:
+                log_f.write(f"\n\nAgent timed out after {eval_timeout} seconds")
+                log_f.flush()
     except subprocess.TimeoutExpired:
         timed_out = True
         with open(agent_log_file, "a") as log_f:
@@ -75,16 +118,11 @@ def run_plotsagent_task(
     duration = time.time() - start_time
     print(f"Agent output saved to: {agent_log_file}")
 
-    eval_id = work_dir.name
-    workspace_dir = output_file.parent / "workspaces" / eval_id
-
     trajectory = []
     if workspace_dir.exists():
-        trajectory_src = workspace_dir / "trajectory.json"
         if trajectory_src.exists():
             try:
                 trajectory = json.loads(trajectory_src.read_text())
-                trajectory_dst = work_dir / "trajectory.json"
                 trajectory_dst.write_text(json.dumps(trajectory, indent=2))
                 print(f"Trajectory saved to: {trajectory_dst}")
             except json.JSONDecodeError:
