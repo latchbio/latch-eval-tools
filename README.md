@@ -8,59 +8,63 @@ Shared eval tools for single-cell bench, spatial bench, and future biology bench
 pip install latch-eval-tools
 ```
 
-## Components
+## What is included
 
-### Types
+- `Eval` / `EvalResult` types
+- Built-in graders + `get_grader()`
+- `EvalRunner` harness to run an agent against one eval JSON
+- `eval-lint` CLI and Python linter APIs
+
+## Quickstart
 
 ```python
-from latch_eval_tools import Eval, EvalResult
+from latch_eval_tools import EvalRunner, run_minisweagent_task
 
-eval_case = Eval(
-    id="test_001",
-    task="Count cells in the dataset",
-    data_node="latch:///data/sample.h5ad",
-    grader={"type": "numeric_tolerance", "config": {...}}
+runner = EvalRunner("evals/count_cells.json")
+result = runner.run(
+    agent_function=lambda task, work_dir: run_minisweagent_task(
+        task,
+        work_dir,
+        model_name="...your model name...",
+    )
 )
+
+print(result["passed"])
+print(result["grader_result"].reasoning if result["grader_result"] else "No grader result")
 ```
 
-### Graders
+`EvalRunner.run()` expects an `agent_function(task_prompt, work_dir)` and supports either:
+- returning a plain answer `dict`, or
+- returning `{"answer": <dict>, "metadata": <dict>}`
 
-Available graders: `numeric_tolerance`, `label_set_jaccard`, `distribution_comparison`, `marker_gene_precision_recall`, `marker_gene_separation`, `spatial_adjacency`, `multiple_choice`
+If your agent writes `eval_answer.json` in `work_dir`, the runner will load it automatically.
+
+## Graders
+
+Available grader types:
+
+`numeric_tolerance`, `jaccard_label_set`, `distribution_comparison`, `marker_gene_precision_recall`, `marker_gene_separation`, `spatial_adjacency`, `multiple_choice`
 
 ```python
-from latch_eval_tools.graders import get_grader, NumericToleranceGrader
+from latch_eval_tools.graders import get_grader
 
 grader = get_grader("numeric_tolerance")
-result = grader.evaluate(
+result = grader.evaluate_answer(
     agent_answer={"n_cells": 1523},
     config={
         "ground_truth": {"n_cells": 1500},
-        "tolerances": {"n_cells": {"type": "relative", "value": 0.05}}
-    }
+        "tolerances": {"n_cells": {"type": "relative", "value": 0.05}},
+    },
 )
-print(result.passed)
-print(result.reasoning)
+print(result.passed, result.reasoning)
 ```
 
-### Harness
+Built-in harness helpers:
 
-Run evaluations with different agents:
-
-```python
-from latch_eval_tools.harness import EvalRunner, run_minisweagent_task
-
-runner = EvalRunner("evals/count_cells.json", cache_name=".scbench")
-result = runner.run(agent_function=lambda task, work_dir: 
-    run_minisweagent_task(task, work_dir, model_name="anthropic/claude-sonnet-4")
-)
-
-def my_agent(task_prompt: str, work_dir: Path) -> dict:
-    return {"answer": json.loads((work_dir / "eval_answer.json").read_text())}
-
-runner.run(agent_function=my_agent)
-```
-
-Built-in agents: `run_minisweagent_task`, `run_claudecode_task`, `run_plotsagent_task`
+- `run_minisweagent_task`
+- `run_claudecode_task` (requires `ANTHROPIC_API_KEY` and `claude` CLI)
+- `run_openaicodex_task` (requires `OPENAI_API_KEY` or `CODEX_API_KEY` and `codex` CLI)
+- `run_plotsagent_task` (experimental latch-plots harness)
 
 ### Linter
 
@@ -78,13 +82,19 @@ result = lint_eval("evals/test.json")
 print(result.passed, result.issues)
 ```
 
-## Eval JSON Schema
+## Eval JSON shape
 
 ```json
 {
   "id": "unique_test_id",
-  "task": "Task description for the agent",
-  "data_node": "latch:///path/to/data.h5ad",
+  "task": "Task description. Include an <EVAL_ANSWER> JSON template in this text.",
+  "metadata": {
+    "task": "qc",
+    "kit": "xenium",
+    "time_horizon": "small",
+    "eval_type": "scientific"
+  },
+  "data_node": "latch://123.node/path/to/data.h5ad",
   "grader": {
     "type": "numeric_tolerance",
     "config": {
