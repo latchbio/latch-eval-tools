@@ -6,6 +6,7 @@ class Eval(BaseModel):
     task: str
     data_node: str | list[str] | None = None
     grader: dict | None = None
+    metadata: dict | None = None
     timeout: int | None = None
     download_timeout: int | None = None
     agent_timeout: int | None = None
