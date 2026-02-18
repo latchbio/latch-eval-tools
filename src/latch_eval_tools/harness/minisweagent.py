@@ -164,6 +164,8 @@ Example eval_answer.json:
 
         if model_name is not None:
             os.environ['MSWEA_MODEL_NAME'] = model_name
+            if model_name.startswith("mistral/"):
+                os.environ.setdefault("MSWEA_COST_TRACKING", "ignore_errors")
 
         model = get_model()
         env = LocalEnvironment(timeout=operation_timeout)
