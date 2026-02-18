@@ -1,9 +1,10 @@
 import hashlib
 import json
 import os
-import subprocess
+import shutil
 from pathlib import Path
 
+from latch.ldata.path import LPath
 
 def get_project_root():
     """Find project root by looking for pyproject.toml."""
@@ -48,7 +49,7 @@ def save_cache_manifest(manifest: dict, cache_name: str = ".eval_cache"):
 def get_cache_key(uri: str) -> str:
     """Generate cache key from URI."""
     uri_hash = hashlib.sha256(uri.encode()).hexdigest()[:16]
-    filename = Path(uri).name
+    filename = LPath(uri).name() or Path(uri).name or "data"
     return f"{uri_hash}__{filename}"
 
 
@@ -73,20 +74,19 @@ def download_single_dataset(uri: str, show_progress: bool = True, cache_name: st
                 print(f"Using cached: {Path(uri).name}")
             return cached_file
 
-    cache_key = get_cache_key(uri)
-    cached_file = cache_dir / cache_key
+    remote_name = LPath(uri).name() or Path(uri).name or "data"
+    cache_key = hashlib.sha256(uri.encode()).hexdigest()[:16]
+    cache_rel_path = str(Path(cache_key) / remote_name)
+    cached_file = cache_dir / cache_rel_path
 
     if show_progress:
         print(f"Downloading: {uri}")
-    subprocess.run(
-        ["latch", "cp", uri, str(cached_file)],
-        check=True,
-        capture_output=True
-    )
+    cached_file.parent.mkdir(parents=True, exist_ok=True)
+    LPath(uri).download(dst=cached_file, cache=True)
     if show_progress:
-        print(f"Cached as: {cache_key}")
+        print(f"Cached as: {cache_rel_path}")
 
-    manifest[uri] = cache_key
+    manifest[uri] = cache_rel_path
     save_cache_manifest(manifest, cache_name)
 
     return cached_file
@@ -109,19 +109,19 @@ def download_data(data_node: str | list[str], work_dir: Path, cache_name: str = 
 
     for node in data_nodes:
         cached_file = download_single_dataset(node, cache_name=cache_name)
-        data_filename = Path(node).name
+        data_filename = LPath(node).name() or Path(node).name or "data"
 
         target_file = work_dir / data_filename
-        if target_file.exists():
+        if target_file.is_symlink() or target_file.is_file():
             target_file.unlink()
+        elif target_file.is_dir():
+            shutil.rmtree(target_file)
         os.symlink(cached_file, target_file)
         print(f"Linked: {data_filename} -> workspace")
 
         contextual_data.append({
             "type": "File",
-            "path": node,
             "local_path": data_filename,
-            "id": node.replace("latch:///", "").replace(".csv", "").replace(".h5ad", ""),
         })
 
     return contextual_data
