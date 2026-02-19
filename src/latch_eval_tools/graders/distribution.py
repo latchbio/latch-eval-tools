@@ -16,9 +16,10 @@ class DistributionComparisonGrader(BinaryGrader):
         if "cell_type_distribution" not in agent_answer:
             return GraderResult(
                 passed=False,
-                metrics={},
+                metrics={"score": 0.0},
                 reasoning="Agent answer missing required field: cell_type_distribution",
-                agent_answer=agent_answer
+                agent_answer=agent_answer,
+                score=0.0,
             )
 
         agent_total_cells = agent_answer.get("total_cells")
@@ -27,6 +28,7 @@ class DistributionComparisonGrader(BinaryGrader):
         metrics = {}
         all_pass = True
         failures = []
+        component_scores = []
 
         if gt_total_cells is not None and agent_total_cells is not None:
             total_cells_tol_value = total_cells_tolerance.get("value", 0)
@@ -37,6 +39,9 @@ class DistributionComparisonGrader(BinaryGrader):
             metrics["total_cells_expected"] = gt_total_cells
             metrics["total_cells_diff"] = total_cells_diff
             metrics["total_cells_pass"] = total_cells_pass
+            total_cells_score = self.score_with_tolerance(total_cells_diff, total_cells_tol_value)
+            metrics["total_cells_score"] = self.clamp_score(total_cells_score)
+            component_scores.append(self.clamp_score(total_cells_score))
 
             if not total_cells_pass:
                 all_pass = False
@@ -52,6 +57,8 @@ class DistributionComparisonGrader(BinaryGrader):
                 metrics[f"{cell_type}_expected"] = expected_pct
                 metrics[f"{cell_type}_diff"] = None
                 metrics[f"{cell_type}_pass"] = False
+                metrics[f"{cell_type}_score"] = 0.0
+                component_scores.append(0.0)
                 continue
 
             actual_pct = agent_distribution[cell_type]
@@ -62,6 +69,9 @@ class DistributionComparisonGrader(BinaryGrader):
             metrics[f"{cell_type}_expected"] = expected_pct
             metrics[f"{cell_type}_diff"] = diff
             metrics[f"{cell_type}_pass"] = within_tolerance
+            component_score = self.score_with_tolerance(diff, pct_tolerance)
+            metrics[f"{cell_type}_score"] = self.clamp_score(component_score)
+            component_scores.append(self.clamp_score(component_score))
 
             if not within_tolerance:
                 all_pass = False
@@ -71,9 +81,17 @@ class DistributionComparisonGrader(BinaryGrader):
         extra_types = set(agent_distribution.keys()) - set(gt_distribution.keys())
         if extra_types:
             metrics["extra_cell_types"] = sorted(list(extra_types))
+            expected_types = len(gt_distribution)
+            extra_penalty = expected_types / (expected_types + len(extra_types)) if expected_types > 0 else 0.0
+            component_scores = [s * extra_penalty for s in component_scores]
+            metrics["extra_type_penalty_factor"] = extra_penalty
+
+        overall_score = sum(component_scores) / len(component_scores) if component_scores else 0.0
+        metrics["score"] = self.clamp_score(overall_score)
 
         lines = [
             f"Distribution Comparison: {'PASS' if all_pass else 'FAIL'}",
+            f"Overall score: {metrics['score']:.3f}",
             "",
             f"Cell type percentages (tolerance: +/-{pct_tolerance}%):"
         ]
@@ -87,7 +105,8 @@ class DistributionComparisonGrader(BinaryGrader):
                 diff = abs(actual - expected)
                 within_tol = diff <= pct_tolerance
                 check = "+" if within_tol else "x"
-                lines.append(f"  {check} {cell_type}: {actual:.2f}% vs {expected:.2f}% (diff: {diff:.2f}%)")
+                score = metrics.get(f"{cell_type}_score", 0.0)
+                lines.append(f"  {check} {cell_type}: {actual:.2f}% vs {expected:.2f}% (diff: {diff:.2f}%, score: {score:.3f})")
 
         if failures:
             lines.extend(["", "Failures:"])
@@ -98,5 +117,6 @@ class DistributionComparisonGrader(BinaryGrader):
             passed=all_pass,
             metrics=metrics,
             reasoning="\n".join(lines),
-            agent_answer=agent_answer
+            agent_answer=agent_answer,
+            score=self.clamp_score(overall_score),
         )

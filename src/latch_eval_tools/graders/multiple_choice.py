@@ -11,9 +11,10 @@ class MultipleChoiceGrader(BinaryGrader):
         if "answer" not in agent_answer:
             return GraderResult(
                 passed=False,
-                metrics={},
+                metrics={"score": 0.0},
                 reasoning="Agent answer missing required field: answer",
-                agent_answer=agent_answer
+                agent_answer=agent_answer,
+                score=0.0,
             )
 
         agent_choice = str(agent_answer["answer"]).strip().upper()
@@ -23,6 +24,7 @@ class MultipleChoiceGrader(BinaryGrader):
         metrics = {
             "correct_answers": correct_answers,
             "agent_answer": agent_choice,
+            "score": 1.0 if passed else 0.0,
         }
 
         if passed:
@@ -34,5 +36,6 @@ class MultipleChoiceGrader(BinaryGrader):
             passed=passed,
             metrics=metrics,
             reasoning=reasoning,
-            agent_answer=agent_answer
+            agent_answer=agent_answer,
+            score=1.0 if passed else 0.0,
         )

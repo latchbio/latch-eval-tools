@@ -17,9 +17,10 @@ class MarkerGenePrecisionRecallGrader(BinaryGrader):
         if answer_field not in agent_answer:
             return GraderResult(
                 passed=False,
-                metrics={},
+                metrics={"score": 0.0},
                 reasoning=f"Agent answer missing required field. Available keys: {list(agent_answer.keys())}",
-                agent_answer=agent_answer
+                agent_answer=agent_answer,
+                score=0.0,
             )
 
         predicted = agent_answer[answer_field]
@@ -33,17 +34,19 @@ class MarkerGenePrecisionRecallGrader(BinaryGrader):
         if not isinstance(predicted, list):
             return GraderResult(
                 passed=False,
-                metrics={},
+                metrics={"score": 0.0},
                 reasoning=f"{answer_field} must be a list, got {type(predicted).__name__}",
-                agent_answer=agent_answer
+                agent_answer=agent_answer,
+                score=0.0,
             )
 
         if not isinstance(canonical_markers, list):
             return GraderResult(
                 passed=False,
-                metrics={},
+                metrics={"score": 0.0},
                 reasoning=f"canonical_markers must be a list for flat evaluation, got {type(canonical_markers).__name__}",
-                agent_answer=agent_answer
+                agent_answer=agent_answer,
+                score=0.0,
             )
 
         return self._evaluate_flat_list(predicted, canonical_markers, thresholds, answer_field, agent_answer)
@@ -55,6 +58,7 @@ class MarkerGenePrecisionRecallGrader(BinaryGrader):
         celltype_results = {}
         celltypes_passing = 0
         total_celltypes = len(canonical_markers)
+        recall_values = []
 
         for celltype, canonical_genes in canonical_markers.items():
             predicted_genes = predicted.get(celltype, [])
@@ -64,6 +68,7 @@ class MarkerGenePrecisionRecallGrader(BinaryGrader):
                     "recall": 0.0,
                     "error": f"Expected list, got {type(predicted_genes).__name__}"
                 }
+                recall_values.append(0.0)
                 continue
 
             predicted_genes = [str(g) for g in predicted_genes]
@@ -78,6 +83,7 @@ class MarkerGenePrecisionRecallGrader(BinaryGrader):
 
             if celltype_pass:
                 celltypes_passing += 1
+            recall_values.append(recall)
 
             celltype_results[celltype] = {
                 "pass": celltype_pass,
@@ -89,6 +95,7 @@ class MarkerGenePrecisionRecallGrader(BinaryGrader):
             }
 
         passed = celltypes_passing >= min_celltypes_passing
+        overall_score = self.clamp_score(sum(recall_values) / len(recall_values)) if recall_values else 0.0
 
         metrics = {
             "celltypes_passing": celltypes_passing,
@@ -97,11 +104,13 @@ class MarkerGenePrecisionRecallGrader(BinaryGrader):
             "min_recall_per_celltype": min_recall,
             "per_celltype": celltype_results,
             "answer_field_used": answer_field,
+            "score": overall_score,
         }
 
         lines = [
             f"Marker Gene Per-Celltype: {'PASS' if passed else 'FAIL'}",
             f"Celltypes passing: {celltypes_passing}/{total_celltypes} (required: {min_celltypes_passing})",
+            f"Overall score: {overall_score:.3f}",
             ""
         ]
         for celltype, result in celltype_results.items():
@@ -112,7 +121,8 @@ class MarkerGenePrecisionRecallGrader(BinaryGrader):
             passed=passed,
             metrics=metrics,
             reasoning="\n".join(lines),
-            agent_answer=agent_answer
+            agent_answer=agent_answer,
+            score=overall_score,
         )
 
     def _evaluate_flat_list(self, predicted_genes: list, canonical_markers: list, thresholds: dict, answer_field: str, agent_answer: dict) -> GraderResult:
@@ -135,6 +145,7 @@ class MarkerGenePrecisionRecallGrader(BinaryGrader):
         precision_pass = precision_at_k >= precision_threshold
         recall_pass = recall_at_k >= recall_threshold
         passed = precision_pass and recall_pass
+        f1_score = (2 * precision_at_k * recall_at_k / (precision_at_k + recall_at_k)) if (precision_at_k + recall_at_k) > 0 else 0.0
 
         original_case_map = {gene.lower(): gene for gene in predicted_genes}
         canonical_case_map = {str(gene).lower(): str(gene) for gene in canonical_markers}
@@ -159,27 +170,30 @@ class MarkerGenePrecisionRecallGrader(BinaryGrader):
             "precision_pass": precision_pass,
             "recall_pass": recall_pass,
             "answer_field_used": answer_field,
+            "score": self.clamp_score(f1_score),
         }
 
         reasoning = self._format_reasoning(
             k, precision_at_k, recall_at_k, precision_threshold, recall_threshold,
             true_positive_genes, false_positive_genes, false_negative_genes,
-            precision_pass, recall_pass, passed, answer_field
+            precision_pass, recall_pass, passed, answer_field, self.clamp_score(f1_score)
         )
 
         return GraderResult(
             passed=passed,
             metrics=metrics,
             reasoning=reasoning,
-            agent_answer=agent_answer
+            agent_answer=agent_answer,
+            score=self.clamp_score(f1_score),
         )
 
     def _format_reasoning(self, k, precision, recall, precision_threshold, recall_threshold,
                           true_positives, false_positives, false_negatives,
-                          precision_pass, recall_pass, passed, answer_field):
+                          precision_pass, recall_pass, passed, answer_field, overall_score):
         lines = [
             f"Marker Gene Precision/Recall: {'PASS' if passed else 'FAIL'}",
             f"Answer field: {answer_field}",
+            f"Overall score: {overall_score:.3f}",
             "",
             f"  {'+'if precision_pass else 'x'} Precision@{k}: {precision:.3f} (threshold: {precision_threshold:.3f})",
             f"  {'+'if recall_pass else 'x'} Recall@{k}: {recall:.3f} (threshold: {recall_threshold:.3f})",
@@ -223,17 +237,19 @@ class MarkerGeneSeparationGrader(BinaryGrader):
         if "per_gene_stats" not in agent_answer:
             return GraderResult(
                 passed=False,
-                metrics={},
+                metrics={"score": 0.0},
                 reasoning="Agent answer missing required field: per_gene_stats",
-                agent_answer=agent_answer
+                agent_answer=agent_answer,
+                score=0.0,
             )
 
         if "mean_auroc" not in agent_answer:
             return GraderResult(
                 passed=False,
-                metrics={},
+                metrics={"score": 0.0},
                 reasoning="Agent answer missing required field: mean_auroc",
-                agent_answer=agent_answer
+                agent_answer=agent_answer,
+                score=0.0,
             )
 
         per_gene_stats = agent_answer["per_gene_stats"]
@@ -242,18 +258,20 @@ class MarkerGeneSeparationGrader(BinaryGrader):
         if not isinstance(per_gene_stats, list):
             return GraderResult(
                 passed=False,
-                metrics={},
+                metrics={"score": 0.0},
                 reasoning="per_gene_stats must be a list",
-                agent_answer=agent_answer
+                agent_answer=agent_answer,
+                score=0.0,
             )
 
         num_genes = len(per_gene_stats)
         if num_genes == 0:
             return GraderResult(
                 passed=False,
-                metrics={},
+                metrics={"score": 0.0},
                 reasoning="per_gene_stats is empty",
-                agent_answer=agent_answer
+                agent_answer=agent_answer,
+                score=0.0,
             )
 
         gene_aurocs = {}
@@ -261,9 +279,10 @@ class MarkerGeneSeparationGrader(BinaryGrader):
             if not isinstance(stat, dict) or "gene" not in stat or "auroc" not in stat:
                 return GraderResult(
                     passed=False,
-                    metrics={},
+                    metrics={"score": 0.0},
                     reasoning="Each element in per_gene_stats must have 'gene' and 'auroc' fields",
-                    agent_answer=agent_answer
+                    agent_answer=agent_answer,
+                    score=0.0,
                 )
             gene_aurocs[stat["gene"]] = stat["auroc"]
 
@@ -276,6 +295,7 @@ class MarkerGeneSeparationGrader(BinaryGrader):
         mean_auroc_pass = agent_mean_auroc >= mean_auroc_threshold
         fraction_high_pass = fraction_high >= fraction_high_threshold
         passed = mean_auroc_pass and fraction_high_pass
+        overall_score = self.clamp_score((self.clamp_score(agent_mean_auroc) + self.clamp_score(fraction_high)) / 2)
 
         metrics = {
             "num_genes": num_genes,
@@ -292,10 +312,12 @@ class MarkerGeneSeparationGrader(BinaryGrader):
             "mean_auroc_pass": mean_auroc_pass,
             "fraction_high_pass": fraction_high_pass,
             "per_gene_aurocs": gene_aurocs,
+            "score": overall_score,
         }
 
         lines = [
             f"Marker Gene Separation: {'PASS' if passed else 'FAIL'}",
+            f"Overall score: {overall_score:.3f}",
             "",
             f"  {'+'if mean_auroc_pass else 'x'} Mean AUROC: {agent_mean_auroc:.3f} (threshold: {mean_auroc_threshold:.3f})",
             f"  {'+'if fraction_high_pass else 'x'} Fraction High (>={per_gene_cutoff:.2f}): {fraction_high:.3f} ({len(high_auroc_genes)}/{num_genes})",
@@ -313,5 +335,6 @@ class MarkerGeneSeparationGrader(BinaryGrader):
             passed=passed,
             metrics=metrics,
             reasoning="\n".join(lines),
-            agent_answer=agent_answer
+            agent_answer=agent_answer,
+            score=overall_score,
         )

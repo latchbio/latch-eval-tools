@@ -7,6 +7,7 @@ class GraderResult:
     metrics: dict
     reasoning: str
     agent_answer: dict | None
+    score: float = 0.0
 
 
 def get_nested_value(obj: dict, key: str) -> tuple[any, bool]:
@@ -27,3 +28,17 @@ class BinaryGrader:
 
     def evaluate(self, agent_answer: dict, config: dict) -> GraderResult:
         return self.evaluate_answer(agent_answer, config)
+
+    @staticmethod
+    def clamp_score(score: float) -> float:
+        return max(0.0, min(1.0, float(score)))
+
+    @staticmethod
+    def score_with_tolerance(error: float, tolerance: float) -> float:
+        if error <= 0:
+            return 1.0
+        if tolerance > 0:
+            if error <= tolerance:
+                return 1.0
+            return tolerance / error
+        return 1.0 / (1.0 + error)

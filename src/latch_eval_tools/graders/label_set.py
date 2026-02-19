@@ -11,9 +11,10 @@ class LabelSetJaccardGrader(BinaryGrader):
         if answer_field not in agent_answer:
             return GraderResult(
                 passed=False,
-                metrics={},
+                metrics={"score": 0.0},
                 reasoning=f"Agent answer missing required field: {answer_field}",
-                agent_answer=agent_answer
+                agent_answer=agent_answer,
+                score=0.0,
             )
 
         predicted_labels = set(agent_answer[answer_field])
@@ -37,6 +38,7 @@ class LabelSetJaccardGrader(BinaryGrader):
             "false_negatives": sorted(list(false_negatives)),
             "predicted_count": len(predicted_labels),
             "ground_truth_count": len(ground_truth_labels),
+            "score": jaccard_index,
         }
 
         lines = [
@@ -71,5 +73,6 @@ class LabelSetJaccardGrader(BinaryGrader):
             passed=passed,
             metrics=metrics,
             reasoning="\n".join(lines),
-            agent_answer=agent_answer
+            agent_answer=agent_answer,
+            score=jaccard_index,
         )
