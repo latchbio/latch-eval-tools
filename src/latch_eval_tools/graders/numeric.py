@@ -58,16 +58,8 @@ class NumericToleranceGrader(BinaryGrader):
                     if has_asymmetric:
                         within_tolerance = (expected_value - tolerance_lower) <= actual_value <= (expected_value + tolerance_upper)
                         error = abs(actual_value - expected_value)
-                        if within_tolerance:
-                            field_score = 1.0
-                        else:
-                            if actual_value < expected_value - tolerance_lower:
-                                out_of_bounds = (expected_value - tolerance_lower) - actual_value
-                                norm_tol = tolerance_lower
-                            else:
-                                out_of_bounds = actual_value - (expected_value + tolerance_upper)
-                                norm_tol = tolerance_upper
-                            field_score = self.score_with_tolerance(out_of_bounds, norm_tol)
+                        directional_tolerance = tolerance_upper if actual_value >= expected_value else tolerance_lower
+                        field_score = self.score_with_tolerance(error, directional_tolerance)
                     else:
                         within_tolerance = abs(actual_value - expected_value) <= tolerance_value
                         error = abs(actual_value - expected_value)

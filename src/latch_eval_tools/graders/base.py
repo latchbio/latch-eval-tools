@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
@@ -10,7 +11,7 @@ class GraderResult:
     score: float = 0.0
 
 
-def get_nested_value(obj: dict, key: str) -> tuple[any, bool]:
+def get_nested_value(obj: dict, key: str) -> tuple[Any, bool]:
     if "." not in key:
         return obj.get(key), key in obj
     parts = key.split(".")
@@ -38,7 +39,9 @@ class BinaryGrader:
         if error <= 0:
             return 1.0
         if tolerance > 0:
-            if error <= tolerance:
-                return 1.0
-            return tolerance / error
+            normalized_error = error / tolerance
+            edge_score = 0.5
+            if normalized_error <= 1.0:
+                return 1.0 - ((1.0 - edge_score) * normalized_error)
+            return edge_score / normalized_error
         return 1.0 / (1.0 + error)
