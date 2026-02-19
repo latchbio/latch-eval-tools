@@ -125,32 +125,38 @@ Example eval_answer.json:
             def stream_stdout():
                 if process.stdout is None:
                     return
-                for line in process.stdout:
-                    log_file.write(line)
-                    log_file.flush()
+                try:
+                    for line in process.stdout:
+                        log_file.write(line)
+                        log_file.flush()
 
-                    stripped = line.strip()
-                    if not stripped:
-                        continue
-                    try:
-                        event = json.loads(stripped)
-                        with trajectory_lock:
-                            trajectory.append(event)
-                        persist_trajectory()
-                    except json.JSONDecodeError:
-                        print(f"Warning: Failed to parse JSON: {stripped}")
+                        stripped = line.strip()
+                        if not stripped:
+                            continue
+                        try:
+                            event = json.loads(stripped)
+                            with trajectory_lock:
+                                trajectory.append(event)
+                            persist_trajectory()
+                        except json.JSONDecodeError:
+                            print(f"Warning: Failed to parse JSON: {stripped}")
+                except ValueError:
+                    pass
 
             def stream_stderr():
                 nonlocal stderr_header_written
                 if process.stderr is None:
                     return
-                for line in process.stderr:
-                    with stderr_lock:
-                        if not stderr_header_written:
-                            log_file.write("\n\nSTDERR:\n")
-                            stderr_header_written = True
-                        log_file.write(line)
-                        log_file.flush()
+                try:
+                    for line in process.stderr:
+                        with stderr_lock:
+                            if not stderr_header_written:
+                                log_file.write("\n\nSTDERR:\n")
+                                stderr_header_written = True
+                            log_file.write(line)
+                            log_file.flush()
+                except ValueError:
+                    pass
 
             stdout_thread = threading.Thread(target=stream_stdout, daemon=True)
             stderr_thread = threading.Thread(target=stream_stderr, daemon=True)
