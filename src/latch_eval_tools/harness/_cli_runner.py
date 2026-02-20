@@ -51,7 +51,7 @@ Example eval_answer.json:
 }}"""
 
     if agent_type == "claudecode":
-        cmd = cli_command + ["--print", "--dangerously-skip-permissions", "--verbose", "--output-format", "stream-json"]
+        cmd = cli_command + ["--print", "--dangerously-skip-permissions", "--verbose", "--output-format", "stream-json", "--tools", "Bash"]
     elif agent_type == "openaicodex":
         cmd = cli_command + ["--full-auto", "--skip-git-repo-check", "--json"]
     else:
