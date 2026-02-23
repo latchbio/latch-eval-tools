@@ -20,6 +20,7 @@ def _run_cli_agent(
     model_name: str | None = None,
     eval_timeout: int = EVAL_TIMEOUT,
     model_map: dict[str, str] | None = None,
+    claude_code_extra_args: list[str] | None = ["--tools", "Bash"],
 ) -> dict:
     try:
         subprocess.run(
@@ -51,7 +52,7 @@ Example eval_answer.json:
 }}"""
 
     if agent_type == "claudecode":
-        cmd = cli_command + ["--print", "--dangerously-skip-permissions", "--verbose", "--output-format", "stream-json", "--tools", "Bash"]
+        cmd = cli_command + ["--print", "--dangerously-skip-permissions", "--verbose", "--output-format", "stream-json"] + claude_code_extra_args if claude_code_extra_args else []
     elif agent_type == "openaicodex":
         cmd = cli_command + ["--full-auto", "--skip-git-repo-check", "--json"]
     else:
