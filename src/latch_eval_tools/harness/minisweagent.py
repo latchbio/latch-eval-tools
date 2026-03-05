@@ -152,7 +152,8 @@ def run_minisweagent_task(
 CRITICAL INSTRUCTIONS:
 1. Do NOT wrap your code in try/except blocks. Let errors propagate so you can see them and fix them in subsequent steps.
 2. You must write eval_answer.json BEFORE printing the completion signal.
-3. Correct order: Perform analysis -> Write eval_answer.json -> Print 'COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT' as your FINAL line of output.
+3. Correct order: Perform analysis -> Write eval_answer.json -> Signal completion.
+4. If your command runs Python, put print('COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT') as the last line inside the Python code. Otherwise, submit in a separate step with just `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`. Never put an echo after a heredoc EOF delimiter.
 
 The file eval_answer.json should contain ONLY the JSON object with the required fields
 
