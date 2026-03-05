@@ -3,6 +3,7 @@ from pathlib import Path
 from latch_eval_tools.harness._cli_runner import _run_cli_agent, EVAL_TIMEOUT
 
 MODEL_MAP = {
+    "openai/gpt-5.4": "gpt-5.4",
     "openai/gpt-5.3-codex": "gpt-5.3-codex",
     "openai/gpt-5.2-codex": "gpt-5.2-codex",
     "openai/gpt-5.1-codex-mini": "gpt-5.1-codex-mini",
