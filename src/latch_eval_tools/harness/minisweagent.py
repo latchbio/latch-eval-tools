@@ -105,6 +105,8 @@ def run_minisweagent_task(
             full_output = output.get("output", "")
             for marker in ["COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT", "MINI_SWE_AGENT_FINAL_OUTPUT"]:
                 if marker in full_output:
+                    if not (work_dir / "eval_answer.json").exists():
+                        return
                     idx = full_output.find(marker)
                     rest = full_output[idx + len(marker):].strip()
                     raise Submitted(rest)
