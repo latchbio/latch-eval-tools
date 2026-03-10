@@ -108,7 +108,7 @@ class MarkerGenePrecisionRecallGrader(BinaryGrader):
             check = "+" if result["pass"] else "x"
             lines.append(f"  {check} {celltype}: recall={result['recall']:.2f} (threshold: {min_recall:.2f})")
 
-        field_scores = {ct: 1.0 if r["pass"] else 0.0 for ct, r in celltype_results.items()}
+        field_scores = {ct: float(r["pass"]) for ct, r in celltype_results.items()}
         score = celltypes_passing / total_celltypes if total_celltypes > 0 else 0.0
 
         return GraderResult(
@@ -172,8 +172,10 @@ class MarkerGenePrecisionRecallGrader(BinaryGrader):
             precision_pass, recall_pass, passed, answer_field
         )
 
-        checks = {"precision": precision_pass, "recall": recall_pass}
-        field_scores = {k: 1.0 if v else 0.0 for k, v in checks.items()}
+        field_scores = {
+            "precision": float(precision_pass),
+            "recall": float(recall_pass),
+        }
         score = sum(field_scores.values()) / len(field_scores)
 
         return GraderResult(
@@ -320,8 +322,10 @@ class MarkerGeneSeparationGrader(BinaryGrader):
                 failures.append(f"Fraction high {fraction_high:.3f} < {fraction_high_threshold:.3f}")
             lines.append(f"\nFailure: {'; '.join(failures)}")
 
-        checks = {"mean_auroc": mean_auroc_pass, "fraction_high": fraction_high_pass}
-        field_scores = {k: 1.0 if v else 0.0 for k, v in checks.items()}
+        field_scores = {
+            "mean_auroc": float(mean_auroc_pass),
+            "fraction_high": float(fraction_high_pass),
+        }
         score = sum(field_scores.values()) / len(field_scores)
 
         return GraderResult(

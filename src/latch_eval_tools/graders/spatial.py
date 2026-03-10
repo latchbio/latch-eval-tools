@@ -92,7 +92,7 @@ class SpatialAdjacencyGrader(BinaryGrader):
             "pct_mixed_55um": mixed_55um_pass,
             "adjacency_pass": bool(adjacency_pass),
         }
-        field_scores = {k: 1.0 if v else 0.0 for k, v in checks.items()}
+        field_scores = {k: float(v) for k, v in checks.items()}
         score = sum(field_scores.values()) / len(field_scores)
 
         return GraderResult(

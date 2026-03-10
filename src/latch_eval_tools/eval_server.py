@@ -489,7 +489,7 @@ def write_results(results: list[EvalResult], output_path: Path):
     total = len(evals)
     accuracy = passed / total if total > 0 else 0
     scores = [e["score"] for e in evals if e["score"] is not None]
-    avg_score = sum(scores) / len(scores) if scores else 0
+    avg_score = sum(scores) / len(scores) if len(scores) > 0 else 0
 
     output = {
         "accuracy": accuracy,

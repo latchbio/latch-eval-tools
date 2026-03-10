@@ -99,7 +99,7 @@ class NumericToleranceGrader(BinaryGrader):
         total_fields = len(ground_truth)
         fields_passed = sum(1 for field in ground_truth if metrics.get(f"{field}_pass", False))
         score = fields_passed / total_fields if total_fields > 0 else 0.0
-        field_scores = {field: 1.0 if metrics.get(f"{field}_pass", False) else 0.0 for field in ground_truth}
+        field_scores = {field: float(metrics.get(f"{field}_pass", False)) for field in ground_truth}
 
         return GraderResult(
             passed=all_pass,
