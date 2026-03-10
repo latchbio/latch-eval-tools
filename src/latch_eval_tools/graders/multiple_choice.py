@@ -30,13 +30,10 @@ class MultipleChoiceGrader(BinaryGrader):
         else:
             reasoning = f"Multiple Choice: FAIL\n\n  x Agent answered: {agent_choice}\n    Correct answer(s): {display_correct}"
 
-        score = float(passed)
-
         return GraderResult(
             passed=passed,
             metrics=metrics,
             reasoning=reasoning,
             agent_answer=agent_answer,
-            score=score,
-            field_scores={"answer": score},
+            score=1.0 if passed else 0.0,
         )

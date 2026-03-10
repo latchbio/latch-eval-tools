@@ -108,16 +108,12 @@ class MarkerGenePrecisionRecallGrader(BinaryGrader):
             check = "+" if result["pass"] else "x"
             lines.append(f"  {check} {celltype}: recall={result['recall']:.2f} (threshold: {min_recall:.2f})")
 
-        field_scores = {ct: float(r["pass"]) for ct, r in celltype_results.items()}
-        score = celltypes_passing / total_celltypes if total_celltypes > 0 else 0.0
-
         return GraderResult(
             passed=passed,
             metrics=metrics,
             reasoning="\n".join(lines),
             agent_answer=agent_answer,
-            score=score,
-            field_scores=field_scores,
+            score=1.0 if passed else 0.0,
         )
 
     def _evaluate_flat_list(self, predicted_genes: list, canonical_markers: list, thresholds: dict, answer_field: str, agent_answer: dict) -> GraderResult:
@@ -172,19 +168,12 @@ class MarkerGenePrecisionRecallGrader(BinaryGrader):
             precision_pass, recall_pass, passed, answer_field
         )
 
-        field_scores = {
-            "precision": float(precision_pass),
-            "recall": float(recall_pass),
-        }
-        score = sum(field_scores.values()) / len(field_scores)
-
         return GraderResult(
             passed=passed,
             metrics=metrics,
             reasoning=reasoning,
             agent_answer=agent_answer,
-            score=score,
-            field_scores=field_scores,
+            score=1.0 if passed else 0.0,
         )
 
     def _format_reasoning(self, k, precision, recall, precision_threshold, recall_threshold,
@@ -322,17 +311,10 @@ class MarkerGeneSeparationGrader(BinaryGrader):
                 failures.append(f"Fraction high {fraction_high:.3f} < {fraction_high_threshold:.3f}")
             lines.append(f"\nFailure: {'; '.join(failures)}")
 
-        field_scores = {
-            "mean_auroc": float(mean_auroc_pass),
-            "fraction_high": float(fraction_high_pass),
-        }
-        score = sum(field_scores.values()) / len(field_scores)
-
         return GraderResult(
             passed=passed,
             metrics=metrics,
             reasoning="\n".join(lines),
             agent_answer=agent_answer,
-            score=score,
-            field_scores=field_scores,
+            score=1.0 if passed else 0.0,
         )
