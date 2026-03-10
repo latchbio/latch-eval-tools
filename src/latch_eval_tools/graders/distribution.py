@@ -70,7 +70,7 @@ class DistributionComparisonGrader(BinaryGrader):
 
         extra_types = set(agent_distribution.keys()) - set(gt_distribution.keys())
         if extra_types:
-            metrics["extra_cell_types"] = sorted(list(extra_types))
+            metrics["extra_cell_types"] = sorted(extra_types)
 
         lines = [
             f"Distribution Comparison: {'PASS' if all_pass else 'FAIL'}",
@@ -98,5 +98,6 @@ class DistributionComparisonGrader(BinaryGrader):
             passed=all_pass,
             metrics=metrics,
             reasoning="\n".join(lines),
-            agent_answer=agent_answer
+            agent_answer=agent_answer,
+            score=1.0 if all_pass else 0.0,
         )

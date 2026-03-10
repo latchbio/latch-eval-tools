@@ -71,5 +71,6 @@ class LabelSetJaccardGrader(BinaryGrader):
             passed=passed,
             metrics=metrics,
             reasoning="\n".join(lines),
-            agent_answer=agent_answer
+            agent_answer=agent_answer,
+            score=1.0 if passed else 0.0,
         )

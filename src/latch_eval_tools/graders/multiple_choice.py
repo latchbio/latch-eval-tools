@@ -34,5 +34,6 @@ class MultipleChoiceGrader(BinaryGrader):
             passed=passed,
             metrics=metrics,
             reasoning=reasoning,
-            agent_answer=agent_answer
+            agent_answer=agent_answer,
+            score=1.0 if passed else 0.0,
         )

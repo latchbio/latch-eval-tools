@@ -112,7 +112,8 @@ class MarkerGenePrecisionRecallGrader(BinaryGrader):
             passed=passed,
             metrics=metrics,
             reasoning="\n".join(lines),
-            agent_answer=agent_answer
+            agent_answer=agent_answer,
+            score=1.0 if passed else 0.0,
         )
 
     def _evaluate_flat_list(self, predicted_genes: list, canonical_markers: list, thresholds: dict, answer_field: str, agent_answer: dict) -> GraderResult:
@@ -171,7 +172,8 @@ class MarkerGenePrecisionRecallGrader(BinaryGrader):
             passed=passed,
             metrics=metrics,
             reasoning=reasoning,
-            agent_answer=agent_answer
+            agent_answer=agent_answer,
+            score=1.0 if passed else 0.0,
         )
 
     def _format_reasoning(self, k, precision, recall, precision_threshold, recall_threshold,
@@ -313,5 +315,6 @@ class MarkerGeneSeparationGrader(BinaryGrader):
             passed=passed,
             metrics=metrics,
             reasoning="\n".join(lines),
-            agent_answer=agent_answer
+            agent_answer=agent_answer,
+            score=1.0 if passed else 0.0,
         )
