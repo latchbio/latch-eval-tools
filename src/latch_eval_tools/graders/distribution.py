@@ -94,9 +94,22 @@ class DistributionComparisonGrader(BinaryGrader):
             for failure in failures:
                 lines.append(f"  - {failure}")
 
+        field_scores = {}
+        scored_fields = list(gt_distribution.keys())
+        if gt_total_cells is not None and agent_total_cells is not None:
+            scored_fields.append("total_cells")
+            field_scores["total_cells"] = 1.0 if metrics.get("total_cells_pass", False) else 0.0
+        for cell_type in gt_distribution:
+            field_scores[cell_type] = 1.0 if metrics.get(f"{cell_type}_pass", False) else 0.0
+        total_fields = len(field_scores)
+        fields_passed = sum(v for v in field_scores.values())
+        score = fields_passed / total_fields if total_fields > 0 else 0.0
+
         return GraderResult(
             passed=all_pass,
             metrics=metrics,
             reasoning="\n".join(lines),
-            agent_answer=agent_answer
+            agent_answer=agent_answer,
+            score=score,
+            field_scores=field_scores,
         )

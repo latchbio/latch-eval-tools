@@ -85,9 +85,21 @@ class SpatialAdjacencyGrader(BinaryGrader):
                 failures.append("Agent marked adjacency_pass as false")
             lines.append(f"\nFailure: {'; '.join(failures)}")
 
+        checks = {
+            "median_ic_to_pc": median_pass,
+            "p90_ic_to_pc": p90_pass,
+            "pct_within_15um": within_15um_pass,
+            "pct_mixed_55um": mixed_55um_pass,
+            "adjacency_pass": bool(adjacency_pass),
+        }
+        field_scores = {k: 1.0 if v else 0.0 for k, v in checks.items()}
+        score = sum(field_scores.values()) / len(field_scores)
+
         return GraderResult(
             passed=passed,
             metrics=metrics,
             reasoning="\n".join(lines),
-            agent_answer=agent_answer
+            agent_answer=agent_answer,
+            score=score,
+            field_scores=field_scores,
         )

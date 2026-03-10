@@ -96,11 +96,18 @@ class NumericToleranceGrader(BinaryGrader):
 
         reasoning = self._format_reasoning(ground_truth, tolerances, metrics, failures, all_pass)
 
+        total_fields = len(ground_truth)
+        fields_passed = sum(1 for field in ground_truth if metrics.get(f"{field}_pass", False))
+        score = fields_passed / total_fields if total_fields > 0 else 0.0
+        field_scores = {field: 1.0 if metrics.get(f"{field}_pass", False) else 0.0 for field in ground_truth}
+
         return GraderResult(
             passed=all_pass,
             metrics=metrics,
             reasoning=reasoning,
-            agent_answer=agent_answer
+            agent_answer=agent_answer,
+            score=score,
+            field_scores=field_scores,
         )
 
     def _format_reasoning(self, ground_truth, tolerances, metrics, failures, passed):

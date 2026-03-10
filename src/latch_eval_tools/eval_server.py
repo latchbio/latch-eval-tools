@@ -365,6 +365,8 @@ class EvalServer:
             if agent_answer is None:
                 eval_result.grader_result = {
                     "passed": False,
+                    "score": 0.0,
+                    "field_scores": {},
                     "metrics": {},
                     "reasoning": "Failed to extract answer from conversation history",
                     "agent_answer": None
@@ -377,12 +379,14 @@ class EvalServer:
 
                 eval_result.grader_result = {
                     "passed": grader_result.passed,
+                    "score": grader_result.score,
+                    "field_scores": grader_result.field_scores,
                     "metrics": grader_result.metrics,
                     "reasoning": grader_result.reasoning,
                     "agent_answer": grader_result.agent_answer
                 }
 
-                print(f"[eval] Grader result: {'PASS' if grader_result.passed else 'FAIL'}")
+                print(f"[eval] Grader result: {'PASS' if grader_result.passed else 'FAIL'} (score: {grader_result.score:.2%})")
                 print(f"[eval] Grader reasoning:\n{grader_result.reasoning}")
             else:
                 print(f"[eval] Warning: Unknown grader type '{grader_type}'")
@@ -475,6 +479,7 @@ def write_results(results: list[EvalResult], output_path: Path):
             "eval_id": r.eval_id,
             "duration_ms": r.duration_ms,
             "passed": r.grader_result.get("passed") if r.grader_result else None,
+            "score": r.grader_result.get("score", 0.0) if r.grader_result else None,
             "reasoning": r.grader_result.get("reasoning") if r.grader_result else None,
             "agent_answer": r.agent_answer,
         }
@@ -483,9 +488,12 @@ def write_results(results: list[EvalResult], output_path: Path):
     passed = sum(1 for e in evals if e["passed"] is True)
     total = len(evals)
     accuracy = passed / total if total > 0 else 0
+    scores = [e["score"] for e in evals if e["score"] is not None]
+    avg_score = sum(scores) / len(scores) if scores else 0
 
     output = {
         "accuracy": accuracy,
+        "avg_score": avg_score,
         "passed": passed,
         "total": total,
         "evals": evals,
@@ -493,7 +501,7 @@ def write_results(results: list[EvalResult], output_path: Path):
 
     output_path.write_text(json.dumps(output, indent=2))
     print(f"[eval] Results written to {output_path}")
-    print(f"[eval] Accuracy: {passed}/{total} ({accuracy:.1%})")
+    print(f"[eval] Accuracy: {passed}/{total} ({accuracy:.1%}), Avg Score: {avg_score:.1%}")
 
     workspaces_dir = output_path.parent / "workspaces"
     workspaces_dir.mkdir(parents=True, exist_ok=True)
