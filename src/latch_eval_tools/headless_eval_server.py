@@ -73,20 +73,26 @@ async def create_eval_notebook(workspace_id: str, eval_id: str) -> str:
     notebook_id = resp["data"]["createPlotNotebookInfo"]["plotNotebookInfo"]["id"]
     print(f"[headless] Created eval notebook: {notebook_id}")
 
-    await gql_query(
-        auth=auth,
-        query="""
-            mutation DeletePlotNotebook($id: BigInt!) {
-                deletePlotNotebook(input: { argNotebookId: $id }) {
-                    clientMutationId
-                }
-            }
-        """,
-        variables={"id": notebook_id},
-    )
-    print(f"[headless] Deleted eval notebook (hidden from frontend list): {notebook_id}")
-
     return notebook_id
+
+
+async def delete_eval_notebook(notebook_id: str):
+    try:
+        auth = get_auth_token()
+        await gql_query(
+            auth=auth,
+            query="""
+                mutation DeletePlotNotebook($id: BigInt!) {
+                    deletePlotNotebook(input: { argNotebookId: $id }) {
+                        clientMutationId
+                    }
+                }
+            """,
+            variables={"id": notebook_id},
+        )
+        print(f"[headless] Deleted eval notebook: {notebook_id}")
+    except Exception as e:
+        print(f"[headless] Warning: failed to delete eval notebook {notebook_id}: {e}")
 
 
 async def get_or_create_session(notebook_id: str) -> int:
@@ -631,6 +637,9 @@ class HeadlessEvalServer:
 
                 self.add_to_history(msg)
 
+                if msg_type == "agent_action":
+                    await self.handle_agent_action(msg)
+
                 if msg_type == "agent_error":
                     error_msg = msg.get("error", "Unknown error")
                     print(f"[headless] Agent error received: {error_msg}")
@@ -740,17 +749,20 @@ async def run_eval_batch_headless(eval_cases: list[Eval], sandbox_dir: Path) -> 
     first_eval_id = eval_cases[0].id if eval_cases else "batch"
     server.notebook_id = await create_eval_notebook(server.workspace_id, first_eval_id)
 
-    await server.start_server()
-    await server.connect()
+    try:
+        await server.start_server()
+        await server.connect()
 
-    for i, eval_case in enumerate(eval_cases):
-        print(f"\n[headless] Running eval {i + 1}/{len(eval_cases)}")
+        for i, eval_case in enumerate(eval_cases):
+            print(f"\n[headless] Running eval {i + 1}/{len(eval_cases)}")
 
-        await server.clear_agent_history()
+            await server.clear_agent_history()
 
-        result = await server.run_eval(eval_case)
-        results.append(result)
-
+            result = await server.run_eval(eval_case)
+            results.append(result)
+    finally:
         await server.stop_server()
+        if server.notebook_id is not None:
+            await delete_eval_notebook(server.notebook_id)
 
     return results

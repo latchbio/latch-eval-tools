@@ -2,9 +2,50 @@ import hashlib
 import json
 import os
 import shutil
+import re
+from importlib.resources import files
 from pathlib import Path
 
 from latch.ldata.path import LPath
+import subprocess
+
+DEFAULT_DOCKER_IMAGE = "public.ecr.aws/p5z7v3z8/benchmark_agent:latest"
+CACHED_AGENT_IMAGE_TAR = Path("/opt/agent-image.tar")
+
+_image_loaded = False
+
+
+def preload_cached_docker_image() -> None:
+    """Load the pre-cached agent image tar into the local Docker daemon.
+
+    No-ops if the tar doesn't exist (local dev) or was already loaded this process.
+    """
+    global _image_loaded
+    if _image_loaded or not CACHED_AGENT_IMAGE_TAR.exists():
+        return
+    print(f"Loading cached Docker image from {CACHED_AGENT_IMAGE_TAR} ...")
+    subprocess.run(
+        ["docker", "load", "-i", str(CACHED_AGENT_IMAGE_TAR)],
+        check=True,
+    )
+    _image_loaded = True
+    print("Cached Docker image loaded successfully")
+
+
+def ensure_docker_image(image: str) -> None:
+    result = subprocess.run(
+        ["docker", "image", "inspect", image],
+        capture_output=True,
+    )
+    if result.returncode == 0:
+        return
+    print(f"Pulling Docker image {image} ...")
+    subprocess.run(
+        ["docker", "pull", image],
+        check=True,
+    )
+    print(f"Docker image {image} pulled successfully")
+
 
 def get_project_root():
     """Find project root by looking for pyproject.toml."""
@@ -93,38 +134,64 @@ def download_single_dataset(uri: str, show_progress: bool = True, cache_name: st
 
 
 def download_data(data_node: str | list[str], work_dir: Path, cache_name: str = ".eval_cache") -> list[dict]:
-    """Download and symlink data files to workspace.
+    """Download data files into the workspace data directory.
     
     Args:
         data_node: Single URI or list of URIs to download
-        work_dir: Working directory to create symlinks in
+        work_dir: Working directory to stage data files in
         cache_name: Name of cache directory
     
     Returns:
         List of contextual data dicts with file info
     """
     data_nodes = data_node if isinstance(data_node, list) else ([data_node] if data_node else [])
-
+    data_dir = work_dir / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
     contextual_data = []
 
     for node in data_nodes:
         cached_file = download_single_dataset(node, cache_name=cache_name)
         data_filename = LPath(node).name() or Path(node).name or "data"
 
-        target_file = work_dir / data_filename
+        target_file = data_dir / data_filename
         if target_file.is_symlink() or target_file.is_file():
             target_file.unlink()
         elif target_file.is_dir():
             shutil.rmtree(target_file)
         os.symlink(cached_file, target_file)
-        print(f"Linked: {data_filename} -> workspace")
+        print(f"Linked: {data_filename} -> workspace/data")
 
         contextual_data.append({
             "type": "File",
-            "local_path": data_filename,
+            "local_path": f"data/{data_filename}",
         })
 
     return contextual_data
+
+
+def resolve_data_mounts(work_dir: Path, container_data_dir: str = "/workspace/data") -> list[str]:
+    data_dir = work_dir / "data"
+    if not data_dir.is_dir():
+        return []
+
+    seen_cache_dirs: set[Path] = set()
+    mounts: list[str] = []
+
+    for entry in sorted(data_dir.iterdir()):
+        if not entry.is_symlink():
+            continue
+        real_path = entry.resolve(strict=True)
+        cache_dir = real_path.parent
+        container_cache_dir = f"/workspace/.data_cache/{cache_dir.name}"
+
+        entry.unlink()
+        entry.symlink_to(f"{container_cache_dir}/{real_path.name}")
+
+        if cache_dir not in seen_cache_dirs:
+            seen_cache_dirs.add(cache_dir)
+            mounts.extend(["-v", f"{cache_dir}:{container_cache_dir}:ro"])
+
+    return mounts
 
 
 def batch_download_datasets(uris: list[str], show_progress: bool = True, cache_name: str = ".eval_cache"):
@@ -189,3 +256,42 @@ def cleanup_workspace(work_dir: Path, keep: bool = False):
         import shutil
         shutil.rmtree(work_dir)
         print(f"Workspace deleted: {work_dir}")
+
+
+
+def load_data_instructions() -> str:
+    return read_packaged_prompt("data_instructions.md")
+
+
+def read_packaged_prompt(filename: str) -> str:
+    return files("latch_eval_tools").joinpath("prompts", filename).read_text(encoding="utf-8")
+
+def enhance_prompt_with_local_files(task_prompt: str, work_dir: Path) -> str:
+    """Extract <ContextualNodeData> and add local file list to prompt."""
+    contextual_data_match = re.search(r'<ContextualNodeData>(.*?)</ContextualNodeData>', task_prompt, re.DOTALL)
+
+    if not contextual_data_match:
+        return task_prompt
+
+    try:
+        contextual_data = json.loads(contextual_data_match.group(1))
+    except json.JSONDecodeError:
+        return task_prompt
+
+    local_files = []
+    for item in contextual_data:
+        if 'local_path' in item:
+            local_files.append(item['local_path'])
+
+    if not local_files:
+        return task_prompt
+
+    file_list = "\n".join([f"- {f}" for f in local_files])
+
+    enhancement = f"\n\nThe following data files are available in your current working directory:\n{file_list}\n\nUse these local filenames to access the data.\n"
+
+    parts = task_prompt.split('<ContextualNodeData>')
+    if len(parts) == 2:
+        return parts[0] + enhancement + '<ContextualNodeData>' + parts[1]
+
+    return task_prompt

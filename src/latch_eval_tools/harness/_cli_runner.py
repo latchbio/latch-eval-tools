@@ -1,15 +1,69 @@
+from datetime import datetime
 import json
 import os
-import pwd
-import re
-import shutil
-import stat
 import subprocess
 import threading
 import time
+import uuid
 from pathlib import Path
 
+from latch_eval_tools.harness.utils import (
+    DEFAULT_DOCKER_IMAGE,
+    enhance_prompt_with_local_files,
+    ensure_docker_image,
+    load_data_instructions,
+    preload_cached_docker_image,
+    resolve_data_mounts,
+)
+
 EVAL_TIMEOUT = 600
+DOCKER_ENV_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY")
+
+
+def copy_and_teardown(container_name: str, agent_type: str, work_dir: Path) -> None:
+    source_by_agent = {
+        "claudecode": "/root/.claude",
+        "openaicodex": "/root/.codex",
+    }
+    source = source_by_agent.get(agent_type)
+
+    try:
+        if source is None:
+            return
+
+        container_dest = f"/workspace/{Path(source).name}"
+        host_dest = work_dir / Path(source).name
+        copy_result = subprocess.run(
+            ["docker", "exec", container_name, "cp", "-r", source, container_dest],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if copy_result.returncode == 0:
+            print(f"Copied harness state from {source} to {host_dest}")
+            return
+
+        stderr = copy_result.stderr.strip()
+        if stderr:
+            print(f"Error copying harness state from {source}: {stderr}")
+        else:
+            print(f"cp failed (rc={copy_result.returncode}) for {source} in {container_name}")
+    except Exception as exc:
+        print(f"Failed to copy harness state from {container_name}:{source}: {exc}")
+    finally:
+        try:
+            remove_result = subprocess.run(
+                ["docker", "rm", "-f", container_name],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if remove_result.returncode != 0:
+                stderr = remove_result.stderr.strip()
+                if stderr and "No such container" not in stderr:
+                    print(f"Failed to remove container {container_name}: {stderr}")
+        except Exception as exc:
+            print(f"Failed to remove container {container_name}: {exc}")
 
 
 def _run_cli_agent(
@@ -21,77 +75,50 @@ def _run_cli_agent(
     eval_timeout: int = EVAL_TIMEOUT,
     model_map: dict[str, str] | None = None,
     claude_code_extra_args: list[str] | None = ["--tools", "Bash"],
+    docker_image: str = DEFAULT_DOCKER_IMAGE,
 ) -> dict:
-    try:
-        subprocess.run(
-            cli_command + ["--version"],
-            capture_output=True,
-            check=True,
-            timeout=5
-        )
-    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        cli_name = " ".join(cli_command)
-        raise FileNotFoundError(f"{cli_name} CLI not found. Please install it first.")
-
     agent_log_file = work_dir / "agent_output.log"
     if agent_log_file.exists():
         agent_log_file.unlink()
 
-    enhanced_prompt = _enhance_prompt_with_local_files(task_prompt, work_dir)
-    enhanced_prompt += f"""
+    enhanced_prompt = enhance_prompt_with_local_files(task_prompt, work_dir)
+    enhanced_prompt += load_data_instructions()
 
-IMPORTANT: When you have completed this task:
-1. Write your final answer as a JSON object to a file named `eval_answer.json` in the working directory {work_dir}
-2. The file should contain ONLY the JSON object with the required fields
-3. After writing the file, you have completed the task
-
-Example eval_answer.json:
-{{
-  "field1": value1,
-  "field2": value2
-}}"""
 
     if agent_type == "claudecode":
-        cmd = cli_command + ["--print", "--dangerously-skip-permissions", "--verbose", "--output-format", "stream-json"] + claude_code_extra_args if claude_code_extra_args else []
+        agent_cmd = cli_command + ["--print", "--dangerously-skip-permissions", "--verbose", "--output-format", "stream-json"] + claude_code_extra_args if claude_code_extra_args else []
     elif agent_type == "openaicodex":
-        cmd = cli_command + ["--full-auto", "--skip-git-repo-check", "--json"]
+        agent_cmd = cli_command + ["--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "--json", "-c", 'model_reasoning_effort="xhigh"']
     else:
         raise ValueError(f"Unknown agent type: {agent_type}")
 
     if model_name and model_map:
         mapped_model = model_map.get(model_name, model_name)
-        cmd.extend(["--model", mapped_model])
+        agent_cmd.extend(["--model", mapped_model])
     elif model_name:
-        cmd.extend(["--model", model_name])
-
-    run_as_claude_user = agent_type == "claudecode" and os.geteuid() == 0
-    if run_as_claude_user:
-        try:
-            pwd.getpwnam("claude")
-            home_dir = Path.home()
-            current_mode = home_dir.stat().st_mode
-            home_dir.chmod(current_mode | stat.S_IXOTH)
-
-            eval_cache_dir = home_dir / ".eval_cache"
-            if eval_cache_dir.exists():
-                shutil.chown(eval_cache_dir, user="claude", group="claude")
-                for item in eval_cache_dir.rglob("*"):
-                    try:
-                        shutil.chown(item, user="claude", group="claude")
-                    except PermissionError:
-                        pass
-
-            work_dir.chmod(0o777)
-        except KeyError:
-            run_as_claude_user = False
+        agent_cmd.extend(["--model", model_name])
 
     env = os.environ.copy()
-    
+
     if agent_type == "openaicodex":
         if "CODEX_API_KEY" not in env and "OPENAI_API_KEY" in env:
             env["CODEX_API_KEY"] = env["OPENAI_API_KEY"]
 
-    start_time = time.time()
+    if not docker_image:
+        raise ValueError("docker_image is required for CLI harnesses")
+
+    preload_cached_docker_image()
+    ensure_docker_image(docker_image)
+    data_mounts = resolve_data_mounts(work_dir)
+    env_flags: list[str] = []
+    for key in DOCKER_ENV_KEYS:
+        value = env.get(key)
+        if value:
+            env_flags.extend(["-e", f"{key}={value}"])
+    container_name = f"eval-{agent_type}-{uuid.uuid4().hex[:8]}"
+
+    agent_start_time = time.time()
+    agent_finished_at = agent_start_time
     timed_out = False
     trajectory = []
     trajectory_file = work_dir / "trajectory.json"
@@ -104,13 +131,32 @@ Example eval_answer.json:
             trajectory_file.write_text(json.dumps(trajectory, indent=2))
 
     try:
-        if run_as_claude_user:
-            env_vars = [f"{k}={v}" for k, v in env.items() if k.endswith("_API_KEY")]
-            cmd = ["runuser", "-u", "claude", "--", "env"] + env_vars + cmd
+        subprocess.run(
+            [
+                "docker", "create",
+                "--name", container_name,
+                "-i",
+                "-v", f"{work_dir}:/workspace",
+                "-w", "/workspace",
+                *data_mounts,
+                *env_flags,
+                docker_image,
+                "sleep", "infinity",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ["docker", "start", container_name],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
 
         with open(agent_log_file, "w") as log_file:
             process = subprocess.Popen(
-                cmd,
+                ["docker", "exec", "-i", container_name, *agent_cmd],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -168,6 +214,8 @@ Example eval_answer.json:
                 process.stdin.write(enhanced_prompt)
                 process.stdin.close()
 
+            agent_start_time = time.time()
+
             try:
                 process.wait(timeout=eval_timeout)
             except subprocess.TimeoutExpired:
@@ -183,9 +231,12 @@ Example eval_answer.json:
     except Exception as e:
         with open(agent_log_file, 'a') as f:
             f.write(f"\nError running {agent_type}: {e}")
+    finally:
+        agent_finished_at = time.time()
+        copy_and_teardown(container_name, agent_type, work_dir)
 
-    duration = time.time() - start_time
-    print(f"Agent output saved to: {agent_log_file}")
+    duration = agent_finished_at - agent_start_time
+    print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Agent output saved to: {agent_log_file}")
 
     if trajectory:
         persist_trajectory()
@@ -280,34 +331,3 @@ def _extract_metadata(
     return metadata
 
 
-def _enhance_prompt_with_local_files(task_prompt: str, work_dir: Path) -> str:
-    contextual_data_match = re.search(
-        r'<ContextualNodeData>(.*?)</ContextualNodeData>',
-        task_prompt,
-        re.DOTALL
-    )
-
-    if not contextual_data_match:
-        return task_prompt
-
-    try:
-        contextual_data = json.loads(contextual_data_match.group(1))
-    except json.JSONDecodeError:
-        return task_prompt
-
-    local_files = []
-    for item in contextual_data:
-        if 'local_path' in item:
-            local_files.append(item['local_path'])
-
-    if not local_files:
-        return task_prompt
-
-    file_list = "\n".join([f"- {f}" for f in local_files])
-    enhancement = f"\n\nThe following data files are available in your current working directory:\n{file_list}\n\nUse these local filenames to access the data.\n"
-
-    parts = task_prompt.split('<ContextualNodeData>')
-    if len(parts) == 2:
-        return parts[0] + enhancement + '<ContextualNodeData>' + parts[1]
-
-    return task_prompt

@@ -4,8 +4,20 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-
+from datetime import datetime
 EVAL_TIMEOUT = 600
+
+
+def _terminate_process(process: subprocess.Popen):
+    """Terminate a subprocess, escalating to SIGKILL if needed."""
+    try:
+        process.terminate()
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=3)
+    except ProcessLookupError:
+        pass
 
 
 def run_plotsagent_task(
@@ -64,6 +76,7 @@ def run_plotsagent_task(
 
     start_time = time.time()
     timed_out = False
+    process = None
 
     try:
         with open(agent_log_file, "w") as log_f:
@@ -99,8 +112,7 @@ def run_plotsagent_task(
 
                 if time.monotonic() - start_wait > eval_timeout:
                     timed_out = True
-                    process.kill()
-                    process.wait()
+                    _terminate_process(process)
                     break
 
                 time.sleep(0.5)
@@ -110,13 +122,17 @@ def run_plotsagent_task(
             if timed_out:
                 log_f.write(f"\n\nAgent timed out after {eval_timeout} seconds")
                 log_f.flush()
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        with open(agent_log_file, "a") as log_f:
-            log_f.write(f"\n\nAgent timed out after {eval_timeout} seconds")
+    except Exception:
+        if timed_out:
+            with open(agent_log_file, "a") as log_f:
+                log_f.write(f"\n\nAgent timed out after {eval_timeout} seconds")
+        raise
+    finally:
+        if process is not None and process.poll() is None:
+            _terminate_process(process)
 
     duration = time.time() - start_time
-    print(f"Agent output saved to: {agent_log_file}")
+    print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Agent output saved to: {agent_log_file}")
 
     trajectory = []
     if workspace_dir.exists():
