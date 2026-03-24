@@ -265,33 +265,3 @@ def load_data_instructions() -> str:
 
 def read_packaged_prompt(filename: str) -> str:
     return files("latch_eval_tools").joinpath("prompts", filename).read_text(encoding="utf-8")
-
-def enhance_prompt_with_local_files(task_prompt: str, work_dir: Path) -> str:
-    """Extract <ContextualNodeData> and add local file list to prompt."""
-    contextual_data_match = re.search(r'<ContextualNodeData>(.*?)</ContextualNodeData>', task_prompt, re.DOTALL)
-
-    if not contextual_data_match:
-        return task_prompt
-
-    try:
-        contextual_data = json.loads(contextual_data_match.group(1))
-    except json.JSONDecodeError:
-        return task_prompt
-
-    local_files = []
-    for item in contextual_data:
-        if 'local_path' in item:
-            local_files.append(item['local_path'])
-
-    if not local_files:
-        return task_prompt
-
-    file_list = "\n".join([f"- {f}" for f in local_files])
-
-    enhancement = f"\n\nThe following data files are available in your current working directory:\n{file_list}\n\nUse these local filenames to access the data.\n"
-
-    parts = task_prompt.split('<ContextualNodeData>')
-    if len(parts) == 2:
-        return parts[0] + enhancement + '<ContextualNodeData>' + parts[1]
-
-    return task_prompt

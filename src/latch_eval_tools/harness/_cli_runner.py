@@ -9,7 +9,6 @@ from pathlib import Path
 
 from latch_eval_tools.harness.utils import (
     DEFAULT_DOCKER_IMAGE,
-    enhance_prompt_with_local_files,
     ensure_docker_image,
     load_data_instructions,
     preload_cached_docker_image,
@@ -81,8 +80,7 @@ def _run_cli_agent(
     if agent_log_file.exists():
         agent_log_file.unlink()
 
-    enhanced_prompt = enhance_prompt_with_local_files(task_prompt, work_dir)
-    enhanced_prompt += load_data_instructions()
+    enhanced_prompt = f"{task_prompt}\n{load_data_instructions()}"
 
 
     if agent_type == "claudecode":
@@ -120,6 +118,7 @@ def _run_cli_agent(
     agent_start_time = time.time()
     agent_finished_at = agent_start_time
     timed_out = False
+    agent_error: Exception | None = None
     trajectory = []
     trajectory_file = work_dir / "trajectory.json"
     trajectory_file.write_text(json.dumps(trajectory, indent=2))
@@ -229,6 +228,7 @@ def _run_cli_agent(
             stderr_thread.join(timeout=5)
 
     except Exception as e:
+        agent_error = e
         with open(agent_log_file, 'a') as f:
             f.write(f"\nError running {agent_type}: {e}")
     finally:
@@ -252,7 +252,12 @@ def _run_cli_agent(
             log_content = agent_log_file.read_text()
             log_tail = log_content[-1000:]
 
-        error_msg = "Agent timed out" if timed_out else "Agent did not create eval_answer.json"
+        if timed_out:
+            error_msg = "Agent timed out"
+        elif agent_error is not None:
+            error_msg = f"{type(agent_error).__name__}: {agent_error}"
+        else:
+            error_msg = "Agent did not create eval_answer.json"
         error_details = {
             "error": error_msg,
             "timed_out": timed_out,

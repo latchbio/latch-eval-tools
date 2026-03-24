@@ -14,7 +14,6 @@ import re
 
 from latch_eval_tools.harness.utils import (
     DEFAULT_DOCKER_IMAGE,
-    enhance_prompt_with_local_files,
     ensure_docker_image,
     load_data_instructions,
     preload_cached_docker_image,
@@ -236,14 +235,15 @@ def run_minisweagent_task(
 
     agent = None
     timed_out = False
+    agent_error: Exception | None = None
     try:
         os.chdir(str(work_dir))
 
 
 
-        enhanced_prompt = enhance_prompt_with_local_files(task_prompt, work_dir)
+        enhanced_prompt = task_prompt
 
-        enhanced_prompt += load_data_instructions()
+        enhanced_prompt = f"{task_prompt}\n{load_data_instructions()}"
         config = yaml.safe_load(read_packaged_prompt("miniswe_config.yaml"))
         effective_agent_config: dict[str, Any] = config["agent"] | (agent_config if isinstance(agent_config, dict) else {})
         effective_env_config: dict[str, Any] = config["environment"] | (env_config if isinstance(env_config, dict) else {})
@@ -293,8 +293,10 @@ def run_minisweagent_task(
             print(f"\nAgent timed out after {eval_timeout} seconds")
         except Submitted:
             pass
-        except Exception:
-            raise
+        except Exception as e:
+            agent_error = e
+            import traceback
+            traceback.print_exc()
         finally:
             signal.alarm(0)
             signal.signal(signal.SIGALRM, old_handler)
@@ -322,7 +324,12 @@ def run_minisweagent_task(
 
             trajectory_info = f"Agent had {len(agent.messages)} message exchanges."
 
-            error_msg = "Agent timed out" if timed_out else "Agent did not create eval_answer.json"
+            if timed_out:
+                error_msg = "Agent timed out"
+            elif agent_error is not None:
+                error_msg = f"{type(agent_error).__name__}: {agent_error}"
+            else:
+                error_msg = "Agent did not create eval_answer.json"
             error_details = {
                 "error": error_msg,
                 "timed_out": timed_out,

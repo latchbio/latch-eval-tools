@@ -17,6 +17,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates gnupg git \
     ripgrep vim sudo nodejs npm \
+    procps psmisc wget jq busybox hdf5-tools \
     build-essential gfortran pkg-config \
     libcurl4-openssl-dev libssl-dev libxml2-dev \
     libfontconfig1-dev libharfbuzz-dev libfribidi-dev \
@@ -58,6 +59,8 @@ RUN uv sync --no-dev
 
 ENV VIRTUAL_ENV=/root/.venv
 ENV PATH="/root/.venv/bin:/root/.local/bin:$PATH"
+RUN python -c "import anndata, liana, scanpy,squidpy"
+
 RUN printf '%s\n' \
     'export VIRTUAL_ENV=/root/.venv' \
     'export PATH="/root/.venv/bin:/root/.local/bin:$PATH"' \

@@ -1,14 +1,5 @@
-CRITICAL INSTRUCTIONS:
-1. Do NOT wrap your code in try/except blocks. Let errors propagate so you can see them and fix them in subsequent steps.
-2. You must write `/workspace/eval_answer.json` BEFORE issuing the completion signal.
-3. Correct order: Perform analysis -> Write eval_answer.json -> Submit with a standalone `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT` command.
-4. Do not print the completion marker from inside scripts and do not combine it with other commands.
+Common biological analysis packages you might need such as numpy, pandas, scipy,h5py,scanpy,anndata etc have been pre-installed. Full build environment context can be found at `/root`. All data required for the analysis is present at `/workspace/data`. You can also install other packages and modify the environment as needed. However you should not need to download any other data than what is provided.
 
-The file `/workspace/eval_answer.json` should contain ONLY the JSON object with the required fields
+The calling program looks for results in `/workspace/eval_answer.json`. Hence, you should ensure to write a JSON object with the required fields before issuing the completion signal.
 
-Example `/workspace/eval_answer.json`:
-{
-  "field1": value1,
-  "field2": value2
-}
-Common biological analysis packages you might need such as numpy, pandas, scipy,h5py,scanpy,anndata etc have been pre-installed. Full build environment context can be found at `/root`
+The completion signal is a standalone `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT` command.
