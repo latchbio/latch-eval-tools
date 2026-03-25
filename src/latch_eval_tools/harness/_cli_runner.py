@@ -11,7 +11,6 @@ from latch_eval_tools.harness.utils import (
     DEFAULT_DOCKER_IMAGE,
     ensure_docker_image,
     load_data_instructions,
-    preload_cached_docker_image,
     resolve_data_mounts,
 )
 
@@ -105,7 +104,6 @@ def _run_cli_agent(
     if not docker_image:
         raise ValueError("docker_image is required for CLI harnesses")
 
-    preload_cached_docker_image()
     ensure_docker_image(docker_image)
     data_mounts = resolve_data_mounts(work_dir)
     env_flags: list[str] = []
