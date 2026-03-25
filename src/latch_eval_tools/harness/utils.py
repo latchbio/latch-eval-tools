@@ -10,26 +10,7 @@ from latch.ldata.path import LPath
 import subprocess
 
 DEFAULT_DOCKER_IMAGE = "public.ecr.aws/p5z7v3z8/benchmark_agent:latest"
-CACHED_AGENT_IMAGE_TAR = Path("/opt/agent-image.tar")
 
-_image_loaded = False
-
-
-def preload_cached_docker_image() -> None:
-    """Load the pre-cached agent image tar into the local Docker daemon.
-
-    No-ops if the tar doesn't exist (local dev) or was already loaded this process.
-    """
-    global _image_loaded
-    if _image_loaded or not CACHED_AGENT_IMAGE_TAR.exists():
-        return
-    print(f"Loading cached Docker image from {CACHED_AGENT_IMAGE_TAR} ...")
-    subprocess.run(
-        ["docker", "load", "-i", str(CACHED_AGENT_IMAGE_TAR)],
-        check=True,
-    )
-    _image_loaded = True
-    print("Cached Docker image loaded successfully")
 
 
 def ensure_docker_image(image: str) -> None:
