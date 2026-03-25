@@ -16,7 +16,6 @@ from latch_eval_tools.harness.utils import (
     DEFAULT_DOCKER_IMAGE,
     ensure_docker_image,
     load_data_instructions,
-    preload_cached_docker_image,
     read_packaged_prompt,
     resolve_data_mounts,
 )
@@ -29,7 +28,6 @@ API_KEY_ENV_VARS = [
     "CODEX_API_KEY",
     "GEMINI_API_KEY",
     "XAI_API_KEY",
-    "MISTRAL_API_KEY",
 ]
 
 
@@ -264,7 +262,6 @@ def run_minisweagent_task(
         if model_name is not None and model_name.startswith("mistral/"):
             os.environ.setdefault("MSWEA_COST_TRACKING", "ignore_errors")
 
-        preload_cached_docker_image()
         ensure_docker_image(docker_image)
 
         sys.stdout = TeeOutput(original_stdout, captured_output)
