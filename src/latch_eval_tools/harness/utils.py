@@ -2,14 +2,26 @@ import hashlib
 import json
 import os
 import shutil
-import re
 from importlib.resources import files
 from pathlib import Path
 
+from jinja2 import DebugUndefined, Environment
 from latch.ldata.path import LPath
 import subprocess
 
 DEFAULT_DOCKER_IMAGE = "public.ecr.aws/p5z7v3z8/benchmark_agent:latest"
+GIBIBYTE = 1024**3
+MEMORY_HEADROOM_BYTES = 2 * GIBIBYTE
+MIN_MEMORY_LIMIT_BYTES = 128 * 1024**2
+CGROUP_MEMORY_LIMIT_PATHS = (
+    Path("/sys/fs/cgroup/memory.max"),
+    Path("/sys/fs/cgroup/memory/memory.limit_in_bytes"),
+)
+PROMPT_TEMPLATE_ENVIRONMENT = Environment(
+    autoescape=False,
+    keep_trailing_newline=True,
+    undefined=DebugUndefined,
+)
 
 
 
@@ -26,6 +38,125 @@ def ensure_docker_image(image: str) -> None:
         check=True,
     )
     print(f"Docker image {image} pulled successfully")
+
+
+def load_trajectory_identifier(trajectory_path: Path, key: str) -> str | None:
+    if not trajectory_path.exists():
+        print("No trajectory.json file found")
+        return None
+
+    try:
+        trajectory = json.loads(trajectory_path.read_text())
+    except json.JSONDecodeError as exc:
+        print(f"Failed to parse trajectory.json: {exc}")
+        return None
+
+    if not trajectory:
+        print("No trajectory events found")
+        return None
+
+    if not isinstance(trajectory, list):
+        print("Unexpected trajectory format in trajectory.json")
+        return None
+
+    for event in trajectory:
+        if not isinstance(event, dict):
+            continue
+        identifier = event.get(key)
+        if identifier:
+            return str(identifier)
+
+    print(f"No {key} found in trajectory.json")
+    return None
+
+
+def get_memory_limit_bytes(headroom_bytes: int = MEMORY_HEADROOM_BYTES) -> int:
+    host_total_bytes = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    cgroup_limit_bytes: int | None = None
+    for path in CGROUP_MEMORY_LIMIT_PATHS:
+        try:
+            raw_value = path.read_text().strip()
+        except OSError:
+            continue
+
+        if not raw_value or raw_value == "max":
+            continue
+
+        try:
+            limit_bytes = int(raw_value)
+        except ValueError:
+            continue
+
+        if limit_bytes > 0:
+            cgroup_limit_bytes = limit_bytes
+            break
+
+    memory_ceiling_bytes = host_total_bytes
+    if cgroup_limit_bytes is not None:
+        memory_ceiling_bytes = min(memory_ceiling_bytes, cgroup_limit_bytes)
+
+    limit_bytes = memory_ceiling_bytes - headroom_bytes
+    if limit_bytes > 0:
+        return limit_bytes
+
+    if memory_ceiling_bytes <= MIN_MEMORY_LIMIT_BYTES:
+        return memory_ceiling_bytes
+
+    return max(memory_ceiling_bytes - MIN_MEMORY_LIMIT_BYTES, MIN_MEMORY_LIMIT_BYTES)
+
+
+def render_packaged_prompt(filename: str, **template_values: object) -> str:
+    template = PROMPT_TEMPLATE_ENVIRONMENT.from_string(
+        read_packaged_prompt(filename)
+    )
+    return template.render(
+        **{key: str(value) for key, value in template_values.items()}
+    )
+
+
+def _inspect_docker_container_state(
+    container_name: str,
+    state_field: str,
+    docker_executable: str = "docker",
+) -> str | None:
+    result = subprocess.run(
+        [
+            docker_executable,
+            "inspect",
+            "--format",
+            f"{{{{.State.{state_field}}}}}",
+            container_name,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def is_docker_container_running(
+    container_name: str,
+    docker_executable: str = "docker",
+) -> bool:
+    state = _inspect_docker_container_state(
+        container_name,
+        "Running",
+        docker_executable=docker_executable,
+    )
+    return state == "true"
+
+
+def is_docker_container_oom_killed(
+    container_name: str,
+    docker_executable: str = "docker",
+) -> bool:
+    state = _inspect_docker_container_state(
+        container_name,
+        "OOMKilled",
+        docker_executable=docker_executable,
+    )
+    return state == "true"
 
 
 def get_project_root():

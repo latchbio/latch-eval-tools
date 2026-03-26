@@ -10,58 +10,147 @@ from pathlib import Path
 from latch_eval_tools.harness.utils import (
     DEFAULT_DOCKER_IMAGE,
     ensure_docker_image,
+    get_memory_limit_bytes,
+    is_docker_container_oom_killed,
+    is_docker_container_running,
     load_data_instructions,
+    load_trajectory_identifier,
+    render_packaged_prompt,
     resolve_data_mounts,
 )
 
 EVAL_TIMEOUT = 600
 DOCKER_ENV_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY")
+OOM_EXIT_CODE = 137
+MAX_OOM_RESTARTS = 10
+AGENT_STATE_DIRS = {
+    "claudecode": ".claude",
+    "openaicodex": ".codex",
+}
+AGENT_IDENTIFIER_KEYS = {
+    "claudecode": "session_id",
+    "openaicodex": "thread_id",
+}
 
 
-def copy_and_teardown(container_name: str, agent_type: str, work_dir: Path) -> None:
-    source_by_agent = {
-        "claudecode": "/root/.claude",
-        "openaicodex": "/root/.codex",
-    }
-    source = source_by_agent.get(agent_type)
-
+def teardown_container(container_name: str) -> None:
     try:
-        if source is None:
-            return
-
-        container_dest = f"/workspace/{Path(source).name}"
-        host_dest = work_dir / Path(source).name
-        copy_result = subprocess.run(
-            ["docker", "exec", container_name, "cp", "-r", source, container_dest],
+        remove_result = subprocess.run(
+            ["docker", "rm", "-f", container_name],
             capture_output=True,
             text=True,
             timeout=30,
         )
-        if copy_result.returncode == 0:
-            print(f"Copied harness state from {source} to {host_dest}")
-            return
-
-        stderr = copy_result.stderr.strip()
-        if stderr:
-            print(f"Error copying harness state from {source}: {stderr}")
-        else:
-            print(f"cp failed (rc={copy_result.returncode}) for {source} in {container_name}")
+        if remove_result.returncode != 0:
+            stderr = remove_result.stderr.strip()
+            if not stderr or "No such container" not in stderr:
+                print(f"Failed to remove container {container_name}: {stderr}")
     except Exception as exc:
-        print(f"Failed to copy harness state from {container_name}:{source}: {exc}")
-    finally:
-        try:
-            remove_result = subprocess.run(
-                ["docker", "rm", "-f", container_name],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            if remove_result.returncode != 0:
-                stderr = remove_result.stderr.strip()
-                if stderr and "No such container" not in stderr:
-                    print(f"Failed to remove container {container_name}: {stderr}")
-        except Exception as exc:
-            print(f"Failed to remove container {container_name}: {exc}")
+        print(f"Failed to remove container {container_name}: {exc}")
+
+
+def _build_agent_command(
+    agent_type: str,
+    cli_command: list[str],
+    model_name: str | None,
+    model_map: dict[str, str] | None,
+    claude_code_extra_args: list[str] | None,
+    resume_identifier: str | None = None,
+) -> list[str]:
+    if agent_type == "claudecode":
+        agent_cmd = list(cli_command)
+        if resume_identifier is not None:
+            agent_cmd.extend(["--resume", resume_identifier])
+        agent_cmd.extend(
+            [
+                "--print",
+                "--dangerously-skip-permissions",
+                "--verbose",
+                "--output-format",
+                "stream-json",
+            ]
+        )
+        if claude_code_extra_args:
+            agent_cmd.extend(claude_code_extra_args)
+    elif agent_type == "openaicodex":
+        agent_cmd = list(cli_command)
+        if resume_identifier is not None:
+            agent_cmd.append("resume")
+        agent_cmd.extend(
+            [
+                "--dangerously-bypass-approvals-and-sandbox",
+                "--skip-git-repo-check",
+                "--json",
+                "-c",
+                'model_reasoning_effort="xhigh"',
+            ]
+        )
+    else:
+        raise ValueError(f"Unknown agent type: {agent_type}")
+
+    if model_name and model_map:
+        mapped_model = model_map.get(model_name, model_name)
+        agent_cmd.extend(["--model", mapped_model])
+    elif model_name:
+        agent_cmd.extend(["--model", model_name])
+    if resume_identifier is not None: # codex exec resume --help: Usage: codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]
+        agent_cmd.append(resume_identifier)
+    return agent_cmd
+
+
+def _create_cli_container(
+    container_name: str,
+    agent_type: str,
+    work_dir: Path,
+    data_mounts: list[str],
+    env_flags: list[str],
+    docker_image: str,
+    memory_limit_bytes: int,
+) -> str:
+    state_dir_name = AGENT_STATE_DIRS.get(agent_type)
+    if state_dir_name is None:
+        raise ValueError(f"Unknown agent type for state dir: {agent_type}")
+
+    agent_state_dir = work_dir / state_dir_name
+    agent_state_dir.mkdir(parents=True, exist_ok=True)
+    container_state_mount = f"/root/{state_dir_name}"
+    subprocess.run(
+        [
+            "docker",
+            "create",
+            "--name",
+            container_name,
+            "-i",
+            "--memory",
+            str(memory_limit_bytes),
+            "--memory-swap",
+            str(memory_limit_bytes),
+            "-v",
+            f"{work_dir}:/workspace",
+            "-v",
+            f"{agent_state_dir}:{container_state_mount}",
+            "-w",
+            "/workspace",
+            *data_mounts,
+            *env_flags,
+            docker_image,
+            "sleep",
+            "infinity",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return container_state_mount
+
+
+def _start_cli_container(container_name: str) -> None:
+    subprocess.run(
+        ["docker", "start", container_name],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 def _run_cli_agent(
@@ -74,26 +163,13 @@ def _run_cli_agent(
     model_map: dict[str, str] | None = None,
     claude_code_extra_args: list[str] | None = ["--tools", "Bash"],
     docker_image: str = DEFAULT_DOCKER_IMAGE,
+    memory_limit_bytes: int | None = None,
 ) -> dict:
     agent_log_file = work_dir / "agent_output.log"
     if agent_log_file.exists():
         agent_log_file.unlink()
 
     enhanced_prompt = f"{task_prompt}\n{load_data_instructions()}"
-
-
-    if agent_type == "claudecode":
-        agent_cmd = cli_command + ["--print", "--dangerously-skip-permissions", "--verbose", "--output-format", "stream-json"] + claude_code_extra_args if claude_code_extra_args else []
-    elif agent_type == "openaicodex":
-        agent_cmd = cli_command + ["--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "--json", "-c", 'model_reasoning_effort="xhigh"']
-    else:
-        raise ValueError(f"Unknown agent type: {agent_type}")
-
-    if model_name and model_map:
-        mapped_model = model_map.get(model_name, model_name)
-        agent_cmd.extend(["--model", mapped_model])
-    elif model_name:
-        agent_cmd.extend(["--model", model_name])
 
     env = os.environ.copy()
 
@@ -111,6 +187,8 @@ def _run_cli_agent(
         value = env.get(key)
         if value:
             env_flags.extend(["-e", f"{key}={value}"])
+    if memory_limit_bytes is None:
+        memory_limit_bytes = get_memory_limit_bytes()
     container_name = f"eval-{agent_type}-{uuid.uuid4().hex[:8]}"
 
     agent_start_time = time.time()
@@ -120,6 +198,8 @@ def _run_cli_agent(
     trajectory = []
     trajectory_file = work_dir / "trajectory.json"
     trajectory_file.write_text(json.dumps(trajectory, indent=2))
+    oom_detected = False
+    oom_restarts = 0
 
     trajectory_lock = threading.Lock()
 
@@ -128,113 +208,214 @@ def _run_cli_agent(
             trajectory_file.write_text(json.dumps(trajectory, indent=2))
 
     try:
-        subprocess.run(
-            [
-                "docker", "create",
-                "--name", container_name,
-                "-i",
-                "-v", f"{work_dir}:/workspace",
-                "-w", "/workspace",
-                *data_mounts,
-                *env_flags,
-                docker_image,
-                "sleep", "infinity",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
+        container_state_mount = _create_cli_container(
+            container_name=container_name,
+            agent_type=agent_type,
+            work_dir=work_dir,
+            data_mounts=data_mounts,
+            env_flags=env_flags,
+            docker_image=docker_image,
+            memory_limit_bytes=memory_limit_bytes,
         )
-        subprocess.run(
-            ["docker", "start", container_name],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        _start_cli_container(container_name)
+        deadline = time.time() + eval_timeout
 
         with open(agent_log_file, "w") as log_file:
-            process = subprocess.Popen(
-                ["docker", "exec", "-i", container_name, *agent_cmd],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                cwd=str(work_dir),
-                env=env,
-                text=True,
-                bufsize=1,
-            )
+            agent_start_time = time.time()
+            prompt_text = enhanced_prompt
+            resume_identifier: str | None = None
+            last_return_code: int | None = None
 
-            stderr_header_written = False
-            stderr_lock = threading.Lock()
+            while True:
+                remaining_timeout = deadline - time.time()
+                if remaining_timeout <= 0:
+                    timed_out = True
+                    log_file.write(
+                        f"\n\nAgent timed out after {eval_timeout} seconds\n"
+                    )
+                    log_file.flush()
+                    break
 
-            def stream_stdout():
-                if process.stdout is None:
-                    return
-                try:
-                    for line in process.stdout:
-                        log_file.write(line)
-                        log_file.flush()
+                agent_cmd = _build_agent_command(
+                    agent_type=agent_type,
+                    cli_command=cli_command,
+                    model_name=model_name,
+                    model_map=model_map,
+                    claude_code_extra_args=claude_code_extra_args,
+                    resume_identifier=resume_identifier,
+                )
 
-                        stripped = line.strip()
-                        if not stripped:
-                            continue
-                        try:
-                            event = json.loads(stripped)
-                            with trajectory_lock:
-                                trajectory.append(event)
-                            persist_trajectory()
-                        except json.JSONDecodeError:
-                            print(f"Warning: Failed to parse JSON: {stripped}")
-                except ValueError:
-                    pass
+                process = subprocess.Popen(
+                    ["docker", "exec", "-i", container_name, *agent_cmd],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    cwd=str(work_dir),
+                    env=env,
+                    text=True,
+                    bufsize=1,
+                )
 
-            def stream_stderr():
-                nonlocal stderr_header_written
-                if process.stderr is None:
-                    return
-                try:
-                    for line in process.stderr:
-                        with stderr_lock:
-                            if not stderr_header_written:
-                                log_file.write("\n\nSTDERR:\n")
-                                stderr_header_written = True
+                stderr_header_written = False
+                stderr_lock = threading.Lock()
+
+                def stream_stdout():
+                    if process.stdout is None:
+                        return
+                    try:
+                        for line in process.stdout:
                             log_file.write(line)
                             log_file.flush()
-                except ValueError:
-                    pass
 
-            stdout_thread = threading.Thread(target=stream_stdout, daemon=True)
-            stderr_thread = threading.Thread(target=stream_stderr, daemon=True)
-            stdout_thread.start()
-            stderr_thread.start()
+                            stripped = line.strip()
+                            if not stripped:
+                                continue
+                            try:
+                                event = json.loads(stripped)
+                                with trajectory_lock:
+                                    trajectory.append(event)
+                                persist_trajectory()
+                            except json.JSONDecodeError:
+                                print(f"Warning: Failed to parse JSON: {stripped}")
+                    except ValueError:
+                        pass
 
-            if process.stdin is not None:
-                process.stdin.write(enhanced_prompt)
-                process.stdin.close()
+                def stream_stderr():
+                    nonlocal stderr_header_written
+                    if process.stderr is None:
+                        return
+                    try:
+                        for line in process.stderr:
+                            with stderr_lock:
+                                if not stderr_header_written:
+                                    log_file.write("\n\nSTDERR:\n")
+                                    stderr_header_written = True
+                                log_file.write(line)
+                                log_file.flush()
+                    except ValueError:
+                        pass
 
-            agent_start_time = time.time()
+                stdout_thread = threading.Thread(target=stream_stdout, daemon=True)
+                stderr_thread = threading.Thread(target=stream_stderr, daemon=True)
+                stdout_thread.start()
+                stderr_thread.start()
 
-            try:
-                process.wait(timeout=eval_timeout)
-            except subprocess.TimeoutExpired:
-                timed_out = True
-                process.kill()
-                process.wait()
-                log_file.write(f"\n\nAgent timed out after {eval_timeout} seconds\n")
+                if process.stdin is not None:
+                    process.stdin.write(prompt_text)
+                    process.stdin.close()
+
+                timed_out_attempt = False
+                try:
+                    process.wait(timeout=remaining_timeout)
+                except subprocess.TimeoutExpired:
+                    timed_out_attempt = True
+                    process.kill()
+                    process.wait()
+                    log_file.write(
+                        f"\n\nAgent timed out after {eval_timeout} seconds\n"
+                    )
+                    log_file.flush()
+
+                stdout_thread.join(timeout=5)
+                stderr_thread.join(timeout=5)
+                last_return_code = process.returncode
+                if timed_out_attempt:
+                    timed_out = True
+                    break
+
+                if last_return_code == 0:
+                    break
+
+                container_running = is_docker_container_running(container_name)
+                container_oom_killed = is_docker_container_oom_killed(container_name)
+                attempt_hit_oom = (
+                    last_return_code == OOM_EXIT_CODE or container_oom_killed
+                )
+                if not attempt_hit_oom:
+                    agent_error = RuntimeError(
+                        f"{agent_type} exited with code {last_return_code}"
+                    )
+                    break
+
+                oom_detected = True
+                if oom_restarts >= MAX_OOM_RESTARTS:
+                    agent_error = RuntimeError(
+                        f"{agent_type} exceeded max OOM restarts ({MAX_OOM_RESTARTS})"
+                    )
+                    log_file.write(
+                        f"\n\nExceeded max OOM restarts ({MAX_OOM_RESTARTS})\n"
+                    )
+                    log_file.flush()
+                    break
+
+                identifier_key = AGENT_IDENTIFIER_KEYS.get(agent_type)
+                if identifier_key is None:
+                    raise ValueError(
+                        f"Unknown agent type for resume identifier: {agent_type}"
+                    )
+
+                persist_trajectory()
+                resume_identifier = load_trajectory_identifier(
+                    trajectory_file,
+                    identifier_key,
+                )
+                if resume_identifier is None:
+                    agent_error = RuntimeError(
+                        f"{agent_type} hit OOM before emitting {identifier_key}"
+                    )
+                    break
+
+                if container_running:
+                    container_action = (
+                        "The execution container stayed alive and the agent process "
+                        "is being resumed in place."
+                    )
+                else:
+                    subprocess.run(
+                        ["docker", "rm", "-f", container_name],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    container_state_mount = _create_cli_container(
+                        container_name=container_name,
+                        agent_type=agent_type,
+                        work_dir=work_dir,
+                        data_mounts=data_mounts,
+                        env_flags=env_flags,
+                        docker_image=docker_image,
+                        memory_limit_bytes=memory_limit_bytes,
+                    )
+                    _start_cli_container(container_name)
+                    container_action = (
+                        "The execution container was restarted before the session "
+                        "was resumed."
+                    )
+
+                oom_restarts += 1
+                log_file.write(
+                    f"\n\n[OOM restart {oom_restarts}/{MAX_OOM_RESTARTS}]\n"
+                    f"{container_action}\n"
+                )
                 log_file.flush()
-
-            stdout_thread.join(timeout=5)
-            stderr_thread.join(timeout=5)
+                prompt_text = render_packaged_prompt(
+                    "oom_restart.md",
+                    container_action=container_action,
+                    state_dir=container_state_mount,
+                )
 
     except Exception as e:
         agent_error = e
-        with open(agent_log_file, 'a') as f:
+        with open(agent_log_file, "a") as f:
             f.write(f"\nError running {agent_type}: {e}")
     finally:
         agent_finished_at = time.time()
-        copy_and_teardown(container_name, agent_type, work_dir)
+        teardown_container(container_name)
 
     duration = agent_finished_at - agent_start_time
-    print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Agent output saved to: {agent_log_file}")
+    print(
+        f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Agent output saved to: {agent_log_file}"
+    )
 
     if trajectory:
         persist_trajectory()
@@ -259,7 +440,7 @@ def _run_cli_agent(
         error_details = {
             "error": error_msg,
             "timed_out": timed_out,
-            "log_tail": log_tail
+            "log_tail": log_tail,
         }
         print(f"\nWarning: {error_msg}")
     else:
@@ -268,11 +449,22 @@ def _run_cli_agent(
         except json.JSONDecodeError as e:
             error_details = {
                 "error": f"Failed to parse eval_answer.json: {e}",
-                "file_contents": eval_answer_file.read_text()[:500]
+                "file_contents": eval_answer_file.read_text()[:500],
             }
             print(f"\nWarning: Failed to parse eval_answer.json: {e}")
 
-    metadata = _extract_metadata(agent_type, trajectory, duration, model_name, timed_out, eval_timeout, error_details)
+    metadata = _extract_metadata(
+        agent_type,
+        trajectory,
+        duration,
+        model_name,
+        timed_out,
+        eval_timeout,
+        error_details,
+        oom_detected=oom_detected,
+        oom_restarts=oom_restarts,
+        memory_limit_bytes=memory_limit_bytes,
+    )
 
     return {"answer": agent_answer, "metadata": metadata}
 
@@ -285,10 +477,14 @@ def _extract_metadata(
     timed_out: bool,
     eval_timeout: int,
     error_details: dict | None,
+    oom_detected: bool,
+    oom_restarts: int,
+    memory_limit_bytes: int,
 ) -> dict:
     metadata = {
         "duration_s": round(duration, 2),
         "model": model_name,
+        "memory_limit_bytes": memory_limit_bytes,
     }
 
     if agent_type == "claudecode":
@@ -306,7 +502,7 @@ def _extract_metadata(
         thread_id = None
         n_turns = 0
         total_usage = {"input_tokens": 0, "output_tokens": 0}
-        
+
         for event in trajectory:
             event_type = event.get("type", "")
             if event_type == "thread.started":
@@ -317,7 +513,7 @@ def _extract_metadata(
                     usage = event["usage"]
                     total_usage["input_tokens"] += usage.get("input_tokens", 0)
                     total_usage["output_tokens"] += usage.get("output_tokens", 0)
-        
+
         if thread_id:
             metadata["thread_id"] = thread_id
         if n_turns > 0:
@@ -325,12 +521,11 @@ def _extract_metadata(
         if total_usage["input_tokens"] > 0 or total_usage["output_tokens"] > 0:
             metadata["usage"] = total_usage
 
-    if timed_out:
-        metadata["timed_out"] = True
-        metadata["eval_timeout_seconds"] = eval_timeout
+    metadata["timed_out"] = timed_out
+    metadata["eval_timeout_seconds"] = eval_timeout
+    metadata["oom_detected"] = oom_detected
+    metadata["oom_restarts"] = oom_restarts
     if error_details:
         metadata["error_details"] = error_details
 
     return metadata
-
-

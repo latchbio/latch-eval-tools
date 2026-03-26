@@ -10,18 +10,23 @@ from pathlib import Path
 import time
 from typing import Any
 import yaml
-import re
 
 from latch_eval_tools.harness.utils import (
     DEFAULT_DOCKER_IMAGE,
     ensure_docker_image,
+    get_memory_limit_bytes,
+    is_docker_container_oom_killed,
+    is_docker_container_running,
     load_data_instructions,
     read_packaged_prompt,
+    render_packaged_prompt,
     resolve_data_mounts,
 )
 
 OPERATION_TIMEOUT = 300
 EVAL_TIMEOUT = 600
+OOM_EXIT_CODE = 137
+MAX_OOM_RESTARTS = 10
 API_KEY_ENV_VARS = [
     "ANTHROPIC_API_KEY",
     "OPENAI_API_KEY",
@@ -147,6 +152,7 @@ def run_minisweagent_task(
     operation_timeout: int = OPERATION_TIMEOUT,
     eval_timeout: int = EVAL_TIMEOUT,
     docker_image: str = DEFAULT_DOCKER_IMAGE,
+    memory_limit_bytes: int | None = None,
 ) -> dict:
     """Run MiniSWE agent on a task.
     
@@ -186,6 +192,72 @@ def run_minisweagent_task(
 
     class FlexibleDockerEnvironment(DockerEnvironment):
         completion_marker = "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+
+        def execute(self, action: dict, cwd: str = "", *, timeout: int | None = None) -> dict[str, Any]:
+            nonlocal oom_detected, oom_restarts, container_restarts
+            output = super().execute(action, cwd=cwd, timeout=timeout)
+
+            if output.get("returncode") == 0 and not output.get("exception_info"):
+                return output
+
+            container_running = bool(self.container_id) and is_docker_container_running(
+                self.container_id,
+                docker_executable=self.config.executable,
+            )
+            container_oom_killed = bool(self.container_id) and is_docker_container_oom_killed(
+                self.container_id,
+                docker_executable=self.config.executable,
+            )
+            command_hit_oom = (
+                output.get("returncode") == OOM_EXIT_CODE or container_oom_killed
+            )
+            if command_hit_oom:
+                oom_detected = True
+                if oom_restarts >= MAX_OOM_RESTARTS:
+                    raise LimitsExceeded({
+                        "role": "exit",
+                        "content": "LimitsExceeded",
+                        "extra": {"exit_status": "LimitsExceeded", "submission": ""},
+                    })
+                oom_restarts += 1
+
+            if not container_running:
+                self.cleanup()
+                self.container_id = None
+                self._start_container()
+                container_restarts += 1
+                failure_reason = (
+                    "after likely exceeding the execution container memory limit."
+                    if command_hit_oom
+                    else "because the execution container stopped unexpectedly."
+                )
+                container_action = "A fresh execution container has been started."
+            elif command_hit_oom:
+                failure_reason = (
+                    "after likely exceeding the execution container memory limit."
+                )
+                container_action = (
+                    "The existing execution container is still running, so only "
+                    "that command needs to be retried."
+                )
+            else:
+                return output
+
+            recovery_message = render_packaged_prompt(
+                "miniswe_memory_warning.md",
+                failure_reason=failure_reason,
+                container_action=container_action,
+                workspace_dir=self.config.cwd,
+            )
+            existing_output = output.get("output", "")
+            if existing_output and not existing_output.endswith("\n"):
+                existing_output += "\n"
+            output["output"] = f"{existing_output}{recovery_message}"
+            output.setdefault("extra", {})
+            output["extra"]["container_restarted"] = not container_running
+            output["extra"]["oom_detected"] = command_hit_oom
+            output["extra"]["oom_restarts"] = oom_restarts
+            return output
 
         def _check_finished(self, output: dict):
             """Raises Submitted if the output indicates task completion."""
@@ -234,6 +306,9 @@ def run_minisweagent_task(
     agent = None
     timed_out = False
     agent_error: Exception | None = None
+    oom_detected = False
+    oom_restarts = 0
+    container_restarts = 0
     try:
         os.chdir(str(work_dir))
 
@@ -250,11 +325,22 @@ def run_minisweagent_task(
         )
         if not docker_image:
             raise ValueError("docker_image is required for mini-swe Docker execution")
+        if memory_limit_bytes is None:
+            memory_limit_bytes = get_memory_limit_bytes()
         data_mounts = resolve_data_mounts(work_dir)
         docker_env_config = effective_env_config | {
             "image": docker_image,
             "cwd": "/workspace",
-            "run_args": ["--rm", "-v", f"{work_dir}:/workspace", *data_mounts],
+            "run_args": [
+                "--rm",
+                "--memory",
+                str(memory_limit_bytes),
+                "--memory-swap",
+                str(memory_limit_bytes),
+                "-v",
+                f"{work_dir}:/workspace",
+                *data_mounts,
+            ],
             "forward_env": API_KEY_ENV_VARS,
             "timeout": operation_timeout,
         }
@@ -349,9 +435,14 @@ def run_minisweagent_task(
             metadata["total_cost"] = agent.cost
             metadata["n_steps"] = agent.n_calls
             metadata["n_messages"] = len(agent.messages)
+        metadata["memory_limit_bytes"] = memory_limit_bytes
+        metadata["oom_restarts"] = oom_restarts
+        metadata["container_restarts"] = container_restarts
         if timed_out:
             metadata["timed_out"] = True
             metadata["eval_timeout_seconds"] = eval_timeout
+        if oom_detected:
+            metadata["oom_detected"] = True
         if error_details:
             metadata["error_details"] = error_details
 
