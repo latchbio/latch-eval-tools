@@ -65,6 +65,8 @@ def _build_agent_command(
             [
                 "--print",
                 "--dangerously-skip-permissions",
+                "--effort",
+                "high"
                 "--verbose",
                 "--output-format",
                 "stream-json",
@@ -529,3 +531,6 @@ def _extract_metadata(
         metadata["error_details"] = error_details
 
     return metadata
+
+
+
