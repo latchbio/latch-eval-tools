@@ -66,7 +66,7 @@ def _build_agent_command(
                 "--print",
                 "--dangerously-skip-permissions",
                 "--effort",
-                "high"
+                "high",
                 "--verbose",
                 "--output-format",
                 "stream-json",
