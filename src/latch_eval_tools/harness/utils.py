@@ -2,9 +2,162 @@ import hashlib
 import json
 import os
 import shutil
+from importlib.resources import files
 from pathlib import Path
 
+from jinja2 import DebugUndefined, Environment
 from latch.ldata.path import LPath
+import subprocess
+
+DEFAULT_DOCKER_IMAGE = "public.ecr.aws/p5z7v3z8/benchmark_agent:latest"
+GIBIBYTE = 1024**3
+MEMORY_HEADROOM_BYTES = 2 * GIBIBYTE
+MIN_MEMORY_LIMIT_BYTES = 128 * 1024**2
+CGROUP_MEMORY_LIMIT_PATHS = (
+    Path("/sys/fs/cgroup/memory.max"),
+    Path("/sys/fs/cgroup/memory/memory.limit_in_bytes"),
+)
+PROMPT_TEMPLATE_ENVIRONMENT = Environment(
+    autoescape=False,
+    keep_trailing_newline=True,
+    undefined=DebugUndefined,
+)
+
+
+
+def ensure_docker_image(image: str) -> None:
+    result = subprocess.run(
+        ["docker", "image", "inspect", image],
+        capture_output=True,
+    )
+    if result.returncode == 0:
+        return
+    print(f"Pulling Docker image {image} ...")
+    subprocess.run(
+        ["docker", "pull", image],
+        check=True,
+    )
+    print(f"Docker image {image} pulled successfully")
+
+
+def load_trajectory_identifier(trajectory_path: Path, key: str) -> str | None:
+    if not trajectory_path.exists():
+        print("No trajectory.json file found")
+        return None
+
+    try:
+        trajectory = json.loads(trajectory_path.read_text())
+    except json.JSONDecodeError as exc:
+        print(f"Failed to parse trajectory.json: {exc}")
+        return None
+
+    if not trajectory:
+        print("No trajectory events found")
+        return None
+
+    if not isinstance(trajectory, list):
+        print("Unexpected trajectory format in trajectory.json")
+        return None
+
+    for event in trajectory:
+        if not isinstance(event, dict):
+            continue
+        identifier = event.get(key)
+        if identifier:
+            return str(identifier)
+
+    print(f"No {key} found in trajectory.json")
+    return None
+
+
+def get_memory_limit_bytes(headroom_bytes: int = MEMORY_HEADROOM_BYTES) -> int:
+    host_total_bytes = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    cgroup_limit_bytes: int | None = None
+    for path in CGROUP_MEMORY_LIMIT_PATHS:
+        try:
+            raw_value = path.read_text().strip()
+        except OSError:
+            continue
+
+        if not raw_value or raw_value == "max":
+            continue
+
+        try:
+            limit_bytes = int(raw_value)
+        except ValueError:
+            continue
+
+        if limit_bytes > 0:
+            cgroup_limit_bytes = limit_bytes
+            break
+
+    memory_ceiling_bytes = host_total_bytes
+    if cgroup_limit_bytes is not None:
+        memory_ceiling_bytes = min(memory_ceiling_bytes, cgroup_limit_bytes)
+
+    limit_bytes = memory_ceiling_bytes - headroom_bytes
+    if limit_bytes > 0:
+        return limit_bytes
+
+    if memory_ceiling_bytes <= MIN_MEMORY_LIMIT_BYTES:
+        return memory_ceiling_bytes
+
+    return max(memory_ceiling_bytes - MIN_MEMORY_LIMIT_BYTES, MIN_MEMORY_LIMIT_BYTES)
+
+
+def render_packaged_prompt(filename: str, **template_values: object) -> str:
+    template = PROMPT_TEMPLATE_ENVIRONMENT.from_string(
+        read_packaged_prompt(filename)
+    )
+    return template.render(
+        **{key: str(value) for key, value in template_values.items()}
+    )
+
+
+def _inspect_docker_container_state(
+    container_name: str,
+    state_field: str,
+    docker_executable: str = "docker",
+) -> str | None:
+    result = subprocess.run(
+        [
+            docker_executable,
+            "inspect",
+            "--format",
+            f"{{{{.State.{state_field}}}}}",
+            container_name,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def is_docker_container_running(
+    container_name: str,
+    docker_executable: str = "docker",
+) -> bool:
+    state = _inspect_docker_container_state(
+        container_name,
+        "Running",
+        docker_executable=docker_executable,
+    )
+    return state == "true"
+
+
+def is_docker_container_oom_killed(
+    container_name: str,
+    docker_executable: str = "docker",
+) -> bool:
+    state = _inspect_docker_container_state(
+        container_name,
+        "OOMKilled",
+        docker_executable=docker_executable,
+    )
+    return state == "true"
+
 
 def get_project_root():
     """Find project root by looking for pyproject.toml."""
@@ -93,38 +246,64 @@ def download_single_dataset(uri: str, show_progress: bool = True, cache_name: st
 
 
 def download_data(data_node: str | list[str], work_dir: Path, cache_name: str = ".eval_cache") -> list[dict]:
-    """Download and symlink data files to workspace.
+    """Download data files into the workspace data directory.
     
     Args:
         data_node: Single URI or list of URIs to download
-        work_dir: Working directory to create symlinks in
+        work_dir: Working directory to stage data files in
         cache_name: Name of cache directory
     
     Returns:
         List of contextual data dicts with file info
     """
     data_nodes = data_node if isinstance(data_node, list) else ([data_node] if data_node else [])
-
+    data_dir = work_dir / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
     contextual_data = []
 
     for node in data_nodes:
         cached_file = download_single_dataset(node, cache_name=cache_name)
         data_filename = LPath(node).name() or Path(node).name or "data"
 
-        target_file = work_dir / data_filename
+        target_file = data_dir / data_filename
         if target_file.is_symlink() or target_file.is_file():
             target_file.unlink()
         elif target_file.is_dir():
             shutil.rmtree(target_file)
         os.symlink(cached_file, target_file)
-        print(f"Linked: {data_filename} -> workspace")
+        print(f"Linked: {data_filename} -> workspace/data")
 
         contextual_data.append({
             "type": "File",
-            "local_path": data_filename,
+            "local_path": f"data/{data_filename}",
         })
 
     return contextual_data
+
+
+def resolve_data_mounts(work_dir: Path, container_data_dir: str = "/workspace/data") -> list[str]:
+    data_dir = work_dir / "data"
+    if not data_dir.is_dir():
+        return []
+
+    seen_cache_dirs: set[Path] = set()
+    mounts: list[str] = []
+
+    for entry in sorted(data_dir.iterdir()):
+        if not entry.is_symlink():
+            continue
+        real_path = entry.resolve(strict=True)
+        cache_dir = real_path.parent
+        container_cache_dir = f"/workspace/.data_cache/{cache_dir.name}"
+
+        entry.unlink()
+        entry.symlink_to(f"{container_cache_dir}/{real_path.name}")
+
+        if cache_dir not in seen_cache_dirs:
+            seen_cache_dirs.add(cache_dir)
+            mounts.extend(["-v", f"{cache_dir}:{container_cache_dir}:ro"])
+
+    return mounts
 
 
 def batch_download_datasets(uris: list[str], show_progress: bool = True, cache_name: str = ".eval_cache"):
@@ -189,3 +368,12 @@ def cleanup_workspace(work_dir: Path, keep: bool = False):
         import shutil
         shutil.rmtree(work_dir)
         print(f"Workspace deleted: {work_dir}")
+
+
+
+def load_data_instructions() -> str:
+    return read_packaged_prompt("data_instructions.md")
+
+
+def read_packaged_prompt(filename: str) -> str:
+    return files("latch_eval_tools").joinpath("prompts", filename).read_text(encoding="utf-8")

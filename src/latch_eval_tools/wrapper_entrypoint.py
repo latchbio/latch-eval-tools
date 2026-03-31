@@ -282,6 +282,20 @@ async def run_server(latch_dir: Path, port: int, notebook_id: str):
     finally:
         await shutdown()
 
+        for proc_attr in ["a_proc", "k_proc"]:
+            holder = getattr(entrypoint, proc_attr, None)
+            if holder is None:
+                continue
+            proc = getattr(holder, "proc", None)
+            if proc is None or proc.returncode is not None:
+                continue
+            print(f"[wrapper] Force-killing remaining {proc_attr} (PID {proc.pid})", flush=True)
+            try:
+                proc.kill()
+                await asyncio.wait_for(proc.wait(), timeout=3)
+            except (ProcessLookupError, TimeoutError):
+                pass
+
 
 def main():
     import argparse

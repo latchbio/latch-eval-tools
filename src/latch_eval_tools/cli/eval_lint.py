@@ -28,7 +28,7 @@ def format_console_rich(results: list[LintResult]) -> str:
             lines.append(f"\n{prefix} {issue.code}: {issue.message}")
 
             if explanation:
-                lines.append(f"")
+                lines.append("")
                 lines.append(
                     f"  Fix: {explanation.example_before} → {explanation.example_after}"
                 )

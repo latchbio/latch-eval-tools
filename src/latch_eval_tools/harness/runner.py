@@ -67,13 +67,9 @@ class EvalRunner:
         print("Staging data files...")
         print("=" * 80)
 
-        contextual_data = download_data(self.test_case.data_node, work_dir, self.cache_name)
+        download_data(self.test_case.data_node, work_dir, self.cache_name)
 
-        data_context = ""
-        if contextual_data:
-            data_context = f"\n\nHere is the context of the selected nodes the user would like to use: <ContextualNodeData>{json.dumps(contextual_data)}</ContextualNodeData>"
-
-        task_prompt = f"""{self.test_case.task}\n{data_context}"""
+        task_prompt = self.test_case.task
 
         print("\n" + "=" * 80)
         print("Running agent on task...")

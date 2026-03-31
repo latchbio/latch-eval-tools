@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "latch-eval-tools"
-version = "0.2.0"
+version = "0.3.0"
 description = "Shared eval tools for single-cell bench, spatial bench, and future biology benchmarks."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -15,15 +15,13 @@ dependencies = [
     "orjson>=3.0.0",
     "numpy>=1.24.0",
     "scipy>=1.10.0",
-    "scikit-learn>=1.3.0",
-    "statsmodels>=0.14.0",
     "matplotlib>=3.0.0",
     "openai>=1.0.0",
     "anthropic>=0.72.0",
     "latch>=2.0.0",
-    "mini-swe-agent==1.17.5",
+    "mini-swe-agent~=2.2",
+    "jinja2~=3.1",
 ]
-
 [project.scripts]
 eval-lint = "latch_eval_tools.cli.eval_lint:main"
 
@@ -32,3 +30,11 @@ allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/latch_eval_tools"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/latch_eval_tools/prompts" = "latch_eval_tools/prompts"
+
+[tool.uv.workspace]
+members = [
+    "agent_env",
+]
