@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "latch-eval-tools"
-version = "0.3.0"
+version = "0.3.0a2"
 description = "Shared eval tools for single-cell bench, spatial bench, and future biology benchmarks."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -30,9 +30,6 @@ allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/latch_eval_tools"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"src/latch_eval_tools/prompts" = "latch_eval_tools/prompts"
 
 [tool.uv.workspace]
 members = [
