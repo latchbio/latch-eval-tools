@@ -1,5 +1,5 @@
 from .base import BinaryGrader, GraderResult, get_nested_value
-from .numeric import NumericToleranceGrader
+from .numeric import NumericRangeGrader, NumericToleranceGrader
 from .marker_gene import MarkerGenePrecisionRecallGrader, MarkerGeneSeparationGrader
 from .label_set import LabelSetJaccardGrader
 from .distribution import DistributionComparisonGrader
@@ -8,6 +8,7 @@ from .multiple_choice import MultipleChoiceGrader
 
 GRADER_REGISTRY = {
     "numeric_tolerance": NumericToleranceGrader,
+    "numeric_range": NumericRangeGrader,
     "label_set_jaccard": LabelSetJaccardGrader,
     "jaccard_label_set": LabelSetJaccardGrader,
     "distribution_comparison": DistributionComparisonGrader,
@@ -28,6 +29,7 @@ __all__ = [
     "BinaryGrader",
     "GraderResult",
     "get_nested_value",
+    "NumericRangeGrader",
     "NumericToleranceGrader",
     "MarkerGenePrecisionRecallGrader",
     "MarkerGeneSeparationGrader",
