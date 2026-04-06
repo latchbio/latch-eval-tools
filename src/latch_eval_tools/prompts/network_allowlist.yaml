@@ -1,0 +1,30 @@
+provider_apis:
+  - api.anthropic.com
+  - api.openai.com
+  - generativelanguage.googleapis.com
+  - api.x.ai
+  - claude.ai
+  - sentry.io
+
+annotation_services:
+  - biit.cs.ut.ee
+  - omnipathdb.org
+  - rest.ensembl.org
+  - www.ensembl.org
+  - enrichr.maayanlab.cloud
+  - data.broadinstitute.org
+  - rest.kegg.jp
+  - geneontology.org
+  - ftp.ncbi.nlm.nih.gov
+  - eutils.ncbi.nlm.nih.gov
+  - celltypist.org
+  - figshare.com
+  - zenodo.org
+  - github.com
+  - raw.githubusercontent.com
+  - objects.githubusercontent.com
+
+package_managers:
+  - pypi.org
+  - files.pythonhosted.org
+  - cloud.r-project.org

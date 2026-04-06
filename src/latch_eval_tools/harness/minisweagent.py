@@ -22,6 +22,8 @@ from latch_eval_tools.harness.utils import (
     render_packaged_prompt,
     resolve_data_mounts,
 )
+from latch_eval_tools.harness.config import NETWORK_SANDBOX_CONFIG
+from latch_eval_tools.harness.network import sandbox_network
 
 OPERATION_TIMEOUT = 300
 EVAL_TIMEOUT = 600
@@ -304,6 +306,7 @@ def run_minisweagent_task(
                     stream.flush()
 
     agent = None
+    env = None
     timed_out = False
     agent_error: Exception | None = None
     oom_detected = False
@@ -332,6 +335,8 @@ def run_minisweagent_task(
             "image": docker_image,
             "cwd": "/workspace",
             "run_args": [
+                "--network",
+                NETWORK_SANDBOX_CONFIG.network_name,
                 "--rm",
                 "--memory",
                 str(memory_limit_bytes),
@@ -352,44 +357,51 @@ def run_minisweagent_task(
 
         sys.stdout = TeeOutput(original_stdout, captured_output)
         sys.stderr = TeeOutput(original_stderr, captured_output)
-        model = get_model(model_name, config=effective_model_config)
         try:
-            env = FlexibleDockerEnvironment(**docker_env_config)
-        except subprocess.CalledProcessError as e:
-            stdout = (e.stdout or "").strip()
-            stderr = (e.stderr or "").strip()
-            raise RuntimeError(
-                "Failed to start mini-swe Docker environment.\n"
-                f"Command: {shlex.join(e.cmd)}\n"
-                f"stdout:\n{stdout or '<empty>'}\n"
-                f"stderr:\n{stderr or '<empty>'}"
-            ) from e
-        agent = FlexibleAgent(model, env, **effective_agent_config)
+            model = get_model(model_name, config=effective_model_config)
+            with sandbox_network():
+                try:
+                    try:
+                        env = FlexibleDockerEnvironment(**docker_env_config)
+                    except subprocess.CalledProcessError as e:
+                        stdout = (e.stdout or "").strip()
+                        stderr = (e.stderr or "").strip()
+                        raise RuntimeError(
+                            "Failed to start mini-swe Docker environment.\n"
+                            f"Command: {shlex.join(e.cmd)}\n"
+                            f"stdout:\n{stdout or '<empty>'}\n"
+                            f"stderr:\n{stderr or '<empty>'}"
+                        ) from e
+                    agent = FlexibleAgent(model, env, **effective_agent_config)
 
-        old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
-        signal.alarm(eval_timeout)
+                    old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+                    signal.alarm(eval_timeout)
 
-        try:
-            agent.run(enhanced_prompt)
-        except AgentTimeoutError:
-            timed_out = True
-            print(f"\nAgent timed out after {eval_timeout} seconds")
-        except Submitted:
-            pass
-        except Exception as e:
-            agent_error = e
-            import traceback
-            traceback.print_exc()
+                    try:
+                        agent.run(enhanced_prompt)
+                    except AgentTimeoutError:
+                        timed_out = True
+                        print(f"\nAgent timed out after {eval_timeout} seconds")
+                    except Submitted:
+                        pass
+                    except Exception as e:
+                        agent_error = e
+                        import traceback
+                        traceback.print_exc()
+                    finally:
+                        signal.alarm(0)
+                        signal.signal(signal.SIGALRM, old_handler)
+                finally:
+                    if env is not None:
+                        env.cleanup()
+                        env = None
         finally:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, old_handler)
-
             sys.stdout = original_stdout
             sys.stderr = original_stderr
 
             print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Agent output saved to: {agent_log_file}")
 
-            if hasattr(agent, "messages"):
+            if agent is not None and hasattr(agent, "messages"):
                 _persist_agent_trajectory(agent, trajectory_file)
                 print(f"Agent trajectory saved to: {trajectory_file}")
                 print(f"  Total message exchanges: {len(agent.messages)}")
@@ -405,7 +417,10 @@ def run_minisweagent_task(
                 log_content = agent_log_file.read_text()
                 log_tail = log_content[-1000:]
 
-            trajectory_info = f"Agent had {len(agent.messages)} message exchanges."
+            trajectory_info = (
+                f"Agent had {len(agent.messages) if agent is not None and hasattr(agent, 'messages') else 0} "
+                "message exchanges."
+            )
 
             if timed_out:
                 error_msg = "Agent timed out"
