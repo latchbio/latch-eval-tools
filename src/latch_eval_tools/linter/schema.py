@@ -40,6 +40,11 @@ GRADER_CONFIGS: dict[str, dict] = {
         "recognized": {"ground_truth", "tolerances", "tolerance"},
         "answer_fields_from": "ground_truth",
     },
+    "numeric_range": {
+        "required": ["ground_truth", "ranges"],
+        "recognized": {"ground_truth", "ranges"},
+        "answer_fields_from": "ground_truth",
+    },
     "multiple_choice": {
         "required_any": [["correct_answer", "correct_answers"]],
         "recognized": {"correct_answer", "correct_answers"},

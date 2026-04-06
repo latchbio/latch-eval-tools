@@ -193,7 +193,7 @@ def validate_grader(data: dict) -> list[LintIssue]:
             if grader_type == "marker_gene_precision_recall" and req_field == "answer_field":
                 issues.append(LintIssue(
                     "error", "E037",
-                    f"Missing 'answer_field' - specify which JSON field contains the gene list",
+                    "Missing 'answer_field' - specify which JSON field contains the gene list",
                     f"grader.config.{req_field}"
                 ))
             else:
@@ -212,6 +212,7 @@ def validate_grader(data: dict) -> list[LintIssue]:
             ))
 
     issues.extend(_validate_tolerances(config))
+    issues.extend(_validate_ranges(config))
     issues.extend(_validate_unrecognized_config_fields(grader_type, config))
     issues.extend(_validate_config_types(grader_type, config))
     issues.extend(_validate_config_semantics(grader_type, config))
@@ -242,7 +243,7 @@ def _validate_unrecognized_config_fields(grader_type: str, config: dict) -> list
 def _validate_config_types(grader_type: str, config: dict) -> list[LintIssue]:
     issues = []
 
-    if grader_type in ("numeric_tolerance", "distribution_comparison"):
+    if grader_type in ("numeric_tolerance", "distribution_comparison", "numeric_range"):
         ground_truth = config.get("ground_truth")
         if ground_truth is not None and not isinstance(ground_truth, dict):
             issues.append(LintIssue(
@@ -475,6 +476,75 @@ def _validate_tolerances(config: dict) -> list[LintIssue]:
             ))
 
     return issues
+
+
+def _validate_ranges(config: dict) -> list[LintIssue]:
+    ranges = config.get("ranges")
+    ground_truth = config.get("ground_truth", {})
+
+    if ranges is None:
+        return []
+
+    if not isinstance(ranges, dict):
+        return [LintIssue(
+            "error", "E083",
+            f"ranges must be object, got {type(ranges).__name__}",
+            "grader.config.ranges"
+        )]
+
+    errors = []
+    valid_intervals: dict[str, tuple[int | float, int | float]] = {}
+
+    for field_name, range_config in ranges.items():
+        if not isinstance(range_config, dict):
+            errors.append(f"{field_name}: range config must be object, got {type(range_config).__name__}")
+            continue
+        if "min" not in range_config or not isinstance(range_config["min"], (int, float)):
+            errors.append(f"{field_name}: range minimum must be numeric, got {type(range_config['min']).__name__}")
+            continue
+        if "max" not in range_config or not isinstance(range_config["max"], (int, float)):
+            errors.append(f"{field_name}: range maximum must be numeric, got {type(range_config['max']).__name__}")
+            continue
+        if range_config["min"] >= range_config["max"]:
+            errors.append(f"{field_name}: range minimum must be less than maximum, got ({range_config['min']}, {range_config['max']})")
+            continue
+
+        valid_intervals[field_name] = (range_config["min"], range_config["max"])
+
+    if isinstance(ground_truth, dict):
+        for field_name, expected_value in ground_truth.items():
+            if field_name not in ranges:
+                errors.append(f"{field_name}: missing range config")
+                continue
+
+            if not isinstance(expected_value, (int, float)):
+                errors.append(
+                    f"{field_name}: ground truth must be numeric, got {type(expected_value).__name__}"
+                )
+                continue
+
+            interval = valid_intervals.get(field_name)
+            if interval is None:
+                continue
+
+            minimum_value, maximum_value = interval
+            if not minimum_value < expected_value < maximum_value:
+                errors.append(
+                    f"{field_name}: ground truth {expected_value} not in open interval "
+                    f"({minimum_value}, {maximum_value})"
+                )
+
+    if not errors:
+        return []
+
+    return [
+        LintIssue(
+            "error",
+            "E083",
+            "Invalid numeric_range config: " + "; ".join(errors),
+            "grader.config.ranges",
+        )
+    ]
 
 
 def validate_answer_fields_match(data: dict) -> list[LintIssue]:

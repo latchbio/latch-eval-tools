@@ -159,7 +159,7 @@ EXPLANATIONS: dict[str, ErrorExplanation] = {
     "E031": ErrorExplanation(
         code="E031",
         title="Missing 'grader.type'",
-        explanation="The grader must specify a type (e.g., 'numeric_tolerance', 'multiple_choice').",
+        explanation="The grader must specify a type (e.g., 'numeric_tolerance', 'numeric_range', 'multiple_choice').",
         example_before='"grader": { "config": { ... } }',
         example_after='"grader": { "type": "numeric_tolerance", "config": { ... } }',
         doc_link=None,
@@ -167,7 +167,7 @@ EXPLANATIONS: dict[str, ErrorExplanation] = {
     "E032": ErrorExplanation(
         code="E032",
         title="Invalid 'grader.type'",
-        explanation="The grader type must be one of: numeric_tolerance, multiple_choice, distribution_comparison, marker_gene_precision_recall, label_set_jaccard, jaccard_label_set, marker_gene_separation, spatial_adjacency.",
+        explanation="The grader type must be one of: numeric_tolerance, numeric_range, multiple_choice, distribution_comparison, marker_gene_precision_recall, label_set_jaccard, jaccard_label_set, marker_gene_separation, spatial_adjacency.",
         example_before='"type": "exact_match"',
         example_after='"type": "numeric_tolerance"',
         doc_link=None,
@@ -260,6 +260,14 @@ EXPLANATIONS: dict[str, ErrorExplanation] = {
         example_after='"value": 1',
         doc_link=None,
     ),
+    "E083": ErrorExplanation(
+        code="E083",
+        title="Invalid numeric_range config",
+        explanation="The numeric_range grader requires numeric ground-truth values, per-field range configs with numeric non-bool 'min' and 'max' bounds, and each ground-truth value must lie strictly inside its open interval.",
+        example_before='"ground_truth": { "score": 1 }, "ranges": { "score": { "min": true, "max": 1 } }',
+        example_after='"ground_truth": { "score": 0.5 }, "ranges": { "score": { "min": 0, "max": 1 } }',
+        doc_link=None,
+    ),
     "W000": ErrorExplanation(
         code="W000",
         title="Non-JSON file extension",
@@ -317,7 +325,7 @@ def format_rich_error(code: str, message: str, location: str = "") -> str:
         f"{code}: {explanation.title}",
         f"  {message}",
         "",
-        f"  How to fix:",
+        "  How to fix:",
         f"    Before: {explanation.example_before}",
         f"    After:  {explanation.example_after}",
     ]

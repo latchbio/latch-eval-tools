@@ -2996,11 +2996,12 @@ wheels = [
 
 [[package]]
 name = "latch-eval-tools"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
     { name = "anthropic" },
+    { name = "jinja2" },
     { name = "latch" },
     { name = "matplotlib" },
     { name = "mini-swe-agent" },
@@ -3016,6 +3017,7 @@ dependencies = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.0.0" },
     { name = "anthropic", specifier = ">=0.72.0" },
+    { name = "jinja2", specifier = "~=3.1" },
     { name = "latch", specifier = ">=2.0.0" },
     { name = "matplotlib", specifier = ">=3.0.0" },
     { name = "mini-swe-agent", specifier = "~=2.2" },
