@@ -138,6 +138,8 @@ def get_model_kwargs(model_name: str) -> dict[str, Any]:
         return {"model_kwargs": {"thinking": {"type": "enabled", "budget_tokens": 32000}}}
     elif model_name.startswith("gemini/"):
         return {"model_kwargs": {"generationConfig": {"thinkingConfig": {"thinkingLevel":"HIGH"}}}}
+    elif model_name.startswith("xai/") and model_name.endswith("-reasoning"):
+        return {"model_class":"litellm_response"}
     else:
         return {}
     
