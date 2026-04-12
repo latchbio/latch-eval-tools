@@ -144,5 +144,6 @@ model:
 
     If you want to end the task, please issue the following command: `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`
     without any other command.
+  cost_tracking: ignore_errors
   model_kwargs:
     drop_params: true
