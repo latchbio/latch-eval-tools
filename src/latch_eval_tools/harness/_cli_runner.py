@@ -150,7 +150,6 @@ def _start_cli_container(container_name: str) -> None:
     try:
         result = subprocess.run(
             ["docker", "start", container_name],
-            check=True,
                 capture_output=True,
                 text=True,
             )
