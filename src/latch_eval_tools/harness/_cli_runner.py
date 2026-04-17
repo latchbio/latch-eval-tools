@@ -147,12 +147,19 @@ def _create_cli_container(
 
 
 def _start_cli_container(container_name: str) -> None:
-    subprocess.run(
-        ["docker", "start", container_name],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["docker", "start", container_name],
+                capture_output=True,
+                text=True,
+            )
+        if result.returncode != 0:
+            stderr = result.stderr.strip()
+            print(f"Failed to start container {container_name}: {stderr}")
+        assert result.returncode == 0,f"Failed to start container {container_name}"
+    except Exception as e:
+        print(f"Error starting container {container_name}: {e}")
+        raise e
 
 
 def _run_cli_agent(
