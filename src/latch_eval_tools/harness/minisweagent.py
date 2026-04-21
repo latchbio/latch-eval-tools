@@ -27,14 +27,6 @@ OPERATION_TIMEOUT = 300
 EVAL_TIMEOUT = 600
 OOM_EXIT_CODE = 137
 MAX_OOM_RESTARTS = 10
-API_KEY_ENV_VARS = [
-    "ANTHROPIC_API_KEY",
-    "OPENAI_API_KEY",
-    "CODEX_API_KEY",
-    "GEMINI_API_KEY",
-    "XAI_API_KEY",
-]
-
 
 class AgentTimeoutError(KeyboardInterrupt):
     # Use a KeyboardInterrupt-style base so model/provider retry layers that catch
@@ -140,6 +132,15 @@ def get_model_kwargs(model_name: str) -> dict[str, Any]:
         return {"model_kwargs": {"generationConfig": {"thinkingConfig": {"thinkingLevel":"HIGH"}}}}
     elif model_name.startswith("xai/") and model_name.endswith("-reasoning"):
         return {"model_class":"litellm_response"}
+    elif model_name == "openai/moonshotai/Kimi-K2.6":
+        return {
+            "cost_tracking": "ignore_errors",
+            "model_kwargs": {
+                "api_base": "https://inference.baseten.co/v1",
+                "api_key": os.environ["BASETEN_API_KEY"],
+                "extra_body": {"thinking": {"type": "enabled","keep":"all"}},
+            },
+        }
     else:
         return {}
     
@@ -343,7 +344,6 @@ def run_minisweagent_task(
                 f"{work_dir}:/workspace",
                 *data_mounts,
             ],
-            "forward_env": API_KEY_ENV_VARS,
             "timeout": operation_timeout,
         }
 
