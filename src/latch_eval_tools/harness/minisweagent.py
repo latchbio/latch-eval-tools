@@ -345,7 +345,7 @@ def run_minisweagent_task(
                 *data_mounts,
             ],
             "timeout": operation_timeout,
-            "container_timeout": eval_timeout,
+            "container_timeout": str(eval_timeout),
         }
 
         if model_name is not None and model_name.startswith("mistral/"):
