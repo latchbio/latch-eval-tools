@@ -212,6 +212,22 @@ EXPLANATIONS: dict[str, ErrorExplanation] = {
         example_after='"config": { "canonical_markers": ["Epcam"], "answer_field": "housekeeping_genes", "scoring": { ... } }',
         doc_link=None,
     ),
+    "E038": ErrorExplanation(
+        code="E038",
+        title="'grader' and 'graders' are mutually exclusive",
+        explanation="Use either the singular 'grader' object or the plural 'graders' list, but not both. If you need multiple graders, move the single grader into the 'graders' list.",
+        example_before='"grader": { "type": "numeric_tolerance", ... }, "graders": [ ... ]',
+        example_after='"graders": [ { "type": "numeric_tolerance", ... }, { "type": "multiple_choice", ... } ]',
+        doc_link=None,
+    ),
+    "E039": ErrorExplanation(
+        code="E039",
+        title="Invalid 'graders' field",
+        explanation="The 'graders' field must be a non-empty list of grader objects. An empty list or non-list value is not allowed; omit the field entirely or use 'grader' if there is only one grader.",
+        example_before='"graders": []',
+        example_after='"graders": [ { "type": "numeric_tolerance", "config": { ... } } ]',
+        doc_link=None,
+    ),
     "E040": ErrorExplanation(
         code="E040",
         title="Invalid tolerances type",
@@ -258,6 +274,14 @@ EXPLANATIONS: dict[str, ErrorExplanation] = {
         explanation="The tolerance value must be a number (int or float).",
         example_before='"value": "one"',
         example_after='"value": 1',
+        doc_link=None,
+    ),
+    "E051": ErrorExplanation(
+        code="E051",
+        title="Duplicate answer field across graders",
+        explanation="When using 'graders', each expected <EVAL_ANSWER> field may be declared by at most one grader. If two graders claim the same field name, either split the field into distinct per-grader names or consolidate into a single grader.",
+        example_before='"graders": [ { "type": "numeric_tolerance", "config": { "ground_truth": { "score": 0.5 } } }, { "type": "numeric_range", "config": { "ground_truth": { "score": 0.5 }, "ranges": { "score": { "min": 0, "max": 1 } } } } ]',
+        example_after='"graders": [ { "type": "numeric_tolerance", "config": { "ground_truth": { "tolerance_score": 0.5 } } }, { "type": "numeric_range", "config": { "ground_truth": { "range_score": 0.5 }, "ranges": { "range_score": { "min": 0, "max": 1 } } } } ]',
         doc_link=None,
     ),
     "E083": ErrorExplanation(

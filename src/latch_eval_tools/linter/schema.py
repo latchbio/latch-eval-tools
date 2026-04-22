@@ -94,7 +94,7 @@ GRADER_CONFIGS: dict[str, dict] = {
 
 VALID_GRADER_TYPES = list(GRADER_CONFIGS.keys())
 
-ALLOWED_TOP_LEVEL_FIELDS = {"id", "task", "data_node", "grader", "notes", "metadata"}
+ALLOWED_TOP_LEVEL_FIELDS = {"id", "task", "data_node", "grader", "graders", "notes", "metadata"}
 
 ALLOWED_METADATA_FIELDS = {"task", "kit", "time_horizon", "eval_type", "timeout_s"}
 
