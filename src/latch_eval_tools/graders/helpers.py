@@ -1,3 +1,6 @@
+from pydantic import ValidationError
+
+from ..types import GraderSpec
 from .base import GraderResult
 
 
@@ -14,8 +17,11 @@ def grade_multiple_graders_single_answer(
 
     Returns a list of :class:`GraderResult` objects aligned 1:1 with
     ``grader_specs``. Malformed specs (non-dict, missing ``type``, unknown
-    type, non-dict ``config``) produce a failing ``GraderResult`` at that
-    index so the output length and ordering always match the input.
+    type, non-dict ``config``) produce a ``GraderResult`` with
+    ``passed=None`` and ``score=None`` at that index so the output length
+    and ordering always match the input. ``None`` signals a tooling
+    misconfiguration that callers should distinguish from a real agent
+    pass/fail (``True``/``False``).
     """
     from . import get_grader  # noqa: PLC0415 -- avoid circular import at module load
 
@@ -24,54 +30,41 @@ def grade_multiple_graders_single_answer(
     for index, spec in enumerate(grader_specs):
         label = f"graders[{index}]"
 
-        if not isinstance(spec, dict):
+        try:
+            parsed = GraderSpec.model_validate(spec)
+        except ValidationError as exc:
             results.append(
                 _invalid_spec_result(
-                    agent_answer,
-                    f"{label}: spec must be object, got {type(spec).__name__}",
-                )
-            )
-            continue
-
-        grader_type = spec.get("type")
-        sub_config = spec.get("config", {})
-
-        if not isinstance(grader_type, str) or not grader_type:
-            results.append(
-                _invalid_spec_result(
-                    agent_answer,
-                    f"{label}: missing or invalid 'type'",
-                )
-            )
-            continue
-
-        if not isinstance(sub_config, dict):
-            results.append(
-                _invalid_spec_result(
-                    agent_answer,
-                    f"{label} ({grader_type}): 'config' must be object, "
-                    f"got {type(sub_config).__name__}",
+                    agent_answer, f"{label}: {_format_validation_error(exc)}"
                 )
             )
             continue
 
         try:
-            sub_grader = get_grader(grader_type)
+            sub_grader = get_grader(parsed.type)
         except ValueError as exc:
             results.append(_invalid_spec_result(agent_answer, f"{label}: {exc}"))
             continue
 
-        results.append(sub_grader.evaluate_answer(agent_answer, sub_config))
+        results.append(sub_grader.evaluate_answer(agent_answer, parsed.config))
 
     return results
 
 
 def _invalid_spec_result(agent_answer: dict, message: str) -> GraderResult:
     return GraderResult(
-        passed=False,
+        passed=None,
         metrics={"error": message},
         reasoning=f"Grader spec error: {message}",
         agent_answer=agent_answer,
-        score=0.0,
+        score=None,
         field_scores={},
     )
+
+
+def _format_validation_error(exc: ValidationError) -> str:
+    parts: list[str] = []
+    for err in exc.errors():
+        loc = ".".join(str(part) for part in err.get("loc", ())) or "<root>"
+        parts.append(f"{loc}: {err.get('msg', '')}")
+    return "; ".join(parts)
