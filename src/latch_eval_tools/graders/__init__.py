@@ -5,6 +5,7 @@ from .label_set import LabelSetJaccardGrader
 from .distribution import DistributionComparisonGrader
 from .spatial import SpatialAdjacencyGrader
 from .multiple_choice import MultipleChoiceGrader
+from .helpers import grade_multiple_graders_single_answer  # noqa: E402 -- depends on GRADER_REGISTRY
 
 GRADER_REGISTRY = {
     "numeric_tolerance": NumericToleranceGrader,
@@ -21,7 +22,9 @@ GRADER_REGISTRY = {
 
 def get_grader(grader_type: str) -> BinaryGrader:
     if grader_type not in GRADER_REGISTRY:
-        raise ValueError(f"Unknown grader type: {grader_type}. Available: {list(GRADER_REGISTRY.keys())}")
+        raise ValueError(
+            f"Unknown grader type: {grader_type}. Available: {list(GRADER_REGISTRY.keys())}"
+        )
     return GRADER_REGISTRY[grader_type]()
 
 
@@ -39,4 +42,5 @@ __all__ = [
     "MultipleChoiceGrader",
     "GRADER_REGISTRY",
     "get_grader",
+    "grade_multiple_graders_single_answer",
 ]
