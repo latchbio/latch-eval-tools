@@ -120,7 +120,7 @@ def _patch_agent_for_progress(log_file, trajectory_file: Path, agent_class):
 
 
 def get_model_kwargs(model_name: str) -> dict[str, Any]:
-    if model_name in {"openai/gpt-5.4", "openai/gpt-5.3-codex", "openai/gpt-5.3", "openai/gpt-5.2"}:
+    if model_name in {"openai/gpt-5.5", "openai/gpt-5.4", "openai/gpt-5.3-codex", "openai/gpt-5.3", "openai/gpt-5.2"}:
         return {"model_kwargs": {"reasoning": {"effort": "xhigh"}},"model_class":"litellm_response"}
     elif model_name in {"openai/gpt-5.1"}:
         return {"model_kwargs": {"reasoning": {"effort": "high"}},"model_class":"litellm_response"}
