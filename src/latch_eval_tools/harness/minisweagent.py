@@ -125,10 +125,12 @@ def get_model_kwargs(model_name: str) -> dict[str, Any]:
         return {"model_kwargs": {"reasoning": {"effort": "xhigh"}},"model_class":"litellm_response"}
     elif model_name in {"openai/gpt-5.1"}:
         return {"model_kwargs": {"reasoning": {"effort": "high"}},"model_class":"litellm_response"}
-    elif model_name in {"anthropic/claude-opus-4-6"}:
+    elif model_name in {"anthropic/claude-opus-4-6","anthropic/claude-opus-4-7","anthropic/claude-sonnet-4-6"}:
         return {"model_kwargs": {"thinking": {"type": "adaptive"},"output_config":{"effort":"max"}}}
+    elif model_name in {"anthropic/claude-opus-4-5"}:
+        return {"model_kwargs": {"thinking": {"type": "adaptive"},"output_config":{"effort":"high"}}}
     elif model_name.startswith("anthropic/"):
-        return {"model_kwargs": {"thinking": {"type": "enabled", "budget_tokens": 32000},"output_config":{"effort":"max"}}}
+        return {"model_kwargs": {"thinking": {"type": "enabled", "budget_tokens": 32000}}}
     elif model_name.startswith("gemini/"):
         return {"model_kwargs": {"generationConfig": {"thinkingConfig": {"thinkingLevel":"HIGH"}}}}
     elif model_name.startswith("xai/") and model_name.endswith("-reasoning"):
