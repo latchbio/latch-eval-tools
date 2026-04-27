@@ -4,3 +4,6 @@ __pycache__
 !**/.gitkeep
 /credentials
 /env
+.eval_cache
+output
+eval_workspace

@@ -20,7 +20,9 @@ from latch_eval_tools.harness.utils import (
 )
 
 EVAL_TIMEOUT = 600
-DOCKER_ENV_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY")
+ANTHROPIC_ENV_KEYS = {"ANTHROPIC_API_KEY"}
+OPENAI_ENV_KEYS = {"OPENAI_API_KEY", "CODEX_API_KEY"}
+
 OOM_EXIT_CODE = 137
 MAX_OOM_RESTARTS = 10
 AGENT_STATE_DIRS = {
@@ -66,7 +68,7 @@ def _build_agent_command(
                 "--print",
                 "--dangerously-skip-permissions",
                 "--effort",
-                "high",
+                "max",
                 "--verbose",
                 "--output-format",
                 "stream-json",
@@ -192,7 +194,14 @@ def _run_cli_agent(
     ensure_docker_image(docker_image)
     data_mounts = resolve_data_mounts(work_dir)
     env_flags: list[str] = []
-    for key in DOCKER_ENV_KEYS:
+    ENV_KEYS = {}
+    if agent_type == "claudecode":
+        ENV_KEYS = ANTHROPIC_ENV_KEYS
+    elif agent_type == "openaicodex":
+        ENV_KEYS = OPENAI_ENV_KEYS
+    else:
+        raise ValueError(f"Unknown agent type: {agent_type}")
+    for key in ENV_KEYS:
         value = env.get(key)
         if value:
             env_flags.extend(["-e", f"{key}={value}"])
