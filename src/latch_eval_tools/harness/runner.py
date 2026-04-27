@@ -96,7 +96,7 @@ class EvalRunner:
             print("  runner.run(agent_function=my_agent)")
         else:
             try:
-                result = agent_function(task_prompt, work_dir /)
+                result = agent_function(task_prompt, work_dir)
 
                 if isinstance(result, dict) and "answer" in result:
                     agent_answer = result["answer"]
