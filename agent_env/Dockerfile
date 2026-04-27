@@ -32,12 +32,12 @@ ENV IS_SANDBOX=1
 
 # OpenAI Codex CLI
 RUN npm config set prefix /root/.local && \
-    npm install -g @openai/codex@0.116.0
+    npm install -g @openai/codex@0.125.0
 
 # Claude Code
 RUN curl -fsSL https://claude.ai/install.sh | bash
 ENV PATH="/root/.local/bin:$PATH"
-RUN claude install 2.1.76
+RUN claude install 2.1.119
 
 # R (from CRAN for a recent release on Bookworm)
 RUN curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x95C0FAF38DB3CCAD0C080A7BDC78B2DDEABC47B7" \

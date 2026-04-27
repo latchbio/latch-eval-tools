@@ -3,7 +3,12 @@ from pathlib import Path
 
 from latch_eval_tools.types import TestCase
 from latch_eval_tools.graders import GRADER_REGISTRY, GraderResult
-from latch_eval_tools.harness.utils import download_data, setup_workspace, cleanup_workspace
+from latch_eval_tools.harness.utils import (
+    download_data,
+    get_agent_workspace_dir,
+    setup_workspace,
+    cleanup_workspace,
+)
 
 
 class EvalRunner:
@@ -67,7 +72,7 @@ class EvalRunner:
         print("Staging data files...")
         print("=" * 80)
 
-        download_data(self.test_case.data_node, work_dir, self.cache_name)
+        download_data(self.test_case.data_node or [], work_dir, self.cache_name)
 
         task_prompt = self.test_case.task
 
@@ -82,16 +87,16 @@ class EvalRunner:
             print("\nNo agent function provided. To run this eval, pass an agent_function that:")
             print("  Takes (task_prompt: str, work_dir: Path) as arguments")
             print("  Returns dict with 'answer' key containing the parsed JSON answer")
-            print(f"\nExample:")
-            print(f"  def my_agent(task, work_dir):")
-            print(f"      # Run your agent which write eval_answer.json to work_dir")
-            print(f"      answer_file = work_dir / 'eval_answer.json'")
-            print(f"      return json.loads(answer_file.read_text())")
-            print(f"\n  runner = EvalRunner(eval_path)")
-            print(f"  runner.run(agent_function=my_agent)")
+            print("\nExample:")
+            print("  def my_agent(task, work_dir):")
+            print("      # Run your agent which writes eval_answer.json to /workspace")
+            print("      answer_file = work_dir / 'agent_workspace' / 'eval_answer.json'")
+            print("      return json.loads(answer_file.read_text())")
+            print("\n  runner = EvalRunner(eval_path)")
+            print("  runner.run(agent_function=my_agent)")
         else:
             try:
-                result = agent_function(task_prompt, work_dir)
+                result = agent_function(task_prompt, work_dir /)
 
                 if isinstance(result, dict) and "answer" in result:
                     agent_answer = result["answer"]
@@ -105,13 +110,13 @@ class EvalRunner:
                 import traceback
                 traceback.print_exc()
 
-        eval_answer_path = work_dir / "eval_answer.json"
+        eval_answer_path = get_agent_workspace_dir(work_dir) / "eval_answer.json"
         if agent_answer is None and eval_answer_path.exists():
             try:
                 agent_answer = json.loads(eval_answer_path.read_text())
-                print(f"Loaded agent answer from eval_answer.json")
+                print(f"Loaded agent answer from {eval_answer_path}")
             except json.JSONDecodeError as e:
-                print(f"Warning: Failed to parse eval_answer.json: {e}")
+                print(f"Warning: Failed to parse {eval_answer_path}: {e}")
 
         grader_result = None
         if self.test_case.grader and agent_answer is not None:
@@ -158,7 +163,7 @@ class EvalRunner:
         cleanup_workspace(work_dir, keep=self.keep_workspace)
 
         if self.keep_workspace:
-            print(f"\nTo inspect results:")
+            print("\nTo inspect results:")
             print(f"  cd {work_dir}")
 
         result_dict = {

@@ -9,6 +9,8 @@ MODEL_MAP = {
     "anthropic/claude-opus-4-5": "claude-opus-4-5",
     "anthropic/claude-sonnet-4-6": "claude-sonnet-4-6",
     "anthropic/claude-sonnet-4-5": "claude-sonnet-4-5",
+    "anthropic/claude-opus-4-7": "claude-opus-4-7",
+    "anthropic/claude-sonnet-4-7": "claude-sonnet-4-7",
 }
 
 

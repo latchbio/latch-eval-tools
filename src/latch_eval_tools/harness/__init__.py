@@ -7,6 +7,7 @@ from latch_eval_tools.harness.utils import (
     batch_download_datasets,
     setup_workspace,
     cleanup_workspace,
+    get_agent_workspace_dir,
     load_trajectory_identifier,
 )
 from latch_eval_tools.harness.minisweagent import run_minisweagent_task
@@ -23,6 +24,7 @@ __all__ = [
     "batch_download_datasets",
     "setup_workspace",
     "cleanup_workspace",
+    "get_agent_workspace_dir",
     "load_trajectory_identifier",
     "run_minisweagent_task",
     "run_claudecode_task",
