@@ -10,13 +10,14 @@ from pathlib import Path
 from latch_eval_tools.harness.utils import (
     DEFAULT_DOCKER_IMAGE,
     ensure_docker_image,
+    get_agent_workspace_mount_args,
+    get_agent_workspace_dir,
     get_memory_limit_bytes,
     is_docker_container_oom_killed,
     is_docker_container_running,
     load_data_instructions,
     load_trajectory_identifier,
     render_packaged_prompt,
-    resolve_data_mounts,
 )
 
 EVAL_TIMEOUT = 600
@@ -106,7 +107,7 @@ def _create_cli_container(
     container_name: str,
     agent_type: str,
     work_dir: Path,
-    data_mounts: list[str],
+    agent_dir: Path,
     env_flags: list[str],
     docker_image: str,
     memory_limit_bytes: int,
@@ -129,13 +130,11 @@ def _create_cli_container(
             str(memory_limit_bytes),
             "--memory-swap",
             str(memory_limit_bytes),
-            "-v",
-            f"{work_dir}:/workspace",
+            *get_agent_workspace_mount_args(agent_dir),
             "-v",
             f"{agent_state_dir}:{container_state_mount}",
             "-w",
             "/workspace",
-            *data_mounts,
             *env_flags,
             docker_image,
             "sleep",
@@ -192,7 +191,7 @@ def _run_cli_agent(
         raise ValueError("docker_image is required for CLI harnesses")
 
     ensure_docker_image(docker_image)
-    data_mounts = resolve_data_mounts(work_dir)
+    agent_dir = get_agent_workspace_dir(work_dir)
     env_flags: list[str] = []
     ENV_KEYS = {}
     if agent_type == "claudecode":
@@ -230,7 +229,7 @@ def _run_cli_agent(
             container_name=container_name,
             agent_type=agent_type,
             work_dir=work_dir,
-            data_mounts=data_mounts,
+            agent_dir=agent_dir,
             env_flags=env_flags,
             docker_image=docker_image,
             memory_limit_bytes=memory_limit_bytes,
@@ -268,7 +267,7 @@ def _run_cli_agent(
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                    cwd=str(work_dir),
+                    cwd=str(agent_dir),
                     env=env,
                     text=True,
                     bufsize=1,
@@ -399,7 +398,7 @@ def _run_cli_agent(
                         container_name=container_name,
                         agent_type=agent_type,
                         work_dir=work_dir,
-                        data_mounts=data_mounts,
+                        agent_dir=agent_dir,
                         env_flags=env_flags,
                         docker_image=docker_image,
                         memory_limit_bytes=memory_limit_bytes,
@@ -439,7 +438,7 @@ def _run_cli_agent(
         persist_trajectory()
         print(f"Trajectory saved to: {trajectory_file}")
 
-    eval_answer_file = work_dir / "eval_answer.json"
+    eval_answer_file = agent_dir / "eval_answer.json"
     agent_answer = None
     error_details = None
 
@@ -547,6 +546,4 @@ def _extract_metadata(
         metadata["error_details"] = error_details
 
     return metadata
-
-
 

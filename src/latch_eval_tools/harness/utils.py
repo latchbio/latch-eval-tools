@@ -13,6 +13,7 @@ DEFAULT_DOCKER_IMAGE = "public.ecr.aws/p5z7v3z8/benchmark_agent:latest"
 GIBIBYTE = 1024**3
 MEMORY_HEADROOM_BYTES = 2 * GIBIBYTE
 MIN_MEMORY_LIMIT_BYTES = 128 * 1024**2
+AGENT_WORKSPACE_DIR_NAME = "agent_workspace"
 CGROUP_MEMORY_LIMIT_PATHS = (
     Path("/sys/fs/cgroup/memory.max"),
     Path("/sys/fs/cgroup/memory/memory.limit_in_bytes"),
@@ -206,6 +207,12 @@ def get_cache_key(uri: str) -> str:
     return f"{uri_hash}__{filename}"
 
 
+def _files_in_cached_dataset(path: Path) -> list[Path]:
+    if path.is_dir():
+        return sorted(p for p in path.rglob("*") if p.is_file())
+    return [path]
+
+
 def download_single_dataset(uri: str, show_progress: bool = True, cache_name: str = ".eval_cache") -> Path:
     """Download a single dataset with caching.
     
@@ -215,7 +222,7 @@ def download_single_dataset(uri: str, show_progress: bool = True, cache_name: st
         cache_name: Name of cache directory
     
     Returns:
-        Path to cached file
+        Path to cached file or directory.
     """
     cache_dir = get_cache_dir(cache_name)
     manifest = get_cache_manifest(cache_name)
@@ -245,6 +252,29 @@ def download_single_dataset(uri: str, show_progress: bool = True, cache_name: st
     return cached_file
 
 
+def get_agent_workspace_dir(work_dir: Path) -> Path:
+    """Return the host directory mounted as /workspace for container agents."""
+    agent_dir = work_dir / AGENT_WORKSPACE_DIR_NAME
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    return agent_dir
+
+
+def get_agent_workspace_mount_args(agent_dir: Path) -> list[str]:
+    """Return Docker bind mounts for the agent workspace.
+
+    The workspace stays writable for outputs, while staged input data is mounted
+    read-only to prevent agent-side writes from mutating hardlinked cache files.
+    """
+    data_dir = agent_dir / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return [
+        "-v",
+        f"{agent_dir}:/workspace",
+        "-v",
+        f"{data_dir}:/workspace/data:ro",
+    ]
+
+
 def download_data(data_node: str | list[str], work_dir: Path, cache_name: str = ".eval_cache") -> list[dict]:
     """Download data files into the workspace data directory.
     
@@ -257,54 +287,42 @@ def download_data(data_node: str | list[str], work_dir: Path, cache_name: str = 
         List of contextual data dicts with file info
     """
     data_nodes = data_node if isinstance(data_node, list) else ([data_node] if data_node else [])
-    data_dir = work_dir / "data"
+    agent_dir = get_agent_workspace_dir(work_dir)
+    data_dir = agent_dir / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     contextual_data = []
 
     for node in data_nodes:
-        cached_file = download_single_dataset(node, cache_name=cache_name)
+        cached_dataset = download_single_dataset(node, cache_name=cache_name)
+        cached_files = _files_in_cached_dataset(cached_dataset)
         data_filename = LPath(node).name() or Path(node).name or "data"
+        target_root = data_dir / data_filename
+        if target_root.is_symlink() or target_root.is_file():
+            target_root.unlink()
+        elif target_root.is_dir():
+            shutil.rmtree(target_root)
 
-        target_file = data_dir / data_filename
-        if target_file.is_symlink() or target_file.is_file():
-            target_file.unlink()
-        elif target_file.is_dir():
-            shutil.rmtree(target_file)
-        os.symlink(cached_file, target_file)
-        print(f"Linked: {data_filename} -> workspace/data")
+        for cached_file in cached_files:
+            if cached_dataset.is_dir():
+                mount_path = Path(data_filename) / cached_file.relative_to(cached_dataset)
+            else:
+                mount_path = Path(data_filename)
 
-        contextual_data.append({
-            "type": "File",
-            "local_path": f"data/{data_filename}",
-        })
+            target_file = data_dir / mount_path
+            target_file.parent.mkdir(parents=True, exist_ok=True)
+            if target_file.is_symlink() or target_file.is_file():
+                target_file.unlink()
+            elif target_file.is_dir():
+                shutil.rmtree(target_file)
+            target_file.hardlink_to(cached_file)
+            print(f"Linked: {mount_path} -> workspace/data")
+
+            contextual_data.append({
+                "type": "File",
+                "local_path": f"data/{mount_path}",
+            })
 
     return contextual_data
-
-
-def resolve_data_mounts(work_dir: Path, container_data_dir: str = "/workspace/data") -> list[str]:
-    data_dir = work_dir / "data"
-    if not data_dir.is_dir():
-        return []
-
-    seen_cache_dirs: set[Path] = set()
-    mounts: list[str] = []
-
-    for entry in sorted(data_dir.iterdir()):
-        if not entry.is_symlink():
-            continue
-        real_path = entry.resolve(strict=True)
-        cache_dir = real_path.parent
-        container_cache_dir = f"/workspace/.data_cache/{cache_dir.name}"
-
-        entry.unlink()
-        entry.symlink_to(f"{container_cache_dir}/{real_path.name}")
-
-        if cache_dir not in seen_cache_dirs:
-            seen_cache_dirs.add(cache_dir)
-            mounts.extend(["-v", f"{cache_dir}:{container_cache_dir}:ro"])
-
-    return mounts
-
 
 def batch_download_datasets(uris: list[str], show_progress: bool = True, cache_name: str = ".eval_cache"):
     """Download multiple datasets in batch.

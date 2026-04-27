@@ -14,13 +14,14 @@ import yaml
 from latch_eval_tools.harness.utils import (
     DEFAULT_DOCKER_IMAGE,
     ensure_docker_image,
+    get_agent_workspace_mount_args,
+    get_agent_workspace_dir,
     get_memory_limit_bytes,
     is_docker_container_oom_killed,
     is_docker_container_running,
     load_data_instructions,
     read_packaged_prompt,
     render_packaged_prompt,
-    resolve_data_mounts,
 )
 
 OPERATION_TIMEOUT = 300
@@ -125,9 +126,9 @@ def get_model_kwargs(model_name: str) -> dict[str, Any]:
     elif model_name in {"openai/gpt-5.1"}:
         return {"model_kwargs": {"reasoning": {"effort": "high"}},"model_class":"litellm_response"}
     elif model_name in {"anthropic/claude-opus-4-6"}:
-        return {"model_kwargs": {"thinking": {"type": "adaptive"}}}
+        return {"model_kwargs": {"thinking": {"type": "adaptive"},"output_config":{"effort":"max"}}}
     elif model_name.startswith("anthropic/"):
-        return {"model_kwargs": {"thinking": {"type": "enabled", "budget_tokens": 32000}}}
+        return {"model_kwargs": {"thinking": {"type": "enabled", "budget_tokens": 32000},"output_config":{"effort":"max"}}}
     elif model_name.startswith("gemini/"):
         return {"model_kwargs": {"generationConfig": {"thinkingConfig": {"thinkingLevel":"HIGH"}}}}
     elif model_name.startswith("xai/") and model_name.endswith("-reasoning"):
@@ -177,6 +178,7 @@ def run_minisweagent_task(
     from minisweagent.models import get_model
     from minisweagent.exceptions import LimitsExceeded
 
+    agent_dir = get_agent_workspace_dir(work_dir)
 
     class FlexibleAgent(DefaultAgent):
 
@@ -267,7 +269,7 @@ def run_minisweagent_task(
             lines = output.get("output", "").lstrip().splitlines(keepends=True)
             if lines and lines[0].strip() == self.completion_marker and output["returncode"] == 0:
                 submission = "".join(lines[1:])
-                if not (work_dir / "eval_answer.json").exists():
+                if not (agent_dir / "eval_answer.json").exists():
                     return
                 raise Submitted(
                     {
@@ -313,7 +315,7 @@ def run_minisweagent_task(
     oom_restarts = 0
     container_restarts = 0
     try:
-        os.chdir(str(work_dir))
+        os.chdir(str(agent_dir))
 
 
 
@@ -330,7 +332,6 @@ def run_minisweagent_task(
             raise ValueError("docker_image is required for mini-swe Docker execution")
         if memory_limit_bytes is None:
             memory_limit_bytes = get_memory_limit_bytes()
-        data_mounts = resolve_data_mounts(work_dir)
         docker_env_config = effective_env_config | {
             "image": docker_image,
             "cwd": "/workspace",
@@ -340,9 +341,7 @@ def run_minisweagent_task(
                 str(memory_limit_bytes),
                 "--memory-swap",
                 str(memory_limit_bytes),
-                "-v",
-                f"{work_dir}:/workspace",
-                *data_mounts,
+                *get_agent_workspace_mount_args(agent_dir),
             ],
             "timeout": operation_timeout,
             "container_timeout": str(eval_timeout),
@@ -397,7 +396,7 @@ def run_minisweagent_task(
                 print(f"Agent trajectory saved to: {trajectory_file}")
                 print(f"  Total message exchanges: {len(agent.messages)}")
 
-        eval_answer_file = work_dir / "eval_answer.json"
+        eval_answer_file = agent_dir / "eval_answer.json"
         agent_answer = None
         error_details = None
 
@@ -459,6 +458,4 @@ def run_minisweagent_task(
 
     finally:
         os.chdir(original_dir)
-
-
 
