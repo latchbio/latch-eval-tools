@@ -128,7 +128,7 @@ def get_model_kwargs(model_name: str) -> dict[str, Any]:
     elif model_name in {"anthropic/claude-opus-4-6","anthropic/claude-opus-4-7","anthropic/claude-sonnet-4-6"}:
         return {"model_kwargs": {"thinking": {"type": "adaptive"},"output_config":{"effort":"max"}}}
     elif model_name in {"anthropic/claude-opus-4-5"}:
-        return {"model_kwargs": {"thinking": {"type": "adaptive"},"output_config":{"effort":"high"}}}
+        return {"model_kwargs": {"thinking": {"type": "enabled", "budget_tokens": 32000},"output_config":{"effort":"high"}}}
     elif model_name.startswith("anthropic/"):
         return {"model_kwargs": {"thinking": {"type": "enabled", "budget_tokens": 32000}}}
     elif model_name.startswith("gemini/"):
