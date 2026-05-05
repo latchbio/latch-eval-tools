@@ -2,7 +2,11 @@ import json
 from pathlib import Path
 
 from latch_eval_tools.types import TestCase
-from latch_eval_tools.graders import GRADER_REGISTRY, GraderResult
+from latch_eval_tools.graders import (
+    GRADER_REGISTRY,
+    GraderResult,
+    grade_multiple_graders_single_answer,
+)
 from latch_eval_tools.harness.utils import (
     download_data,
     get_agent_workspace_dir,
@@ -65,6 +69,17 @@ class EvalRunner:
         print(self.test_case.task)
         print("-" * 80)
 
+        # `TestCase` accepts mutually-exclusive `grader` or `graders`.
+        # Validate before workspace setup so malformed cases fail fast.
+        if self.test_case.grader is not None:
+            grader_specs: list[dict] = [self.test_case.grader]
+        elif self.test_case.graders is not None and len(self.test_case.graders) != 0:
+            grader_specs = list(self.test_case.graders)
+        else:
+            raise ValueError(
+                f"TestCase {self.test_case.id!r} has no grader or graders defined"
+            )
+
         work_dir = setup_workspace(self.test_case.id, self.run_id, self.workspace_name)
         print(f"\nWorking directory: {work_dir}")
 
@@ -118,43 +133,30 @@ class EvalRunner:
             except json.JSONDecodeError as e:
                 print(f"Warning: Failed to parse {eval_answer_path}: {e}")
 
-        grader_result = None
-        if self.test_case.grader and agent_answer is not None:
+        grader_result: GraderResult | None = None
+        if agent_answer is not None:
             print("\n" + "=" * 80)
-            print("Running grader...")
+            print(f"Running grader{'s' if len(grader_specs) > 1 else ''}...")
             print("=" * 80)
 
-            grader_type = self.test_case.grader.get("type")
-            grader_config = self.test_case.grader.get("config", {})
+            grader_result = (
+                _run_single_grader(grader_specs[0], agent_answer)
+                if len(grader_specs) == 1
+                else _run_multi_grader(grader_specs, agent_answer)
+            )
 
-            if grader_type in GRADER_REGISTRY:
-                grader_cls = GRADER_REGISTRY[grader_type]
-                grader = grader_cls()
-                try:
-                    grader_result = grader.evaluate_answer(agent_answer, grader_config)
-                except Exception as e:
-                    import traceback
-                    grader_result = GraderResult(
-                        passed=False,
-                        metrics={"grader_error": str(e)},
-                        reasoning=f"Grader failed due to malformed agent output: {e}\n\n{traceback.format_exc()}",
-                        agent_answer=agent_answer
-                    )
+            print(f"\n{'✓ EVAL PASSED' if grader_result.passed else '✗ EVAL FAILED'}")
+            print("\nGrader reasoning:")
+            print("-" * 80)
+            print(grader_result.reasoning)
+            print("-" * 80)
 
-                print(f"\n{'✓ EVAL PASSED' if grader_result.passed else '✗ EVAL FAILED'}")
-                print("\nGrader reasoning:")
-                print("-" * 80)
-                print(grader_result.reasoning)
-                print("-" * 80)
-
-                if grader_result.metrics:
-                    print("\nMetrics:")
-                    for key, value in grader_result.metrics.items():
-                        if isinstance(value, (list, dict)):
-                            continue
-                        print(f"   {key}: {value}")
-            else:
-                print(f"\nWarning: Unknown grader type '{grader_type}'")
+            if grader_result.metrics:
+                print("\nMetrics:")
+                for key, value in grader_result.metrics.items():
+                    if isinstance(value, (list, dict)):
+                        continue
+                    print(f"   {key}: {value}")
 
         print("\n" + "=" * 80)
         print("Cleanup...")
@@ -177,3 +179,63 @@ class EvalRunner:
             result_dict["metadata"] = agent_metadata
 
         return result_dict
+
+
+def _run_single_grader(spec: dict, agent_answer: dict) -> GraderResult:
+    grader_type = spec.get("type")
+    if grader_type not in GRADER_REGISTRY:
+        return GraderResult(
+            passed=False,
+            metrics={"grader_error": f"unknown_grader_type:{grader_type}"},
+            reasoning=(
+                f"Unknown grader type {grader_type!r}. Available: "
+                f"{sorted(GRADER_REGISTRY.keys())}."
+            ),
+            agent_answer=agent_answer,
+        )
+    grader = GRADER_REGISTRY[grader_type]()
+    try:
+        return grader.evaluate_answer(agent_answer, spec.get("config", {}))
+    except Exception as e:
+        import traceback
+        return GraderResult(
+            passed=False,
+            metrics={"grader_error": str(e)},
+            reasoning=f"Grader failed due to malformed agent output: {e}\n\n{traceback.format_exc()}",
+            agent_answer=agent_answer,
+        )
+
+
+def _run_multi_grader(specs: list[dict], agent_answer: dict) -> GraderResult:
+    try:
+        sub_results = grade_multiple_graders_single_answer(agent_answer, specs)
+        metrics: dict = {}
+        reasoning: list[str] = []
+        all_passed = True
+        for idx, (spec, sub) in enumerate(zip(specs, sub_results)):
+            key = f"{idx}:{spec.get('type') if isinstance(spec, dict) else 'unknown'}"
+            if sub is None:
+                metrics[f"{key}:error"] = "malformed_or_unknown"
+                reasoning.append(f"[{key}] malformed spec or unknown grader type")
+                all_passed = False
+                continue
+            metrics[f"{key}:passed"] = sub.passed
+            for mk, mv in (sub.metrics or {}).items():
+                metrics[f"{key}:{mk}"] = mv
+            reasoning.append(f"[{key}] {sub.reasoning}")
+            if not sub.passed:
+                all_passed = False
+        return GraderResult(
+            passed=all_passed,
+            metrics=metrics,
+            reasoning="\n\n".join(reasoning),
+            agent_answer=agent_answer,
+        )
+    except Exception as e:
+        import traceback
+        return GraderResult(
+            passed=False,
+            metrics={"grader_error": str(e)},
+            reasoning=f"Multi-grader failed: {e}\n\n{traceback.format_exc()}",
+            agent_answer=agent_answer,
+        )
