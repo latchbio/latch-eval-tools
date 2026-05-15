@@ -3,12 +3,17 @@ from dataclasses import dataclass, field
 
 VALID_TASKS = [
     "qc",
+    "read_processing",
     "normalization",
+    "peak_calling",
     "dimensionality_reduction",
     "clustering",
     "cell_typing",
     "differential_expression",
+    "differential_analysis",
+    "interpretation",
     "spatial_analysis",
+    "debugging",
 ]
 
 VALID_KITS = [
@@ -21,6 +26,14 @@ VALID_KITS = [
     "takara",
     "atlasxomics",
     "curio",
+    "atacseq",
+    "chipseq",
+    "wgbs",
+    "hic",
+    "dnaseseq",
+    "cage",
+    "cutandrun",
+    "cutandtag",
 ]
 
 VALID_TIME_HORIZONS = ["small"]

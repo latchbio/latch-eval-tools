@@ -96,12 +96,17 @@ def format_json_output(results: list[LintResult]) -> str:
 
 VALID_CATEGORIES = [
     "qc",
+    "read_processing",
     "normalization",
+    "peak_calling",
     "dimensionality_reduction",
     "clustering",
     "cell_typing",
     "differential_expression",
+    "differential_analysis",
+    "interpretation",
     "spatial_analysis",
+    "debugging",
 ]
 
 
