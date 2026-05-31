@@ -9,10 +9,8 @@ from .refusal import RefusalVocabGrader
 from .predicate import PredicateLeafGrader
 from .composite import AllOfGrader, ListMatchGrader, DictMatchGrader
 from .helpers import (  # noqa: E402 -- depends on GRADER_REGISTRY
-    aggregate_grader_results,
     grade_answer_with_specs,
     grade_multiple_graders_single_answer,
-    grader_result_to_dict,
 )
 
 GRADER_REGISTRY = {
@@ -60,8 +58,6 @@ __all__ = [
     "DictMatchGrader",
     "GRADER_REGISTRY",
     "get_grader",
-    "aggregate_grader_results",
     "grade_answer_with_specs",
     "grade_multiple_graders_single_answer",
-    "grader_result_to_dict",
 ]

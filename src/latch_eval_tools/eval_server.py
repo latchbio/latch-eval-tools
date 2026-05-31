@@ -10,12 +10,13 @@ import sys
 import textwrap
 import time
 import uuid
+from dataclasses import asdict
 from pathlib import Path
 
 import websockets
 import websockets.server
 from latch_eval_tools.types import Eval, EvalResult
-from latch_eval_tools.graders import grade_answer_with_specs, grader_result_to_dict
+from latch_eval_tools.graders import grade_answer_with_specs
 from latch_eval_tools.answer_extraction import extract_answer_from_conversation
 from latch_eval_tools.headless_eval_server import run_eval_batch_headless
 
@@ -372,21 +373,16 @@ class EvalServer:
                 }
                 print("[eval] Grader result: FAIL (no answer extracted)")
             else:
-                grader_results, grader_result = grade_answer_with_specs(
+                _, grader_result = grade_answer_with_specs(
                     agent_answer,
                     grader_specs,
                 )
 
                 eval_result.grader_result = (
-                    grader_result_to_dict(grader_result)
+                    asdict(grader_result)
                     if grader_result is not None
                     else None
                 )
-                if eval_case.graders is not None:
-                    eval_result.grader_results = [
-                        grader_result_to_dict(result) if result is not None else None
-                        for result in grader_results
-                    ]
 
                 if grader_result is not None:
                     print(f"[eval] Grader result: {'PASS' if grader_result.passed else 'FAIL'} (score: {grader_result.score:.2%})")
@@ -529,7 +525,6 @@ def write_results(results: list[EvalResult], output_path: Path):
             "duration_s": r.duration_ms / 1000,
             "agent_answer": r.agent_answer,
             "grader_result": r.grader_result,
-            "grader_results": r.grader_results,
         }
         (eval_dir / "_result.json").write_text(json.dumps(result_data, indent=2))
 

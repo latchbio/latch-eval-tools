@@ -119,14 +119,13 @@ class EvalRunner:
                 print(f"Warning: Failed to parse {eval_answer_path}: {e}")
 
         grader_result = None
-        grader_results = None
         grader_specs = self.test_case.grader_specs
         if grader_specs and agent_answer is not None:
             print("\n" + "=" * 80)
             print("Running grader...")
             print("=" * 80)
 
-            grader_results, grader_result = grade_answer_with_specs(
+            _, grader_result = grade_answer_with_specs(
                 agent_answer,
                 grader_specs,
             )
@@ -161,8 +160,6 @@ class EvalRunner:
             "grader_result": grader_result,
             "passed": grader_result.passed if grader_result else None,
         }
-        if self.test_case.graders is not None:
-            result_dict["grader_results"] = grader_results
 
         if agent_metadata:
             result_dict["metadata"] = agent_metadata

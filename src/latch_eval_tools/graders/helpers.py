@@ -7,17 +7,6 @@ from ..types import GraderSpec
 from .base import GraderResult
 
 
-def grader_result_to_dict(result: GraderResult) -> dict[str, Any]:
-    return {
-        "passed": result.passed,
-        "score": result.score,
-        "field_scores": result.field_scores,
-        "metrics": result.metrics,
-        "reasoning": result.reasoning,
-        "agent_answer": result.agent_answer,
-    }
-
-
 def _failed_grader_result(agent_answer: dict, exc: Exception) -> GraderResult:
     return GraderResult(
         passed=False,
