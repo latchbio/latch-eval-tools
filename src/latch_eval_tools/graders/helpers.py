@@ -37,7 +37,7 @@ def grade_answer_with_specs(
     if len(per_grader_results) == 1 and per_grader_results[0] is not None:
         return per_grader_results, per_grader_results[0]
 
-    metrics: dict[str, Any] = {"n_graders": len(per_grader_results)}
+    metrics: dict[str, Any] = {}
     field_scores: dict[str, float] = {}
     reasoning_sections: list[str] = []
     scores: list[float] = []
@@ -51,13 +51,9 @@ def grade_answer_with_specs(
         )
         prefix = f"graders[{i}]"
 
-        metrics[f"{prefix}.type"] = grader_type
-
         if result is None:
             all_passed = False
             misconfigured = True
-            metrics[f"{prefix}.misconfigured"] = True
-            metrics["grader_misconfigured"] = True
             reasoning_sections.append(
                 f"[{prefix} type={grader_type}] FAIL\n"
                 "Grader spec is malformed or uses an unknown grader type."
@@ -66,8 +62,6 @@ def grade_answer_with_specs(
 
         all_passed = all_passed and result.passed
         scores.append(result.score)
-        metrics[f"{prefix}.passed"] = result.passed
-        metrics[f"{prefix}.score"] = result.score
         for metric_key, metric_value in result.metrics.items():
             metrics[f"{prefix}.{metric_key}"] = metric_value
         for field_name, field_score in result.field_scores.items():
