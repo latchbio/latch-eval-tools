@@ -7,12 +7,31 @@ class Eval(BaseModel):
     id: str
     task: str
     data_node: str | list[str] | None = None
-    grader: dict | None = None
-    metadata: dict | None = None
+    grader: dict[str, Any] | None = None
+    graders: list[dict[str, Any]] | None = None
+    metadata: dict[str, Any] | None = None
     timeout: int | None = None
     download_timeout: int | None = None
     agent_timeout: int | None = None
     notes: str | None = None
+
+    @model_validator(mode="after")
+    def _enforce_grader_selection(self) -> Self:
+        if self.grader is not None and self.graders is not None:
+            raise ValueError(
+                "Fields 'grader' and 'graders' are mutually exclusive; specify exactly one"
+            )
+        if self.graders is not None and len(self.graders) == 0:
+            raise ValueError("Field 'graders' must be a non-empty list")
+        return self
+
+    @property
+    def grader_specs(self) -> list[dict[str, Any]]:
+        if self.graders is not None:
+            return self.graders
+        if self.grader is not None:
+            return [self.grader]
+        return []
 
 
 # Backward compatibility alias for scbench/spatialbench
@@ -26,6 +45,7 @@ class EvalResult(BaseModel):
     notebook_state: dict = Field(default_factory=dict)
     duration_ms: float = 0.0
     grader_result: dict | None = None
+    grader_results: list[dict[str, Any] | None] | None = None
     agent_answer: dict | None = None
 
 

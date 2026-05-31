@@ -10,7 +10,7 @@ from pathlib import Path
 import aiohttp
 import websockets
 
-from latch_eval_tools.graders import GRADER_REGISTRY
+from latch_eval_tools.graders import grade_answer_with_specs, grader_result_to_dict
 from latch_eval_tools.answer_extraction import extract_answer_from_conversation
 from latch_eval_tools.types import Eval, EvalResult
 
@@ -678,35 +678,40 @@ class HeadlessEvalServer:
             agent_answer=agent_answer,
         )
 
-        if eval_case.grader:
+        grader_specs = eval_case.grader_specs
+        if grader_specs:
             print("[headless] Running grader...")
-            grader_type = eval_case.grader.get("type")
-            grader_config = eval_case.grader.get("config", {})
 
             if agent_answer is None:
                 eval_result.grader_result = {
                     "passed": False,
+                    "score": 0.0,
+                    "field_scores": {},
                     "metrics": {},
                     "reasoning": "Failed to extract answer from conversation history",
                     "agent_answer": None,
                 }
                 print("[headless] Grader result: FAIL (no answer extracted)")
-            elif grader_type in GRADER_REGISTRY:
-                grader_cls = GRADER_REGISTRY[grader_type]
-                grader = grader_cls()
-                grader_result = grader.evaluate(agent_answer, grader_config)
-
-                eval_result.grader_result = {
-                    "passed": grader_result.passed,
-                    "metrics": grader_result.metrics,
-                    "reasoning": grader_result.reasoning,
-                    "agent_answer": grader_result.agent_answer,
-                }
-
-                print(f"[headless] Grader result: {'PASS' if grader_result.passed else 'FAIL'}")
-                print(f"[headless] Grader reasoning:\n{grader_result.reasoning}")
             else:
-                print(f"[headless] Warning: Unknown grader type '{grader_type}'")
+                grader_results, grader_result = grade_answer_with_specs(
+                    agent_answer,
+                    grader_specs,
+                )
+
+                eval_result.grader_result = (
+                    grader_result_to_dict(grader_result)
+                    if grader_result is not None
+                    else None
+                )
+                if eval_case.graders is not None:
+                    eval_result.grader_results = [
+                        grader_result_to_dict(result) if result is not None else None
+                        for result in grader_results
+                    ]
+
+                if grader_result is not None:
+                    print(f"[headless] Grader result: {'PASS' if grader_result.passed else 'FAIL'}")
+                    print(f"[headless] Grader reasoning:\n{grader_result.reasoning}")
 
         print(f"\n[headless] Eval completed in {duration_ms / 1000:.2f}s")
         print(f"[headless] Total conversation turns: {len(conversation_history)}")
