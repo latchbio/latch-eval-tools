@@ -9,7 +9,7 @@ class Eval(BaseModel):
     data_node: str | list[str] | None = None
     grader: dict[str, Any] | None = None
     graders: list[dict[str, Any]] | None = None
-    metadata: dict[str, Any] | None = None
+    metadata: dict | None = None
     timeout: int | None = None
     download_timeout: int | None = None
     agent_timeout: int | None = None

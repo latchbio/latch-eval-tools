@@ -686,8 +686,6 @@ class HeadlessEvalServer:
             if agent_answer is None:
                 eval_result.grader_result = {
                     "passed": False,
-                    "score": 0.0,
-                    "field_scores": {},
                     "metrics": {},
                     "reasoning": "Failed to extract answer from conversation history",
                     "agent_answer": None,
@@ -699,13 +697,11 @@ class HeadlessEvalServer:
                     grader_specs,
                 )
 
-                eval_result.grader_result = (
-                    asdict(grader_result)
-                    if grader_result is not None
-                    else None
-                )
-
                 if grader_result is not None:
+                    eval_result.grader_result = asdict(grader_result)
+                    if len(grader_specs) == 1:
+                        eval_result.grader_result.pop("score", None)
+                        eval_result.grader_result.pop("field_scores", None)
                     print(f"[headless] Grader result: {'PASS' if grader_result.passed else 'FAIL'}")
                     print(f"[headless] Grader reasoning:\n{grader_result.reasoning}")
 

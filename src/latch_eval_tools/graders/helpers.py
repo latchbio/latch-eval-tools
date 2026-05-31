@@ -11,7 +11,26 @@ def grade_answer_with_specs(
     agent_answer: dict,
     grader_specs: list,
 ) -> tuple[list[GraderResult | None], GraderResult | None]:
-    per_grader_results = grade_multiple_graders_single_answer(agent_answer, grader_specs)
+    per_grader_results: list[GraderResult | None] = []
+    for spec in grader_specs:
+        try:
+            per_grader_results.extend(
+                grade_multiple_graders_single_answer(agent_answer, [spec])
+            )
+        except Exception as exc:
+            per_grader_results.append(
+                GraderResult(
+                    passed=False,
+                    metrics={"grader_error": str(exc)},
+                    reasoning=(
+                        "Grader failed while evaluating agent output: "
+                        f"{exc}\n\n{traceback.format_exc()}"
+                    ),
+                    agent_answer=agent_answer,
+                    score=0.0,
+                    field_scores={},
+                )
+            )
 
     if len(per_grader_results) == 0:
         return per_grader_results, None
@@ -74,6 +93,19 @@ def grade_multiple_graders_single_answer(
     agent_answer: dict,
     grader_specs: list,
 ) -> list[GraderResult | None]:
+    """Run every grader in ``grader_specs`` against ``agent_answer``.
+
+    ``grader_specs`` is a list of ``{"type": <str>, "config": <dict>}`` entries
+    (the same shape used by the top-level ``graders`` field in an eval JSON).
+    Each sub-grader receives the full ``agent_answer`` and its own sub-config;
+    sub-graders are expected to own disjoint answer fields.
+
+    Returns a list aligned 1:1 with ``grader_specs``. A valid spec yields a
+    :class:`GraderResult`; any malformed spec (non-dict, missing ``type``,
+    unknown type, non-dict ``config``) yields ``None`` at that index so
+    callers can distinguish tooling misconfiguration from a real agent
+    pass/fail.
+    """
     from . import get_grader  # noqa: PLC0415 -- avoid circular import at module load
 
     per_grader_results: list[GraderResult | None] = []
@@ -91,23 +123,6 @@ def grade_multiple_graders_single_answer(
             per_grader_results.append(None)
             continue
 
-        try:
-            per_grader_results.append(
-                sub_grader.evaluate_answer(agent_answer, parsed.config)
-            )
-        except Exception as exc:
-            per_grader_results.append(
-                GraderResult(
-                    passed=False,
-                    metrics={"grader_error": str(exc)},
-                    reasoning=(
-                        "Grader failed while evaluating agent output: "
-                        f"{exc}\n\n{traceback.format_exc()}"
-                    ),
-                    agent_answer=agent_answer,
-                    score=0.0,
-                    field_scores={},
-                )
-            )
+        per_grader_results.append(sub_grader.evaluate_answer(agent_answer, parsed.config))
 
     return per_grader_results
