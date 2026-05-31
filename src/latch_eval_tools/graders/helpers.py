@@ -11,41 +11,7 @@ def grade_answer_with_specs(
     agent_answer: dict,
     grader_specs: list,
 ) -> tuple[list[GraderResult | None], GraderResult | None]:
-    from . import get_grader  # noqa: PLC0415 -- avoid circular import at module load
-
-    per_grader_results: list[GraderResult | None] = []
-
-    for spec in grader_specs:
-        try:
-            parsed = GraderSpec.model_validate(spec)
-        except ValidationError:
-            per_grader_results.append(None)
-            continue
-
-        try:
-            sub_grader = get_grader(parsed.type)
-        except ValueError:
-            per_grader_results.append(None)
-            continue
-
-        try:
-            per_grader_results.append(
-                sub_grader.evaluate_answer(agent_answer, parsed.config)
-            )
-        except Exception as exc:
-            per_grader_results.append(
-                GraderResult(
-                    passed=False,
-                    metrics={"grader_error": str(exc)},
-                    reasoning=(
-                        "Grader failed while evaluating agent output: "
-                        f"{exc}\n\n{traceback.format_exc()}"
-                    ),
-                    agent_answer=agent_answer,
-                    score=0.0,
-                    field_scores={},
-                )
-            )
+    per_grader_results = grade_multiple_graders_single_answer(agent_answer, grader_specs)
 
     if len(per_grader_results) == 0:
         return per_grader_results, None
@@ -102,3 +68,46 @@ def grade_answer_with_specs(
         score=0.0 if misconfigured else sum(scores) / len(scores),
         field_scores=field_scores,
     )
+
+
+def grade_multiple_graders_single_answer(
+    agent_answer: dict,
+    grader_specs: list,
+) -> list[GraderResult | None]:
+    from . import get_grader  # noqa: PLC0415 -- avoid circular import at module load
+
+    per_grader_results: list[GraderResult | None] = []
+
+    for spec in grader_specs:
+        try:
+            parsed = GraderSpec.model_validate(spec)
+        except ValidationError:
+            per_grader_results.append(None)
+            continue
+
+        try:
+            sub_grader = get_grader(parsed.type)
+        except ValueError:
+            per_grader_results.append(None)
+            continue
+
+        try:
+            per_grader_results.append(
+                sub_grader.evaluate_answer(agent_answer, parsed.config)
+            )
+        except Exception as exc:
+            per_grader_results.append(
+                GraderResult(
+                    passed=False,
+                    metrics={"grader_error": str(exc)},
+                    reasoning=(
+                        "Grader failed while evaluating agent output: "
+                        f"{exc}\n\n{traceback.format_exc()}"
+                    ),
+                    agent_answer=agent_answer,
+                    score=0.0,
+                    field_scores={},
+                )
+            )
+
+    return per_grader_results
