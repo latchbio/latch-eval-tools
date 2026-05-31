@@ -8,10 +8,7 @@ from .multiple_choice import MultipleChoiceGrader
 from .refusal import RefusalVocabGrader
 from .predicate import PredicateLeafGrader
 from .composite import AllOfGrader, ListMatchGrader, DictMatchGrader
-from .helpers import (  # noqa: E402 -- depends on GRADER_REGISTRY
-    grade_answer_with_specs,
-    grade_multiple_graders_single_answer,
-)
+from .helpers import grade_answer_with_specs  # noqa: E402 -- depends on GRADER_REGISTRY
 
 GRADER_REGISTRY = {
     "numeric_tolerance": NumericToleranceGrader,
@@ -59,5 +56,4 @@ __all__ = [
     "GRADER_REGISTRY",
     "get_grader",
     "grade_answer_with_specs",
-    "grade_multiple_graders_single_answer",
 ]
