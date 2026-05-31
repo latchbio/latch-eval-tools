@@ -59,3 +59,22 @@ class GraderSpec(BaseModel):
 
     type: str = Field(min_length=1)
     config: dict[str, Any] = Field(default_factory=dict)
+
+
+class EvalGraderSelection(BaseModel):
+    """Top-level grader vs graders selection on an eval JSON."""
+
+    model_config = ConfigDict(strict=True, extra="ignore")
+
+    grader: dict[str, Any] | None = None
+    graders: list[dict[str, Any]] | None = None
+
+    @model_validator(mode="after")
+    def _enforce_selection(self) -> Self:
+        if self.grader is not None and self.graders is not None:
+            raise ValueError(
+                "Fields 'grader' and 'graders' are mutually exclusive; specify exactly one"
+            )
+        if self.graders is not None and len(self.graders) == 0:
+            raise ValueError("Field 'graders' must be a non-empty list")
+        return self
