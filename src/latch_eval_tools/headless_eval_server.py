@@ -692,7 +692,7 @@ class HeadlessEvalServer:
                 }
                 print("[headless] Grader result: FAIL (no answer extracted)")
             else:
-                _, grader_result = grade_answer_with_specs(
+                grader_result = grade_answer_with_specs(
                     agent_answer,
                     grader_specs,
                 )

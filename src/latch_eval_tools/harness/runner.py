@@ -125,7 +125,7 @@ class EvalRunner:
             print("Running grader...")
             print("=" * 80)
 
-            _, grader_result = grade_answer_with_specs(
+            grader_result = grade_answer_with_specs(
                 agent_answer,
                 grader_specs,
             )

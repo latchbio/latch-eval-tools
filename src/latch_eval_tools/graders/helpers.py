@@ -10,55 +10,51 @@ from .base import GraderResult
 def grade_answer_with_specs(
     agent_answer: dict,
     grader_specs: list,
-) -> tuple[list[GraderResult | None], GraderResult | None]:
-    per_grader_results: list[GraderResult | None] = []
-    for spec in grader_specs:
-        try:
-            per_grader_results.extend(
-                grade_multiple_graders_single_answer(agent_answer, [spec])
-            )
-        except Exception as exc:
-            per_grader_results.append(
-                GraderResult(
-                    passed=False,
-                    metrics={"grader_error": str(exc)},
-                    reasoning=(
-                        "Grader failed while evaluating agent output: "
-                        f"{exc}\n\n{traceback.format_exc()}"
-                    ),
-                    agent_answer=agent_answer,
-                    score=0.0,
-                    field_scores={},
-                )
-            )
+) -> GraderResult | None:
+    try:
+        per_grader_results = grade_multiple_graders_single_answer(
+            agent_answer,
+            grader_specs,
+        )
+    except Exception as exc:
+        return GraderResult(
+            passed=False,
+            metrics={"grader_error": str(exc)},
+            reasoning=(
+                "Grader failed while evaluating agent output: "
+                f"{exc}\n\n{traceback.format_exc()}"
+            ),
+            agent_answer=agent_answer,
+            score=0.0,
+            field_scores={},
+        )
 
     if len(per_grader_results) == 0:
-        return per_grader_results, None
+        return None
     if len(per_grader_results) == 1 and per_grader_results[0] is not None:
-        return per_grader_results, per_grader_results[0]
+        return per_grader_results[0]
+
+    results: list[GraderResult] = []
+    for result in per_grader_results:
+        if result is None:
+            return GraderResult(
+                passed=False,
+                metrics={},
+                reasoning="Grader spec is malformed or uses an unknown grader type.",
+                agent_answer=agent_answer,
+                score=0.0,
+                field_scores={},
+            )
+        results.append(result)
 
     metrics: dict[str, Any] = {}
     field_scores: dict[str, float] = {}
     reasoning_sections: list[str] = []
     scores: list[float] = []
     all_passed = True
-    misconfigured = False
 
-    for i, result in enumerate(per_grader_results):
-        spec = grader_specs[i] if i < len(grader_specs) else {}
-        grader_type = (
-            spec.get("type", "unknown") if isinstance(spec, dict) else "unknown"
-        )
+    for i, result in enumerate(results):
         prefix = f"graders[{i}]"
-
-        if result is None:
-            all_passed = False
-            misconfigured = True
-            reasoning_sections.append(
-                f"[{prefix} type={grader_type}] FAIL\n"
-                "Grader spec is malformed or uses an unknown grader type."
-            )
-            continue
 
         all_passed = all_passed and result.passed
         scores.append(result.score)
@@ -69,16 +65,15 @@ def grade_answer_with_specs(
 
         status = "PASS" if result.passed else "FAIL"
         reasoning_sections.append(
-            f"[{prefix} type={grader_type}] {status} "
-            f"(score={result.score:.4f})\n{result.reasoning}"
+            f"[{prefix}] {status} (score={result.score:.4f})\n{result.reasoning}"
         )
 
-    return per_grader_results, GraderResult(
+    return GraderResult(
         passed=all_passed,
         metrics=metrics,
         reasoning="\n\n".join(reasoning_sections),
         agent_answer=agent_answer,
-        score=0.0 if misconfigured else sum(scores) / len(scores),
+        score=sum(scores) / len(scores),
         field_scores=field_scores,
     )
 
@@ -117,6 +112,8 @@ def grade_multiple_graders_single_answer(
             per_grader_results.append(None)
             continue
 
-        per_grader_results.append(sub_grader.evaluate_answer(agent_answer, parsed.config))
+        per_grader_results.append(
+            sub_grader.evaluate_answer(agent_answer, parsed.config)
+        )
 
     return per_grader_results
