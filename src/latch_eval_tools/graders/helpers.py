@@ -97,23 +97,23 @@ def grade_multiple_graders_single_answer(
     """
     from . import get_grader  # noqa: PLC0415 -- avoid circular import at module load
 
-    per_grader_results: list[GraderResult | None] = []
+    results: list[GraderResult | None] = []
 
     for spec in grader_specs:
         try:
             parsed = GraderSpec.model_validate(spec)
         except ValidationError:
-            per_grader_results.append(None)
+            results.append(None)
             continue
 
         try:
             sub_grader = get_grader(parsed.type)
         except ValueError:
-            per_grader_results.append(None)
+            results.append(None)
             continue
 
-        per_grader_results.append(
+        results.append(
             sub_grader.evaluate_answer(agent_answer, parsed.config)
         )
 
-    return per_grader_results
+    return results
