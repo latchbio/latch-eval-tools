@@ -22,7 +22,10 @@ dependencies = [
     "mini-swe-agent~=2.2",
     "litellm~=1.83.14",
     "jinja2~=3.1",
+    "latch-eval-tools-types",
+    "latch-data-validation>=0.1.13",
 ]
+
 [tool.hatch.metadata]
 allow-direct-references = true
 
@@ -32,4 +35,8 @@ packages = ["src/latch_eval_tools"]
 [tool.uv.workspace]
 members = [
     "agent_env",
+    "lib/*"
 ]
+
+[tool.uv.sources]
+latch-eval-tools-types = { workspace = true }

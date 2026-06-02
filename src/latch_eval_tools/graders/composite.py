@@ -1,7 +1,9 @@
 """Composite graders: all_of, list_match, dict_match. Recursive over
 predicate-leaves and nested composites."""
 
-from typing import Any
+from typing import Any, TypeAlias, TypedDict
+
+from latch_eval_tools_types.graders import all as models_all, all_of as models_all_of
 
 from .base import BinaryGrader, GraderResult
 from .predicate import SCALAR_OPS, _apply_role, evaluate_predicate, resolve_jsonpath
@@ -44,7 +46,32 @@ def _bind_field(value: Any, field: Any) -> Any:
     return None
 
 
-def _evaluate_leaf(leaf: dict, value: Any) -> tuple[str, bool, float, str, dict]:
+class ScoreError(TypedDict):
+    error: str
+
+
+class ScoreSub(TypedDict):
+    metrics: dict[str, str | float | int | bool | None]
+    reasoning: str
+
+
+class ScoreLeafError(TypedDict):
+    error: str
+    op: str
+    role: str
+
+
+class ScoreLeaf(TypedDict):
+    op: str
+    role: str
+    raw: str
+    is_scalar: bool
+
+
+Score: TypeAlias = ScoreError | ScoreSub | ScoreLeaf | ScoreLeafError
+
+
+def _evaluate_leaf(leaf: dict, value: Any) -> tuple[str, bool, float, str, Score]:
     """Returns (kind, passed, score, label, info). kind: scoring | hard_fail."""
     role = leaf.get("role")
     predicate = leaf.get("predicate")
@@ -75,8 +102,8 @@ def _evaluate_leaf(leaf: dict, value: Any) -> tuple[str, bool, float, str, dict]
 
 
 def _evaluate_all_of_child(
-    child: Any, agent_answer: Any
-) -> tuple[str, bool, float, str, dict]:
+    child: models_all.Spec, agent_answer: models_all.AgentAnswer
+) -> tuple[str, bool, float, str, Score]:
     """Dispatch one ``all_of`` child: bare leaf vs composite envelope."""
     if _is_leaf(child):
         value = _bind_field(agent_answer, child.get("answer_field"))
@@ -124,10 +151,12 @@ def _composite_fail(agent_answer: Any, reason: str) -> GraderResult:
 # composites vv
 
 
-class AllOfGrader(BinaryGrader):
+class AllOfGrader(BinaryGrader[models_all_of.AgentAnswer, models_all_of.Config]):
     """Conjunction over scoring children plus veto from hard_fail children."""
 
-    def evaluate_answer(self, agent_answer: dict, config: dict) -> GraderResult:
+    def evaluate_answer(
+        self, agent_answer: models_all_of.AgentAnswer, config: models_all_of.Config
+    ) -> GraderResult:
         scoring: list[tuple[bool, float, str, dict]] = []
         hard_fails: list[tuple[bool, str, dict]] = []
 

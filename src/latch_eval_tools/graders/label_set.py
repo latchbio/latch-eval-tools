@@ -1,8 +1,14 @@
+from typing import override
+from latch_eval_tools_types.graders import label_set as models
+
 from .base import BinaryGrader, GraderResult
 
 
-class LabelSetJaccardGrader(BinaryGrader):
-    def evaluate_answer(self, agent_answer: dict, config: dict) -> GraderResult:
+class LabelSetJaccardGrader(BinaryGrader[models.AgentAnswer, models.Config]):
+    @override
+    def evaluate_answer(
+        self, agent_answer: models.AgentAnswer, config: models.Config
+    ) -> GraderResult:
         ground_truth_labels = set(config.get("ground_truth_labels", []))
         scoring = config.get("scoring", {})
         pass_threshold = scoring.get("pass_threshold", 0.90)
@@ -13,7 +19,7 @@ class LabelSetJaccardGrader(BinaryGrader):
                 passed=False,
                 metrics={},
                 reasoning=f"Agent answer missing required field: {answer_field}",
-                agent_answer=agent_answer
+                agent_answer=agent_answer,
             )
 
         predicted_labels = set(agent_answer[answer_field])
@@ -42,9 +48,9 @@ class LabelSetJaccardGrader(BinaryGrader):
         lines = [
             f"Label Set Comparison: {'PASS' if passed else 'FAIL'}",
             "",
-            f"  {'+'if passed else 'x'} Jaccard Index: {jaccard_index:.3f} (threshold: {pass_threshold:.3f})",
+            f"  {'+' if passed else 'x'} Jaccard Index: {jaccard_index:.3f} (threshold: {pass_threshold:.3f})",
             "",
-            f"Correct Labels ({len(true_positives)}):"
+            f"Correct Labels ({len(true_positives)}):",
         ]
 
         if true_positives:
