@@ -1,15 +1,18 @@
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Generic, TypeVar
+
+from latch_eval_tools_types.graders import all as models
 
 
 @dataclass
 class GraderResult:
     passed: bool
-    metrics: dict
+    metrics: dict[str, Any]
     reasoning: str
-    agent_answer: dict | None
+    agent_answer: dict[str, Any] | None
     score: float = 1.0
-    field_scores: dict = field(default_factory=dict)
+    field_scores: dict[str, Any] = field(default_factory=dict)
 
 
 def get_nested_value(obj: dict, key: str) -> tuple[Any, bool]:
@@ -24,9 +27,14 @@ def get_nested_value(obj: dict, key: str) -> tuple[Any, bool]:
     return current, True
 
 
-class BinaryGrader:
-    def evaluate_answer(self, agent_answer: dict, config: dict) -> GraderResult:
+AA = TypeVar("AA", bound=models.AgentAnswer, default=models.AgentAnswer)
+Cfg = TypeVar("Cfg", bound=models.Config, default=models.Config)
+
+
+class BinaryGrader(ABC, Generic[AA, Cfg]):
+    @abstractmethod
+    def evaluate_answer(self, agent_answer: AA, config: Cfg) -> GraderResult:
         raise NotImplementedError
 
-    def evaluate(self, agent_answer: dict, config: dict) -> GraderResult:
+    def evaluate(self, agent_answer: AA, config: Cfg) -> GraderResult:
         return self.evaluate_answer(agent_answer, config)

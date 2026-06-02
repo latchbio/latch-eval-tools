@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -11,6 +11,7 @@ resolution-markers = [
 members = [
     "agent-env",
     "latch-eval-tools",
+    "latch-eval-tools-types",
 ]
 
 [[package]]
@@ -2995,6 +2996,18 @@ wheels = [
 ]
 
 [[package]]
+name = "latch-data-validation"
+version = "0.1.13"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c7/c4/b196f5fab7fb743f80f73846e9bfca6660876fa44a88becb9a8318f1f72e/latch_data_validation-0.1.13.tar.gz", hash = "sha256:3194cd45a3d81844cec6dc0cbdbaed1fcf57e44febcf74f6fdb8cc41d98fcded", size = 24798, upload-time = "2026-06-02T16:22:24.582Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/17/be/c36499a0c4eeb31c859af18713fe8db4c9e40e738ed79fd8a334cac12862/latch_data_validation-0.1.13-py3-none-any.whl", hash = "sha256:0fb0496c6ee5d765f3b149556bf05af1d3915e71297e5c0f2c6b642c70b343c4", size = 8324, upload-time = "2026-06-02T16:22:23.591Z" },
+]
+
+[[package]]
 name = "latch-eval-tools"
 version = "0.3.16"
 source = { editable = "." }
@@ -3003,6 +3016,8 @@ dependencies = [
     { name = "anthropic" },
     { name = "jinja2" },
     { name = "latch" },
+    { name = "latch-data-validation" },
+    { name = "latch-eval-tools-types" },
     { name = "litellm" },
     { name = "matplotlib" },
     { name = "mini-swe-agent" },
@@ -3020,6 +3035,8 @@ requires-dist = [
     { name = "anthropic", specifier = ">=0.72.0" },
     { name = "jinja2", specifier = "~=3.1" },
     { name = "latch", specifier = ">=2.0.0" },
+    { name = "latch-data-validation", specifier = ">=0.1.13" },
+    { name = "latch-eval-tools-types", editable = "lib/latch-eval-tools-types" },
     { name = "litellm", specifier = "~=1.83.14" },
     { name = "matplotlib", specifier = ">=3.0.0" },
     { name = "mini-swe-agent", specifier = "~=2.2" },
@@ -3030,6 +3047,16 @@ requires-dist = [
     { name = "scipy", specifier = ">=1.10.0" },
     { name = "websockets", specifier = ">=12.0" },
 ]
+
+[[package]]
+name = "latch-eval-tools-types"
+version = "0.1.0"
+source = { editable = "lib/latch-eval-tools-types" }
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = []
 
 [[package]]
 name = "latch-persistence"

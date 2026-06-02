@@ -1,8 +1,14 @@
+from typing import override
+from latch_eval_tools_types.graders import distribution_comparison as models
+
 from .base import BinaryGrader, GraderResult
 
 
-class DistributionComparisonGrader(BinaryGrader):
-    def evaluate_answer(self, agent_answer: dict, config: dict) -> GraderResult:
+class DistributionComparisonGrader(BinaryGrader[models.AgentAnswer, models.Config]):
+    @override
+    def evaluate_answer(
+        self, agent_answer: models.AgentAnswer, config: models.Config
+    ) -> GraderResult:
         ground_truth = config.get("ground_truth", {})
         tolerances = config.get("tolerances", {})
 
@@ -18,7 +24,7 @@ class DistributionComparisonGrader(BinaryGrader):
                 passed=False,
                 metrics={},
                 reasoning="Agent answer missing required field: cell_type_distribution",
-                agent_answer=agent_answer
+                agent_answer=agent_answer,
             )
 
         agent_total_cells = agent_answer.get("total_cells")
@@ -40,7 +46,9 @@ class DistributionComparisonGrader(BinaryGrader):
 
             if not total_cells_pass:
                 all_pass = False
-                failures.append(f"total_cells: {agent_total_cells} vs {gt_total_cells} (diff: {total_cells_diff})")
+                failures.append(
+                    f"total_cells: {agent_total_cells} vs {gt_total_cells} (diff: {total_cells_diff})"
+                )
 
         distribution_failures = []
         for cell_type, expected_pct in gt_distribution.items():
@@ -65,7 +73,9 @@ class DistributionComparisonGrader(BinaryGrader):
 
             if not within_tolerance:
                 all_pass = False
-                failures.append(f"{cell_type}: {actual_pct:.2f}% vs {expected_pct:.2f}% (diff: {diff:.2f}%)")
+                failures.append(
+                    f"{cell_type}: {actual_pct:.2f}% vs {expected_pct:.2f}% (diff: {diff:.2f}%)"
+                )
                 distribution_failures.append(cell_type)
 
         extra_types = set(agent_distribution.keys()) - set(gt_distribution.keys())
@@ -75,7 +85,7 @@ class DistributionComparisonGrader(BinaryGrader):
         lines = [
             f"Distribution Comparison: {'PASS' if all_pass else 'FAIL'}",
             "",
-            f"Cell type percentages (tolerance: +/-{pct_tolerance}%):"
+            f"Cell type percentages (tolerance: +/-{pct_tolerance}%):",
         ]
 
         for cell_type in sorted(gt_distribution.keys()):
@@ -87,7 +97,9 @@ class DistributionComparisonGrader(BinaryGrader):
                 diff = abs(actual - expected)
                 within_tol = diff <= pct_tolerance
                 check = "+" if within_tol else "x"
-                lines.append(f"  {check} {cell_type}: {actual:.2f}% vs {expected:.2f}% (diff: {diff:.2f}%)")
+                lines.append(
+                    f"  {check} {cell_type}: {actual:.2f}% vs {expected:.2f}% (diff: {diff:.2f}%)"
+                )
 
         if failures:
             lines.extend(["", "Failures:"])

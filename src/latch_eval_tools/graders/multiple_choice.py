@@ -1,8 +1,14 @@
+from typing import override
+from latch_eval_tools_types.graders import multiple_choice as models
+
 from .base import BinaryGrader, GraderResult
 
 
-class MultipleChoiceGrader(BinaryGrader):
-    def evaluate_answer(self, agent_answer: dict, config: dict) -> GraderResult:
+class MultipleChoiceGrader(BinaryGrader[models.AgentAnswer, models.Config]):
+    @override
+    def evaluate_answer(
+        self, agent_answer: models.AgentAnswer, config: models.Config
+    ) -> GraderResult:
         if "correct_answers" in config:
             correct_answers = [a.strip().upper() for a in config["correct_answers"]]
         else:
@@ -13,20 +19,24 @@ class MultipleChoiceGrader(BinaryGrader):
                 passed=False,
                 metrics={},
                 reasoning="Agent answer missing required field: answer",
-                agent_answer=agent_answer
+                agent_answer=agent_answer,
             )
 
         agent_choice = str(agent_answer["answer"]).strip().upper()
         passed = agent_choice in correct_answers
 
-        display_correct = correct_answers[0] if len(correct_answers) == 1 else correct_answers
+        display_correct = (
+            correct_answers[0] if len(correct_answers) == 1 else correct_answers
+        )
         metrics = {
             "correct_answers": correct_answers,
             "agent_answer": agent_choice,
         }
 
         if passed:
-            reasoning = f"Multiple Choice: PASS\n\n  + Agent answered: {agent_choice} (correct)"
+            reasoning = (
+                f"Multiple Choice: PASS\n\n  + Agent answered: {agent_choice} (correct)"
+            )
         else:
             reasoning = f"Multiple Choice: FAIL\n\n  x Agent answered: {agent_choice}\n    Correct answer(s): {display_correct}"
 

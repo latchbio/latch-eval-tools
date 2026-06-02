@@ -1,11 +1,13 @@
 from pydantic import ValidationError
 
+from latch_eval_tools_types.graders import all as models
+
 from ..types import GraderSpec
 from .base import GraderResult
 
 
 def grade_multiple_graders_single_answer(
-    agent_answer: dict, grader_specs: list
+    agent_answer: models.AgentAnswer, grader_specs: models.Config
 ) -> list[GraderResult | None]:
     """Run every grader in ``grader_specs`` against ``agent_answer``.
 

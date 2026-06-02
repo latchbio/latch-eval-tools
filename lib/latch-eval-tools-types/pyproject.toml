@@ -1,0 +1,174 @@
+[project]
+name = "latch-eval-tools-types"
+version = "0.1.0"
+description = ""
+requires-python = ">=3.10"
+dependencies = [
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+]
+
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+preview = true
+
+pydocstyle = { convention = "google" }
+extend-select = [
+    "F",
+    "E",
+    "W",
+    # "C90",
+    "I",
+    "N",
+    "D",
+    "UP",
+    "YTT",
+    "ANN",
+    "ASYNC",
+    "ASYNC1",
+    "S",
+    # "BLE", # `raise x from y` does not work
+    "FBT",
+    "B",
+    "A",
+    # "COM",
+    # "CPY",
+    "C4",
+    "DTZ",
+    "T10",
+    "DJ",
+    # "EM",
+    "EXE",
+    "FA",
+    "ISC",
+    "ICN",
+    "G",
+    "INP",
+    "PIE",
+    "T20",
+    "PYI",
+    "PT",
+    "Q",
+    "RSE",
+    "RET",
+    "SLF",
+    "SLOT",
+    "SIM",
+    "TID",
+    "TCH",
+    "INT",
+    "ARG",
+    "PTH",
+    "TD",
+    # "FIX",
+    # "ERA",
+    "PD",
+    "PGH",
+    "PL",
+    "TRY",
+    "FLY",
+    "NPY",
+    "AIR",
+    "PERF",
+    "FURB",
+    "LOG",
+    "RUF",
+]
+ignore = [
+    "A002",
+    "A003",
+
+    "ANN101",
+    "ANN102",
+
+    "E402",
+    "E501",
+    "E741",
+
+    "C408",
+    "C901",
+
+    "T201",
+    "T203",
+
+    "D415",
+
+    "SIM108",
+
+    "S101",
+    "S603",
+
+    "N807",
+
+    "D100",
+    "D101",
+    "D102",
+    "D103",
+    "D104",
+    "D105",
+    "D106",
+    "D107",
+
+    "TRY003",
+    "TRY300",
+    "TRY301",
+
+    "FLY002",
+
+    "PLW2901",
+    "PLW0603",
+
+    "PLR0904",
+    "PLR0911",
+    "PLR0912",
+    "PLR0913",
+    "PLR0914",
+    "PLR0915",
+    "PLR0916",
+    "PLR0917",
+    "PLR1702",
+    "PLR2004",
+
+    "TD001",
+    "TD003",
+    "TD006",
+
+    "TID252",
+
+    "PD901",
+
+    # todo(maximsmol): reenable as soon as data-validation can support the `type` syntax
+    "UP040",
+
+    "SIM112",
+
+    "PLC1901",
+
+    "TCH002",
+    "TC006",
+
+    "PGH003", # todo(maximsmol): pyright ignores everything regardless of code
+]
+
+[tool.ruff.format]
+preview = true
+skip-magic-trailing-comma = true
+
+[tool.pyright]
+enableExperimentalFeatures = true
+
+reportUnknownArgumentType = "none"
+reportUnknownLambdaType = "none"
+reportUnknownMemberType = "none"
+reportUnknownParameterType = "none"
+reportUnknownVariableType = "none"
+
+reportUnusedImport = "warning"

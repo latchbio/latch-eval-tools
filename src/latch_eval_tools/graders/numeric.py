@@ -1,14 +1,31 @@
+from typing import cast, override
+from latch_eval_tools_types.graders import (
+    numeric_range as models_range,
+    numeric_tolerance as models_tolerance,
+)
+
 from .base import BinaryGrader, GraderResult, get_nested_value
 
 
-class NumericToleranceGrader(BinaryGrader):
-    def evaluate_answer(self, agent_answer: dict, config: dict) -> GraderResult:
+class NumericToleranceGrader(
+    BinaryGrader[models_tolerance.AgentAnswer, models_tolerance.Config]
+):
+    @override
+    def evaluate_answer(
+        self,
+        agent_answer: models_tolerance.AgentAnswer,
+        config: models_tolerance.Config,
+    ) -> GraderResult:
         ground_truth = config.get("ground_truth", {})
-        tolerances = config.get("tolerances", config.get("tolerance", {}))
+        tolerances = (
+            config["tolerances"]
+            if "tolerances" in config
+            else config.get("tolerance", {})
+        )
 
-        metrics = {}
+        metrics: dict[str, float | None] = {}
         all_pass = True
-        failures = []
+        failures: list[str] = []
 
         for field, expected_value in ground_truth.items():
             actual_value, found = get_nested_value(agent_answer, field)
@@ -33,13 +50,27 @@ class NumericToleranceGrader(BinaryGrader):
                 failures.append(f"{field}: got null/None value")
                 metrics[f"{field}_actual"] = None
                 metrics[f"{field}_expected"] = expected_value
-                metrics[f"{field}_error"] = float('inf')
+                metrics[f"{field}_error"] = float("inf")
                 metrics[f"{field}_pass"] = False
                 continue
 
-            tolerance_config = tolerances.get(field, {"type": "absolute", "value": 0})
-            if isinstance(tolerances, dict) and "type" in tolerances and "value" not in tolerances.get(field, {}):
-                tolerance_config = tolerances
+            tolerance_config: models_tolerance.Tolerance | None = tolerances.get(field)
+            if tolerance_config is None:
+                tolerance_config = {
+                    "type": "absolute",
+                    "value": 0,
+                }
+
+            if (
+                isinstance(tolerances, dict)
+                and "type" in tolerances
+                and "value" not in tolerances.get(field, {})
+            ):
+                tolerance_config = cast(models_tolerance.Tolerance, tolerances)
+
+                # note(maximsmol): pyright being stupid here
+                assert tolerance_config is not None
+
             tolerance_type = tolerance_config.get("type", "absolute")
             has_asymmetric = "lower" in tolerance_config and "upper" in tolerance_config
             tolerance_value = tolerance_config.get("value", 0)
@@ -49,13 +80,23 @@ class NumericToleranceGrader(BinaryGrader):
             try:
                 if tolerance_type == "absolute":
                     if has_asymmetric:
-                        within_tolerance = (expected_value - tolerance_lower) <= actual_value <= (expected_value + tolerance_upper)
+                        within_tolerance = (
+                            (expected_value - tolerance_lower)
+                            <= actual_value
+                            <= (expected_value + tolerance_upper)
+                        )
                         error = actual_value - expected_value
                     else:
-                        within_tolerance = abs(actual_value - expected_value) <= tolerance_value
+                        within_tolerance = (
+                            abs(actual_value - expected_value) <= tolerance_value
+                        )
                         error = abs(actual_value - expected_value)
                 elif tolerance_type == "relative":
-                    relative_error = abs(actual_value - expected_value) / abs(expected_value) if expected_value != 0 else float('inf')
+                    relative_error = (
+                        abs(actual_value - expected_value) / abs(expected_value)
+                        if expected_value != 0
+                        else float("inf")
+                    )
                     within_tolerance = relative_error <= tolerance_value
                     error = relative_error
                 elif tolerance_type == "min":
@@ -68,13 +109,15 @@ class NumericToleranceGrader(BinaryGrader):
                     error = actual_value - threshold if actual_value > threshold else 0
                 else:
                     within_tolerance = False
-                    error = float('inf')
+                    error = float("inf")
             except TypeError:
                 all_pass = False
-                failures.append(f"{field}: invalid type {type(actual_value).__name__}, expected numeric")
+                failures.append(
+                    f"{field}: invalid type {type(actual_value).__name__}, expected numeric"
+                )
                 metrics[f"{field}_actual"] = actual_value
                 metrics[f"{field}_expected"] = expected_value
-                metrics[f"{field}_error"] = float('inf')
+                metrics[f"{field}_error"] = float("inf")
                 metrics[f"{field}_pass"] = False
                 continue
 
@@ -86,20 +129,35 @@ class NumericToleranceGrader(BinaryGrader):
             if not within_tolerance:
                 all_pass = False
                 if tolerance_type == "min":
-                    failures.append(f"{field}: {actual_value} (minimum required: {tolerance_value})")
+                    failures.append(
+                        f"{field}: {actual_value} (minimum required: {tolerance_value})"
+                    )
                 elif tolerance_type == "max":
-                    failures.append(f"{field}: {actual_value} (maximum allowed: {tolerance_value})")
+                    failures.append(
+                        f"{field}: {actual_value} (maximum allowed: {tolerance_value})"
+                    )
                 elif has_asymmetric:
-                    failures.append(f"{field}: {actual_value} vs {expected_value} (allowed: -{tolerance_lower}/+{tolerance_upper})")
+                    failures.append(
+                        f"{field}: {actual_value} vs {expected_value} (allowed: -{tolerance_lower}/+{tolerance_upper})"
+                    )
                 else:
-                    failures.append(f"{field}: {actual_value} vs {expected_value} (error: {error:.2f}, tolerance: {tolerance_value})")
+                    failures.append(
+                        f"{field}: {actual_value} vs {expected_value} (error: {error:.2f}, tolerance: {tolerance_value})"
+                    )
 
-        reasoning = self._format_reasoning(ground_truth, tolerances, metrics, failures, all_pass)
+        reasoning = self._format_reasoning(
+            ground_truth, tolerances, metrics, failures, all_pass
+        )
 
         total_fields = len(ground_truth)
-        fields_passed = sum(1 for field in ground_truth if metrics.get(f"{field}_pass", False))
+        fields_passed = sum(
+            1 for field in ground_truth if metrics.get(f"{field}_pass", False)
+        )
         score = fields_passed / total_fields if total_fields > 0 else 0.0
-        field_scores = {field: float(metrics.get(f"{field}_pass", False)) for field in ground_truth}
+        field_scores = {
+            field: 1.0 if metrics.get(f"{field}_pass", False) else 0.0
+            for field in ground_truth
+        }
 
         return GraderResult(
             passed=all_pass,
@@ -110,7 +168,14 @@ class NumericToleranceGrader(BinaryGrader):
             field_scores=field_scores,
         )
 
-    def _format_reasoning(self, ground_truth, tolerances, metrics, failures, passed):
+    def _format_reasoning(
+        self,
+        ground_truth: dict[str, int | float],
+        tolerances: models_tolerance.Tolerance | dict[str, models_tolerance.Tolerance],
+        metrics: dict[str, float | None],
+        failures: list[str],
+        passed: bool,
+    ):
         lines = [f"Numeric Tolerance Check: {'PASS' if passed else 'FAIL'}", ""]
 
         for field in ground_truth.keys():
@@ -120,21 +185,26 @@ class NumericToleranceGrader(BinaryGrader):
                 error = metrics[f"{field}_error"]
                 field_pass = metrics[f"{field}_pass"]
                 check = "+" if field_pass else "x"
-                tolerance_config = tolerances.get(field, {}) if isinstance(tolerances, dict) else {}
+                tolerance_config = (
+                    tolerances.get(field, {}) if isinstance(tolerances, dict) else {}
+                )
                 tolerance_type = tolerance_config.get("type", "absolute")
-                has_asymmetric = "lower" in tolerance_config and "upper" in tolerance_config
                 if tolerance_type == "min":
                     tol_val = tolerance_config.get("value", expected)
                     lines.append(f"  {check} {field}: {actual} (minimum: {tol_val})")
                 elif tolerance_type == "max":
                     tol_val = tolerance_config.get("value", expected)
                     lines.append(f"  {check} {field}: {actual} (maximum: {tol_val})")
-                elif has_asymmetric:
+                elif "lower" in tolerance_config and "upper" in tolerance_config:
                     lower = tolerance_config["lower"]
                     upper = tolerance_config["upper"]
-                    lines.append(f"  {check} {field}: {actual} vs {expected} (allowed: -{lower}/+{upper})")
+                    lines.append(
+                        f"  {check} {field}: {actual} vs {expected} (allowed: -{lower}/+{upper})"
+                    )
                 else:
-                    lines.append(f"  {check} {field}: {actual} vs {expected} (error: {error:.4f})")
+                    lines.append(
+                        f"  {check} {field}: {actual} vs {expected} (error: {error:.4f})"
+                    )
 
         if not passed and failures:
             lines.extend(["", "Failures:"])
@@ -144,18 +214,23 @@ class NumericToleranceGrader(BinaryGrader):
         return "\n".join(lines)
 
 
-class NumericRangeGrader(BinaryGrader):
-    def evaluate_answer(self, agent_answer: dict, config: dict) -> GraderResult:
+class NumericRangeGrader(BinaryGrader[models_range.AgentAnswer, models_range.Config]):
+    @override
+    def evaluate_answer(
+        self, agent_answer: models_range.AgentAnswer, config: models_range.Config
+    ) -> GraderResult:
         ground_truth = config.get("ground_truth", {})
         ranges = config.get("ranges", {})
 
         if not isinstance(ground_truth, dict) or not ground_truth:
-            reasoning = "\n".join([
-                "Numeric Range Check: FAIL",
-                "",
-                "Failures:",
-                "  - No valid ground truth configured",
-            ])
+            reasoning = "\n".join(
+                [
+                    "Numeric Range Check: FAIL",
+                    "",
+                    "Failures:",
+                    "  - No valid ground truth configured",
+                ]
+            )
             return GraderResult(
                 passed=False,
                 metrics={},
@@ -166,12 +241,14 @@ class NumericRangeGrader(BinaryGrader):
             )
 
         if not isinstance(ranges, dict) or not ranges:
-            reasoning = "\n".join([
-                "Numeric Range Check: FAIL",
-                "",
-                "Failures:",
-                "  - No valid ranges configured",
-            ])
+            reasoning = "\n".join(
+                [
+                    "Numeric Range Check: FAIL",
+                    "",
+                    "Failures:",
+                    "  - No valid ranges configured",
+                ]
+            )
             return GraderResult(
                 passed=False,
                 metrics={},
@@ -181,14 +258,18 @@ class NumericRangeGrader(BinaryGrader):
                 field_scores={},
             )
 
-        metrics = {}
+        metrics: dict[str, str | int | float | None] = {}
         all_pass = True
-        failures = []
+        failures: list[str] = []
 
         for field, expected_value in ground_truth.items():
             range_config = ranges.get(field)
-            minimum = range_config.get("min") if isinstance(range_config, dict) else None
-            maximum = range_config.get("max") if isinstance(range_config, dict) else None
+            minimum = (
+                range_config.get("min") if isinstance(range_config, dict) else None
+            )
+            maximum = (
+                range_config.get("max") if isinstance(range_config, dict) else None
+            )
 
             metrics[f"{field}_expected"] = expected_value
             metrics[f"{field}_min"] = minimum
@@ -203,7 +284,9 @@ class NumericRangeGrader(BinaryGrader):
 
             if not isinstance(range_config, dict):
                 all_pass = False
-                failures.append(f"{field}: invalid range config, expected object with 'min' and 'max'")
+                failures.append(
+                    f"{field}: invalid range config, expected object with 'min' and 'max'"
+                )
                 metrics[f"{field}_actual"] = None
                 metrics[f"{field}_pass"] = False
                 continue
@@ -222,16 +305,22 @@ class NumericRangeGrader(BinaryGrader):
                 metrics[f"{field}_pass"] = False
                 continue
 
-            if not isinstance(expected_value, (int, float)) or isinstance(expected_value, bool):
+            if not isinstance(expected_value, (int, float)) or isinstance(
+                expected_value, bool
+            ):
                 all_pass = False
-                failures.append(f"{field}: invalid ground truth value {expected_value!r}")
+                failures.append(
+                    f"{field}: invalid ground truth value {expected_value!r}"
+                )
                 metrics[f"{field}_actual"] = None
                 metrics[f"{field}_pass"] = False
                 continue
 
             if minimum >= maximum:
                 all_pass = False
-                failures.append(f"{field}: invalid open interval ({minimum}, {maximum})")
+                failures.append(
+                    f"{field}: invalid open interval ({minimum}, {maximum})"
+                )
                 metrics[f"{field}_actual"] = None
                 metrics[f"{field}_pass"] = False
                 continue
@@ -277,7 +366,9 @@ class NumericRangeGrader(BinaryGrader):
                 within_range = minimum < actual_value < maximum
             except TypeError:
                 all_pass = False
-                failures.append(f"{field}: invalid type {type(actual_value).__name__}, expected numeric")
+                failures.append(
+                    f"{field}: invalid type {type(actual_value).__name__}, expected numeric"
+                )
                 metrics[f"{field}_actual"] = actual_value
                 metrics[f"{field}_pass"] = False
                 continue
@@ -287,14 +378,23 @@ class NumericRangeGrader(BinaryGrader):
 
             if not within_range:
                 all_pass = False
-                failures.append(f"{field}: {actual_value} not in open interval ({minimum}, {maximum})")
+                failures.append(
+                    f"{field}: {actual_value} not in open interval ({minimum}, {maximum})"
+                )
 
-        reasoning = self._format_reasoning(ground_truth, ranges, metrics, failures, all_pass)
+        reasoning = self._format_reasoning(
+            ground_truth, ranges, metrics, failures, all_pass
+        )
 
         total_fields = len(ground_truth)
-        fields_passed = sum(1 for field in ground_truth if metrics.get(f"{field}_pass", False))
+        fields_passed = sum(
+            1 for field in ground_truth if metrics.get(f"{field}_pass", False)
+        )
         score = fields_passed / total_fields if total_fields > 0 else 0.0
-        field_scores = {field: float(metrics.get(f"{field}_pass", False)) for field in ground_truth}
+        field_scores = {
+            field: 1.0 if metrics.get(f"{field}_pass", False) else 0.0
+            for field in ground_truth
+        }
 
         return GraderResult(
             passed=all_pass,
@@ -305,7 +405,14 @@ class NumericRangeGrader(BinaryGrader):
             field_scores=field_scores,
         )
 
-    def _format_reasoning(self, ground_truth, ranges, metrics, failures, passed):
+    def _format_reasoning(
+        self,
+        ground_truth: dict[str, int | float],
+        ranges: dict[str, models_range.Range],
+        metrics: dict[str, str | int | float | None],
+        failures: list[str],
+        passed: bool,
+    ):
         lines = [f"Numeric Range Check: {'PASS' if passed else 'FAIL'}", ""]
 
         for field in ground_truth:
