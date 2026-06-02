@@ -7,6 +7,7 @@ import time
 import uuid
 from pathlib import Path
 
+from latch_eval_tools.answer_extraction import extract_answer_from_pi_trajectory
 from latch_eval_tools.harness.utils import (
     DEFAULT_DOCKER_IMAGE,
     ensure_docker_image,
@@ -503,6 +504,12 @@ def _run_cli_agent(
     agent_answer = None
     error_details = None
 
+    if agent_type == "pi" and not eval_answer_file.exists():
+        agent_answer = extract_answer_from_pi_trajectory(trajectory)
+        if agent_answer is not None:
+            eval_answer_file.write_text(json.dumps(agent_answer, indent=2))
+            print("Recovered eval_answer.json from Pi trajectory")
+
     if not eval_answer_file.exists():
         log_tail = ""
         if agent_log_file.exists():
@@ -522,14 +529,15 @@ def _run_cli_agent(
         }
         print(f"\nWarning: {error_msg}")
     else:
-        try:
-            agent_answer = json.loads(eval_answer_file.read_text())
-        except json.JSONDecodeError as e:
-            error_details = {
-                "error": f"Failed to parse eval_answer.json: {e}",
-                "file_contents": eval_answer_file.read_text()[:500],
-            }
-            print(f"\nWarning: Failed to parse eval_answer.json: {e}")
+        if agent_answer is None:
+            try:
+                agent_answer = json.loads(eval_answer_file.read_text())
+            except json.JSONDecodeError as e:
+                error_details = {
+                    "error": f"Failed to parse eval_answer.json: {e}",
+                    "file_contents": eval_answer_file.read_text()[:500],
+                }
+                print(f"\nWarning: Failed to parse eval_answer.json: {e}")
 
     metadata = _extract_metadata(
         agent_type,
