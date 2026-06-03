@@ -28,7 +28,6 @@ OPERATION_TIMEOUT = 300
 EVAL_TIMEOUT = 600
 OOM_EXIT_CODE = 137
 MAX_OOM_RESTARTS = 10
-SPEND_WARNING_FRACTION = 0.8
 
 class AgentTimeoutError(KeyboardInterrupt):
     # Use a KeyboardInterrupt-style base so model/provider retry layers that catch
@@ -190,7 +189,6 @@ def run_minisweagent_task(
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             self._override_start_time = time.monotonic()
-            self._spend_warning_emitted = False
 
         def step(self) -> list[dict]:
             if time.monotonic() - self._override_start_time > eval_timeout:
@@ -199,25 +197,7 @@ def run_minisweagent_task(
                     "content": "LimitsExceeded",
                     "extra": {"exit_status": "LimitsExceeded", "submission": ""},
                 })
-            result = super().step()
-            spend_warning_dollars = self.config.cost_limit * SPEND_WARNING_FRACTION
-            if (
-                not self._spend_warning_emitted
-                and self.config.cost_limit > 0
-                and self.cost >= spend_warning_dollars
-            ):
-                self._spend_warning_emitted = True
-                self.add_messages(
-                    self.model.format_message(
-                        role="user",
-                        content=(
-                            f"Cost warning: ${self.cost:.2f}/"
-                            f"${self.config.cost_limit:.2f} spent. "
-                            "If enough evidence, write eval_answer.json now."
-                        ),
-                    )
-                )
-            return result
+            return super().step()
 
     class FlexibleDockerEnvironment(DockerEnvironment):
         completion_marker = "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
