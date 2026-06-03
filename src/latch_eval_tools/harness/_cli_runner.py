@@ -1,4 +1,5 @@
 from datetime import datetime
+from importlib.resources import files
 import json
 import os
 import subprocess
@@ -44,6 +45,12 @@ AGENT_IDENTIFIER_KEYS = {
     "pi": "id",
 }
 PI_IGNORED_EVENT_TYPES = {"message_update", "tool_execution_update"}
+PI_TOOL_TIMEOUT_EXTENSION_RELATIVE_PATH = Path(
+    ".latch_eval_tools", "tool_timeout.js"
+)
+PI_TOOL_TIMEOUT_EXTENSION_CONTAINER_PATH = (
+    f"/workspace/{PI_TOOL_TIMEOUT_EXTENSION_RELATIVE_PATH}"
+)
 
 
 def teardown_container(container_name: str) -> None:
@@ -106,6 +113,7 @@ def _build_agent_command(
         if resume_identifier is not None:
             agent_cmd.extend(["--session", resume_identifier])
         agent_cmd.extend(["--thinking", "xhigh"])
+        agent_cmd.extend(["--extension", PI_TOOL_TIMEOUT_EXTENSION_CONTAINER_PATH])
     else:
         raise ValueError(f"Unknown agent type: {agent_type}")
 
@@ -208,6 +216,15 @@ def _run_cli_agent(
 
     ensure_docker_image(docker_image)
     agent_dir = get_agent_workspace_dir(work_dir)
+    if agent_type == "pi":
+        extension_path = agent_dir / PI_TOOL_TIMEOUT_EXTENSION_RELATIVE_PATH
+        extension_path.parent.mkdir(parents=True, exist_ok=True)
+        extension_source = (
+            files("latch_eval_tools")
+            .joinpath("pi_extensions", PI_TOOL_TIMEOUT_EXTENSION_RELATIVE_PATH.name)
+            .read_text(encoding="utf-8")
+        )
+        extension_path.write_text(extension_source, encoding="utf-8")
     env_flags: list[str] = []
     ENV_KEYS = {}
     if agent_type == "claudecode":
