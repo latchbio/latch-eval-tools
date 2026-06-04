@@ -120,6 +120,17 @@ def _patch_agent_for_progress(log_file, trajectory_file: Path, agent_class):
     agent_class._latch_progress_patch_applied = True
 
 
+def _deep_override(base: dict, override: dict) -> dict:
+    print("Applying model config override:")
+    result = base.copy()
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = _deep_override(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
 def get_model_kwargs(model_name: str) -> dict[str, Any]:
     if model_name in {"openai/gpt-5.5", "openai/gpt-5.4", "openai/gpt-5.3-codex", "openai/gpt-5.3", "openai/gpt-5.2"}:
         return {"model_kwargs": {"reasoning": {"effort": "xhigh"}},"model_class":"litellm_response"}
@@ -330,7 +341,7 @@ def run_minisweagent_task(
         effective_agent_config: dict[str, Any] = config["agent"] | (agent_config if isinstance(agent_config, dict) else {})
         effective_env_config: dict[str, Any] = config["environment"] | (env_config if isinstance(env_config, dict) else {})
         effective_model_config: dict[str, Any] = (
-            config["model"] | get_model_kwargs(model_name) | (model_config if isinstance(model_config, dict) else {})
+            config["model"] | _deep_override(get_model_kwargs(model_name), model_config if isinstance(model_config, dict) else {})
         )
         if not docker_image:
             raise ValueError("docker_image is required for mini-swe Docker execution")

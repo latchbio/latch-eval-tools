@@ -29,6 +29,7 @@ def run_openaicodex_task(
     eval_timeout: int = EVAL_TIMEOUT,
     docker_image: str = DEFAULT_DOCKER_IMAGE,
     memory_limit_bytes: int | None = None,
+    extra_args: list[str] | None = None,
 ) -> dict:
     openai_key = os.environ.get("OPENAI_API_KEY")
     codex_key = os.environ.get("CODEX_API_KEY")
@@ -47,6 +48,7 @@ def run_openaicodex_task(
         model_name=model_name,
         eval_timeout=eval_timeout,
         model_map=MODEL_MAP,
+        extra_args=extra_args,
         docker_image=docker_image,
         memory_limit_bytes=memory_limit_bytes,
     )

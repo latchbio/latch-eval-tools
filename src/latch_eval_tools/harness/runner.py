@@ -155,6 +155,14 @@ class EvalRunner:
                         print(f"   {key}: {value}")
             else:
                 print(f"\nWarning: Unknown grader type '{grader_type}'")
+        
+        if agent_metadata:
+            metadata_path = work_dir / "metadata.json"
+            try:
+                metadata_path.write_text(json.dumps(agent_metadata, indent=2))
+                print(f"Saved metadata to {metadata_path}")
+            except Exception as e:
+                print(f"Warning: Failed to save metadata: {e}")
 
         print("\n" + "=" * 80)
         print("Cleanup...")
