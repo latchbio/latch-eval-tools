@@ -47,7 +47,6 @@ reliably-available command, prefer the standalone `uv tool` / `pipx` install abo
 
 ```bash
 uvx --from latch-eval-tools latch-eval run ...   # one-off, no install
-python -m latch_eval_tools.cli run ...           # if the package is importable
 ```
 
 ## What is included
@@ -106,7 +105,7 @@ Requires Docker, a provider API key for the chosen harness (e.g.
 `ANTHROPIC_API_KEY`), and `~/.latch/token` (via `latch login`) for `data_node`
 downloads. The command exits non-zero on FAIL / NO GRADE. Note: only a single
 `grader` is graded; evals using a multi-grader `graders` list run but produce no
-local grade. Equivalent: `python -m latch_eval_tools.cli run ...`.
+local grade.
 
 Run workspaces are written under `./.latch-eval-runs/` relative to where you
 invoke `latch-eval` (overridable with `--output-dir`), so they never land inside
