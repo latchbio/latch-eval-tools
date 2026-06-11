@@ -66,8 +66,21 @@ def build_parser():
         help="Keep the workspace (trajectory.json, agent_output.log, eval_answer.json) "
         "after the run. On by default for the authoring loop.",
     )
-    run_p.add_argument("--cache-name", default=".eval_cache", help="Dataset cache directory name.")
-    run_p.add_argument("--workspace-name", default=".eval_workspace", help="Workspace directory name.")
+    run_p.add_argument(
+        "--output-dir",
+        default=".latch-eval-runs",
+        metavar="DIR",
+        help="Directory (relative to the current working directory by default) "
+        "to hold run workspaces, as <output-dir>/[run-id/]<eval_id>/. "
+        "Default: ./.latch-eval-runs",
+    )
+    run_p.add_argument(
+        "--cache-dir",
+        default="~/.cache/latch-eval",
+        metavar="DIR",
+        help="Shared directory for the downloaded-data cache (reused across runs "
+        "and projects). Default: ~/.cache/latch-eval",
+    )
     run_p.add_argument("--benchmark-name", default="Eval", help="Display name for the benchmark.")
     run_p.add_argument("--json-out", default=None, help="Write a structured result JSON to this path.")
     run_p.add_argument(

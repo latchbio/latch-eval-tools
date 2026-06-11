@@ -50,10 +50,14 @@ def run_command(args):
         eval_path,
         keep_workspace=args.keep_workspace,
         run_id=args.run_id,
-        cache_name=args.cache_name,
-        workspace_name=args.workspace_name,
         benchmark_name=args.benchmark_name,
         data_node_override=args.data,
+        # Anchor workspaces to the invocation directory (--output-dir is the runs
+        # dir itself, so workspace_name="" places eval dirs directly inside it),
+        # and the dataset cache to a shared user-level location.
+        work_root=Path(args.output_dir).expanduser().resolve(),
+        workspace_name="",
+        cache_dir=Path(args.cache_dir).expanduser(),
     )
 
     agent_function = build_agent_function(

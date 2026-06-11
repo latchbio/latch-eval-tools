@@ -8,3 +8,4 @@ __pycache__
 output
 .eval_workspace/
 /workspace/
+.latch-eval-runs/

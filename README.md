@@ -54,6 +54,8 @@ latch-eval run -e evals/de03.json --harness minisweagent --model anthropic/claud
 
 - `--json-out PATH` — write a structured result (`passed`, `grader_result`, `agent_answer`, `metadata`)
 - `--keep-workspace` / `--no-keep-workspace` — keep run artifacts (default: keep)
+- `--output-dir DIR` — where run workspaces go, as `<output-dir>/[run-id/]<eval_id>/` (default: `./.latch-eval-runs`, relative to the current directory)
+- `--cache-dir DIR` — shared downloaded-data cache, reused across runs/projects (default: `~/.cache/latch-eval`)
 - `--data PATH` — stage a local file/dir as `/workspace/data`, bypassing the eval's `data_node` download (repeatable)
 - `--eval-timeout SECONDS`, `--docker-image IMAGE`, `--run-id ID`
 - `--no-preflight` — skip the Docker / API-key / Latch-token checks
@@ -64,10 +66,16 @@ downloads. The command exits non-zero on FAIL / NO GRADE. Note: only a single
 `grader` is graded; evals using a multi-grader `graders` list run but produce no
 local grade. Equivalent: `python -m latch_eval_tools.cli run ...`.
 
-`latch://` data nodes are downloaded once into `.eval_cache/` and hardlinked into
-each run's workspace, so re-running an eval does not re-download. Use `--data` to
-point at data already on disk and skip Latch entirely. Local paths and `file://`
+Run workspaces are written under `./.latch-eval-runs/` relative to where you
+invoke `latch-eval` (overridable with `--output-dir`), so they never land inside
+the installed package. `latch://` data nodes are downloaded once into the shared
+cache (`~/.cache/latch-eval`) and hardlinked into each run's workspace, so
+re-running an eval — from any directory — does not re-download. Use `--data` to
+point at data already on disk and skip Latch entirely; local paths and `file://`
 URIs also work directly as `data_node` values.
+
+(Library callers of `EvalRunner` are unaffected: without `work_root` / `cache_dir`,
+workspaces and cache still resolve under the project root as before.)
 
 ## Graders
 

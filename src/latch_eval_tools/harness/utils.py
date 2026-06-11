@@ -182,33 +182,38 @@ def get_project_root():
     return Path.cwd()
 
 
-def get_cache_dir(cache_name: str = ".eval_cache"):
+def get_cache_dir(cache_name: str = ".eval_cache", cache_dir: str | Path | None = None):
     """Get cache directory for datasets.
-    
+
     Args:
         cache_name: Name of cache directory (default: .eval_cache)
                    Can be customized per benchmark (e.g., .scbench, .spatialbench)
+        cache_dir: Explicit cache directory to use verbatim. When provided this
+                   overrides the default ``<project_root>/<cache_name>/cache``
+                   location (e.g. a shared user-level cache). Bypasses
+                   ``get_project_root()`` entirely so it is robust regardless of
+                   how the package is installed.
     """
-    project_root = get_project_root()
-    cache_dir = project_root / cache_name / "cache"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    return cache_dir
+    if cache_dir is not None:
+        resolved = Path(cache_dir).expanduser()
+    else:
+        resolved = get_project_root() / cache_name / "cache"
+    resolved.mkdir(parents=True, exist_ok=True)
+    return resolved
 
 
-def get_cache_manifest(cache_name: str = ".eval_cache"):
+def get_cache_manifest(cache_name: str = ".eval_cache", cache_dir: str | Path | None = None):
     """Load cache manifest tracking downloaded datasets."""
-    cache_dir = get_cache_dir(cache_name)
-    manifest_file = cache_dir / "manifest.json"
+    manifest_file = get_cache_dir(cache_name, cache_dir) / "manifest.json"
 
     if manifest_file.exists():
         return json.loads(manifest_file.read_text())
     return {}
 
 
-def save_cache_manifest(manifest: dict, cache_name: str = ".eval_cache"):
+def save_cache_manifest(manifest: dict, cache_name: str = ".eval_cache", cache_dir: str | Path | None = None):
     """Save cache manifest."""
-    cache_dir = get_cache_dir(cache_name)
-    manifest_file = cache_dir / "manifest.json"
+    manifest_file = get_cache_dir(cache_name, cache_dir) / "manifest.json"
     manifest_file.write_text(json.dumps(manifest, indent=2))
 
 
@@ -225,14 +230,15 @@ def _files_in_cached_dataset(path: Path) -> list[Path]:
     return [path]
 
 
-def download_single_dataset(uri: str, show_progress: bool = True, cache_name: str = ".eval_cache") -> Path:
+def download_single_dataset(uri: str, show_progress: bool = True, cache_name: str = ".eval_cache", cache_dir: str | Path | None = None) -> Path:
     """Download a single dataset with caching.
-    
+
     Args:
         uri: URI of dataset to download (e.g., latch://...)
         show_progress: Whether to print progress messages
         cache_name: Name of cache directory
-    
+        cache_dir: Explicit cache directory (see ``get_cache_dir``).
+
     Returns:
         Path to cached file or directory.
     """
@@ -245,11 +251,11 @@ def download_single_dataset(uri: str, show_progress: bool = True, cache_name: st
             print(f"Using local data (no download): {local_path}")
         return local_path
 
-    cache_dir = get_cache_dir(cache_name)
-    manifest = get_cache_manifest(cache_name)
+    resolved_cache_dir = get_cache_dir(cache_name, cache_dir)
+    manifest = get_cache_manifest(cache_name, cache_dir)
 
     if uri in manifest:
-        cached_file = cache_dir / manifest[uri]
+        cached_file = resolved_cache_dir / manifest[uri]
         if cached_file.exists():
             if show_progress:
                 print(f"Using cached: {Path(uri).name}")
@@ -258,7 +264,7 @@ def download_single_dataset(uri: str, show_progress: bool = True, cache_name: st
     remote_name = LPath(uri).name() or Path(uri).name or "data"
     cache_key = hashlib.sha256(uri.encode()).hexdigest()[:16]
     cache_rel_path = str(Path(cache_key) / remote_name)
-    cached_file = cache_dir / cache_rel_path
+    cached_file = resolved_cache_dir / cache_rel_path
 
     if show_progress:
         print(f"Downloading: {uri}")
@@ -268,7 +274,7 @@ def download_single_dataset(uri: str, show_progress: bool = True, cache_name: st
         print(f"Cached as: {cache_rel_path}")
 
     manifest[uri] = cache_rel_path
-    save_cache_manifest(manifest, cache_name)
+    save_cache_manifest(manifest, cache_name, cache_dir)
 
     return cached_file
 
@@ -296,14 +302,15 @@ def get_agent_workspace_mount_args(agent_dir: Path) -> list[str]:
     ]
 
 
-def download_data(data_node: str | list[str], work_dir: Path, cache_name: str = ".eval_cache") -> list[dict]:
+def download_data(data_node: str | list[str], work_dir: Path, cache_name: str = ".eval_cache", cache_dir: str | Path | None = None) -> list[dict]:
     """Download data files into the workspace data directory.
-    
+
     Args:
         data_node: Single URI or list of URIs to download
         work_dir: Working directory to stage data files in
         cache_name: Name of cache directory
-    
+        cache_dir: Explicit cache directory (see ``get_cache_dir``).
+
     Returns:
         List of contextual data dicts with file info
     """
@@ -314,7 +321,7 @@ def download_data(data_node: str | list[str], work_dir: Path, cache_name: str = 
     contextual_data = []
 
     for node in data_nodes:
-        cached_dataset = download_single_dataset(node, cache_name=cache_name)
+        cached_dataset = download_single_dataset(node, cache_name=cache_name, cache_dir=cache_dir)
         cached_files = _files_in_cached_dataset(cached_dataset)
         if _is_remote_uri(node):
             data_filename = LPath(node).name() or Path(node).name or "data"
@@ -377,23 +384,29 @@ def batch_download_datasets(uris: list[str], show_progress: bool = True, cache_n
         print()
 
 
-def setup_workspace(eval_id: str, run_id: str | None = None, workspace_name: str = ".eval_workspace") -> Path:
+def setup_workspace(eval_id: str, run_id: str | None = None, workspace_name: str = ".eval_workspace", root_dir: str | Path | None = None) -> Path:
     """Setup workspace directory for evaluation.
-    
+
     Args:
         eval_id: ID of evaluation
         run_id: Optional run ID for organizing multiple runs
         workspace_name: Name of workspace directory (default: .eval_workspace)
                        Can be customized per benchmark (e.g., .scbench, .spatialbench)
-    
+        root_dir: Explicit base directory for the workspace. When provided,
+                  workspaces are written to ``<root_dir>/<workspace_name>/[run_id/]eval_id``
+                  (bypassing ``get_project_root()``, so it is robust regardless of
+                  install mode). When omitted, the legacy
+                  ``<project_root>/<workspace_name>/workspace/[run_id/]eval_id``
+                  layout is preserved for library callers.
+
     Returns:
         Path to workspace directory
     """
-    project_root = get_project_root()
-    if run_id:
-        work_dir = project_root / workspace_name / "workspace" / run_id / eval_id
+    if root_dir is not None:
+        base = Path(root_dir).expanduser() / workspace_name
     else:
-        work_dir = project_root / workspace_name / "workspace" / eval_id
+        base = get_project_root() / workspace_name / "workspace"
+    work_dir = base / run_id / eval_id if run_id else base / eval_id
 
     if work_dir.exists():
         import shutil
