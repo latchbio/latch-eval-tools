@@ -1,11 +1,7 @@
 """Command line interface for latch-eval-tools.
 
-The implementation is split across ``app`` (parser + entry point), ``run`` (the
-``run`` subcommand), ``harnesses`` (harness dispatch), and ``preflight`` (checks).
-``main`` is re-exported here so the ``latch-eval`` console script entry point
-(``latch_eval_tools.cli:main``) keeps working.
+The implementation lives in sibling modules: ``app`` (argument parser + the
+``main`` entry point), ``run`` (the ``run`` subcommand), ``harnesses`` (harness
+dispatch), and ``preflight`` (checks). The ``latch-eval`` console script points
+directly at ``latch_eval_tools.cli.app:main``.
 """
-
-from latch_eval_tools.cli.app import main
-
-__all__ = ["main"]
