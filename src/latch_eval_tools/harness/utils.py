@@ -26,6 +26,18 @@ PROMPT_TEMPLATE_ENVIRONMENT = Environment(
 
 
 
+def _is_remote_uri(uri: str) -> bool:
+    """True for URIs that must be fetched (latch://, s3://, http(s)://, ...).
+
+    Local filesystem paths and ``file://`` URIs return False so they can be
+    staged in place without any download.
+    """
+    if uri.startswith("file://"):
+        return False
+    scheme = uri.split("://", 1)[0] if "://" in uri else ""
+    return bool(scheme)
+
+
 def ensure_docker_image(image: str) -> None:
     result = subprocess.run(
         ["docker", "image", "inspect", image],
@@ -224,6 +236,15 @@ def download_single_dataset(uri: str, show_progress: bool = True, cache_name: st
     Returns:
         Path to cached file or directory.
     """
+    if not _is_remote_uri(uri):
+        raw = uri[len("file://"):] if uri.startswith("file://") else uri
+        local_path = Path(raw).expanduser().resolve()
+        if not local_path.exists():
+            raise FileNotFoundError(f"Local data path does not exist: {local_path}")
+        if show_progress:
+            print(f"Using local data (no download): {local_path}")
+        return local_path
+
     cache_dir = get_cache_dir(cache_name)
     manifest = get_cache_manifest(cache_name)
 
@@ -295,7 +316,10 @@ def download_data(data_node: str | list[str], work_dir: Path, cache_name: str = 
     for node in data_nodes:
         cached_dataset = download_single_dataset(node, cache_name=cache_name)
         cached_files = _files_in_cached_dataset(cached_dataset)
-        data_filename = LPath(node).name() or Path(node).name or "data"
+        if _is_remote_uri(node):
+            data_filename = LPath(node).name() or Path(node).name or "data"
+        else:
+            data_filename = cached_dataset.name or "data"
         target_root = data_dir / data_filename
         if target_root.is_symlink() or target_root.is_file():
             target_root.unlink()
@@ -314,8 +338,14 @@ def download_data(data_node: str | list[str], work_dir: Path, cache_name: str = 
                 target_file.unlink()
             elif target_file.is_dir():
                 shutil.rmtree(target_file)
-            target_file.hardlink_to(cached_file)
-            print(f"Linked: {mount_path} -> workspace/data")
+            try:
+                target_file.hardlink_to(cached_file)
+                print(f"Linked: {mount_path} -> workspace/data")
+            except OSError:
+                # Hardlinks can't span filesystems (common when --data lives on a
+                # different volume than the workspace); fall back to a real copy.
+                shutil.copy2(cached_file, target_file)
+                print(f"Copied: {mount_path} -> workspace/data")
 
             contextual_data.append({
                 "type": "File",

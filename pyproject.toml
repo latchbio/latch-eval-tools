@@ -23,6 +23,9 @@ dependencies = [
     "litellm~=1.87.0",
     "jinja2~=3.1",
 ]
+[project.scripts]
+latch-eval = "latch_eval_tools.cli:main"
+
 [tool.hatch.metadata]
 allow-direct-references = true
 

@@ -38,6 +38,37 @@ print(result["grader_result"].reasoning if result["grader_result"] else "No grad
 
 If your agent writes `eval_answer.json` in `work_dir`, the runner will load it automatically.
 
+## CLI
+
+Installing the package adds a `latch-eval` command that wraps `EvalRunner` so you
+can run a single eval JSON end-to-end (download data → run an agent in a Docker
+sandbox → grade) without writing any Python:
+
+```bash
+latch-eval run -e evals/count_cells.json --harness claudecode
+latch-eval run -e evals/de03.json --harness minisweagent --model anthropic/claude-sonnet-4-6
+```
+
+`--harness` is required: one of `claudecode`, `minisweagent`, `openaicodex`,
+`pi`. `minisweagent` also requires `--model`. Useful flags:
+
+- `--json-out PATH` — write a structured result (`passed`, `grader_result`, `agent_answer`, `metadata`)
+- `--keep-workspace` / `--no-keep-workspace` — keep run artifacts (default: keep)
+- `--data PATH` — stage a local file/dir as `/workspace/data`, bypassing the eval's `data_node` download (repeatable)
+- `--eval-timeout SECONDS`, `--docker-image IMAGE`, `--run-id ID`
+- `--no-preflight` — skip the Docker / API-key / Latch-token checks
+
+Requires Docker, a provider API key for the chosen harness (e.g.
+`ANTHROPIC_API_KEY`), and `~/.latch/token` (via `latch login`) for `data_node`
+downloads. The command exits non-zero on FAIL / NO GRADE. Note: only a single
+`grader` is graded; evals using a multi-grader `graders` list run but produce no
+local grade. Equivalent: `python -m latch_eval_tools.cli run ...`.
+
+`latch://` data nodes are downloaded once into `.eval_cache/` and hardlinked into
+each run's workspace, so re-running an eval does not re-download. Use `--data` to
+point at data already on disk and skip Latch entirely. Local paths and `file://`
+URIs also work directly as `data_node` values.
+
 ## Graders
 
 Available grader types:

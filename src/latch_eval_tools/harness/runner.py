@@ -21,7 +21,8 @@ class EvalRunner:
         run_id: str | None = None,
         cache_name: str = ".eval_cache",
         workspace_name: str = ".eval_workspace",
-        benchmark_name: str = "Eval"
+        benchmark_name: str = "Eval",
+        data_node_override: str | list[str] | None = None,
     ):
         """Initialize evaluation runner.
         
@@ -39,6 +40,7 @@ class EvalRunner:
         self.cache_name = cache_name
         self.workspace_name = workspace_name
         self.benchmark_name = benchmark_name
+        self.data_node_override = data_node_override
 
         if not self.eval_path.exists():
             raise FileNotFoundError(f"Eval file not found: {self.eval_path}")
@@ -72,7 +74,12 @@ class EvalRunner:
         print("Staging data files...")
         print("=" * 80)
 
-        download_data(self.test_case.data_node or [], work_dir, self.cache_name)
+        data_nodes = (
+            self.data_node_override
+            if self.data_node_override is not None
+            else (self.test_case.data_node or [])
+        )
+        download_data(data_nodes, work_dir, self.cache_name)
 
         task_prompt = self.test_case.task
 
