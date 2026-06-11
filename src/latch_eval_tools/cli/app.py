@@ -6,15 +6,11 @@ eval JSON can be run end-to-end (download data -> run an agent in a Docker sandb
 
     latch-eval run --eval evals/QC01.json --harness claudecode
     latch-eval run -e evals/DE03.json --harness minisweagent --model anthropic/claude-sonnet-4-6
-
-This is the fast local feedback loop for eval authoring: draft a JSON, run it
-against a real agent, read the grader's verdict and the agent trajectory.
 """
 
 import argparse
 
-from latch_eval_tools.cli.harnesses import HARNESSES
-from latch_eval_tools.cli.run import run_command
+from latch_eval_tools.cli.runner import run_command, HARNESSES
 
 
 def build_parser():
