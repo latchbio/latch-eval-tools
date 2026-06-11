@@ -22,6 +22,7 @@ dependencies = [
     "mini-swe-agent~=2.2",
     "litellm~=1.87.0",
     "jinja2~=3.1",
+    "python-dotenv>=1.0.0",
 ]
 [project.scripts]
 latch-eval = "latch_eval_tools.cli.app:main"

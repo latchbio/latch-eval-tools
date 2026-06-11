@@ -9,8 +9,23 @@ eval JSON can be run end-to-end (download data -> run an agent in a Docker sandb
 """
 
 import argparse
+import sys
 
-from latch_eval_tools.cli.runner import run_command, HARNESSES
+from dotenv import find_dotenv, load_dotenv
+from latch_eval_tools.cli.run import run_command, HARNESSES
+
+
+def _load_dotenv(env_file):
+    """Load environment variables from a .env file if one is around.
+
+    With no explicit path, discovers a .env from the current working directory
+    upward (so the file where you invoke the command is found) and loads it
+    without overriding variables already set in the real environment.
+    """
+    path = env_file or find_dotenv(usecwd=True)
+    if path:
+        load_dotenv(path, override=False)
+        print(f"[env] loaded environment variables from {path}", file=sys.stderr)
 
 
 def build_parser():
@@ -84,6 +99,13 @@ def build_parser():
         action="store_true",
         help="Skip the Docker / API key / Latch token preflight checks.",
     )
+    run_p.add_argument(
+        "--env-file",
+        default=None,
+        metavar="PATH",
+        help="Load environment variables from this .env file. By default a .env "
+        "found from the current directory upward is auto-loaded.",
+    )
     run_p.set_defaults(func=run_command)
     return parser
 
@@ -91,4 +113,5 @@ def build_parser():
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
+    _load_dotenv(args.env_file)
     return args.func(args)

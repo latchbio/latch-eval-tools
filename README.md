@@ -98,8 +98,16 @@ latch-eval run -e evals/de03.json --harness minisweagent --model anthropic/claud
 - `--output-dir DIR` — where run workspaces go, as `<output-dir>/[run-id/]<eval_id>/` (default: `./.latch-eval-runs`, relative to the current directory)
 - `--cache-dir DIR` — shared downloaded-data cache, reused across runs/projects (default: `~/.cache/latch-eval`)
 - `--data PATH` — stage a local file/dir as `/workspace/data`, bypassing the eval's `data_node` download (repeatable)
+- `--env-file PATH` — load environment variables from a specific `.env` (otherwise auto-discovered, see below)
 - `--eval-timeout SECONDS`, `--docker-image IMAGE`, `--run-id ID`
 - `--no-preflight` — skip the Docker / API-key / Latch-token checks
+
+**Environment / `.env`:** on startup the CLI auto-loads a `.env` file found by
+walking up from the current directory, so you don't have to `source .env` or
+export keys before a run. It never overrides variables already set in your real
+environment, and point it at a specific file with `--env-file PATH`. Put your
+provider keys (e.g. `ANTHROPIC_API_KEY`) there. (Don't commit `.env` — add it to
+your project's `.gitignore`.)
 
 Requires Docker, a provider API key for the chosen harness (e.g.
 `ANTHROPIC_API_KEY`), and `~/.latch/token` (via `latch login`) for `data_node`
