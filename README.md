@@ -4,8 +4,50 @@ Shared eval tools for single-cell bench, spatial bench, and future biology bench
 
 ## Installation
 
+### Get the `latch-eval` CLI on your PATH (recommended)
+
+Install it as a **standalone tool**. This is isolated and puts `latch-eval` on
+your PATH from any directory — it does **not** depend on which Python / conda env
+(or whether any) is active, which avoids the "command lives in an env that isn't
+active" and "wrong env shadows the command" problems:
+
 ```bash
-pip install latch-eval-tools
+# from PyPI (once a release including the CLI is published):
+uv tool install latch-eval-tools          # or: pipx install latch-eval-tools
+
+# from a local checkout (current dev / pre-release) — --editable keeps edits live:
+uv tool install --editable .
+
+# or straight from the branch:
+uv tool install "git+https://github.com/latchbio/latch-eval-tools.git@add-eval-run-cli"
+```
+
+If the tool shim directory isn't on PATH yet, wire it up once (then restart your shell):
+
+```bash
+uv tool update-shell                      # uv (adds ~/.local/bin)
+# pipx equivalent: pipx ensurepath
+```
+
+Verify: `latch-eval --help` and `which latch-eval`.
+
+### Use as a Python library
+
+```bash
+pip install latch-eval-tools              # into a venv / conda env
+```
+
+Note: a plain `pip install` registers the `latch-eval` script inside *that*
+environment's `bin/`, so the command is only on PATH while that env is **active**
+(`conda activate <env>` / `source .venv/bin/activate`), and after installing into
+a freshly-active env you may need `hash -r` (zsh: `rehash`) or a new shell. For a
+reliably-available command, prefer the standalone `uv tool` / `pipx` install above.
+
+### Run without putting anything on PATH
+
+```bash
+uvx --from latch-eval-tools latch-eval run ...   # one-off, no install
+python -m latch_eval_tools.cli run ...           # if the package is importable
 ```
 
 ## What is included
