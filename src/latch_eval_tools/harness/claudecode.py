@@ -21,6 +21,7 @@ def run_claudecode_task(
     eval_timeout: int = EVAL_TIMEOUT,
     docker_image: str = DEFAULT_DOCKER_IMAGE,
     memory_limit_bytes: int | None = None,
+    extra_args: list[str] | None = None,
 ) -> dict:
     if not os.environ.get("ANTHROPIC_API_KEY"):
         raise ValueError("ANTHROPIC_API_KEY environment variable is required for Claude Code")
@@ -33,6 +34,7 @@ def run_claudecode_task(
         model_name=model_name,
         eval_timeout=eval_timeout,
         model_map=MODEL_MAP,
+        extra_args=extra_args,
         docker_image=docker_image,
         memory_limit_bytes=memory_limit_bytes,
     )

@@ -18,6 +18,7 @@ def run_pi_task(
     eval_timeout: int = EVAL_TIMEOUT,
     docker_image: str = DEFAULT_DOCKER_IMAGE,
     memory_limit_bytes: int | None = None,
+    extra_args: list[str] | None = None,
 ) -> dict:
     return _run_cli_agent(
         agent_type="pi",
@@ -26,6 +27,7 @@ def run_pi_task(
         work_dir=work_dir,
         model_name=_map_model_name(model_name),
         eval_timeout=eval_timeout,
+        extra_args=extra_args,
         docker_image=docker_image,
         memory_limit_bytes=memory_limit_bytes,
     )

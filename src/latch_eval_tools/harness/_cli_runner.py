@@ -67,6 +67,38 @@ def teardown_container(container_name: str) -> None:
                 print(f"Failed to remove container {container_name}: {stderr}")
     except Exception as exc:
         print(f"Failed to remove container {container_name}: {exc}")
+    
+
+def _apply_extra_args(cmd: list[str], extra_args: list[str]) -> list[str]:
+    cmd = list(cmd)
+    i = 0
+    while i < len(extra_args):
+        arg = extra_args[i]
+        # Check if the current flag has a corresponding value
+        has_value = i + 1 < len(extra_args) and not extra_args[i + 1].startswith("-")
+        if has_value:
+            value = extra_args[i + 1]
+            if arg == "-c":
+                # match by config key, not just flag
+                config_key = value.split("=")[0]
+                replaced = False
+                for j, cmd_arg in enumerate(cmd):
+                    if cmd_arg == "-c" and j + 1 < len(cmd) and cmd[j + 1].split("=")[0] == config_key:
+                        cmd[j + 1] = value
+                        replaced = True
+                        break
+                if not replaced:
+                    cmd.extend(["-c", value])
+            elif arg in cmd:
+                cmd[cmd.index(arg) + 1] = value
+            else:
+                cmd.extend([arg, value])
+            i += 2
+        else:
+            if arg not in cmd:
+                cmd.append(arg)
+            i += 1
+    return cmd 
 
 
 def _build_agent_command(
@@ -74,7 +106,7 @@ def _build_agent_command(
     cli_command: list[str],
     model_name: str | None,
     model_map: dict[str, str] | None,
-    claude_code_extra_args: list[str] | None,
+    extra_args: list[str] | None = None,
     resume_identifier: str | None = None,
 ) -> list[str]:
     if agent_type == "claudecode":
@@ -90,10 +122,10 @@ def _build_agent_command(
                 "--verbose",
                 "--output-format",
                 "stream-json",
+                "--tools",
+                "Bash",
             ]
         )
-        if claude_code_extra_args:
-            agent_cmd.extend(claude_code_extra_args)
     elif agent_type == "openaicodex":
         agent_cmd = list(cli_command)
         if resume_identifier is not None:
@@ -124,6 +156,10 @@ def _build_agent_command(
         agent_cmd.extend(["--model", model_name])
     if agent_type != "pi" and resume_identifier is not None:
         agent_cmd.append(resume_identifier)
+
+    if extra_args:
+        agent_cmd = _apply_extra_args(agent_cmd, extra_args)
+
     return agent_cmd
 
 
@@ -195,7 +231,7 @@ def _run_cli_agent(
     model_name: str | None = None,
     eval_timeout: int = EVAL_TIMEOUT,
     model_map: dict[str, str] | None = None,
-    claude_code_extra_args: list[str] | None = ["--tools", "Bash"],
+    extra_args: list[str] | None = None,
     docker_image: str = DEFAULT_DOCKER_IMAGE,
     memory_limit_bytes: int | None = None,
 ) -> dict:
@@ -303,7 +339,7 @@ def _run_cli_agent(
                     cli_command=cli_command,
                     model_name=model_name,
                     model_map=model_map,
-                    claude_code_extra_args=claude_code_extra_args,
+                    extra_args=extra_args,
                     resume_identifier=resume_identifier,
                 )
 
@@ -559,6 +595,7 @@ def _run_cli_agent(
         oom_detected=oom_detected,
         oom_restarts=oom_restarts,
         memory_limit_bytes=memory_limit_bytes,
+        agent_cmd=agent_cmd
     )
 
     return {"answer": agent_answer, "metadata": metadata}
@@ -575,11 +612,13 @@ def _extract_metadata(
     oom_detected: bool,
     oom_restarts: int,
     memory_limit_bytes: int,
+    agent_cmd: list[str] | None = None
 ) -> dict:
     metadata = {
         "duration_s": round(duration, 2),
         "model": model_name,
         "memory_limit_bytes": memory_limit_bytes,
+        "agent_cmd": agent_cmd
     }
 
     if agent_type == "claudecode":
