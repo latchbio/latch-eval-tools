@@ -384,7 +384,7 @@ def _run_cli_agent(
                             )
 
                         try:
-                            if eval_answer_file.exists():
+                            if agent_type == "pi" and eval_answer_file.exists():
                                 json.loads(eval_answer_file.read_text())
                                 answer_submitted = True
                                 process.terminate()
