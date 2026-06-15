@@ -4,7 +4,13 @@ predicate-leaves and nested composites."""
 from typing import Any
 
 from .base import BinaryGrader, GraderResult
-from .predicate import SCALAR_OPS, _apply_role, evaluate_predicate, resolve_jsonpath
+from .predicate import (
+    SCALAR_OPS,
+    _apply_role,
+    evaluate_predicate,
+    resolve_answer_field,
+    resolve_jsonpath,
+)
 
 # shared helper functions vv
 
@@ -36,7 +42,7 @@ def _bind_field(value: Any, field: Any) -> Any:
         return value
     if isinstance(field, str) and field.startswith("$"):
         try:
-            return resolve_jsonpath(value, field)
+            return resolve_answer_field(value, field)
         except ValueError:
             return None
     if isinstance(value, dict) and isinstance(field, str):

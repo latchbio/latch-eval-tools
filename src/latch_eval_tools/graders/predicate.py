@@ -267,7 +267,7 @@ def _resolve_field(agent_answer: Any, answer_field: Any) -> tuple[Any, str, str 
         )
     if answer_field.startswith("$"):
         try:
-            return resolve_jsonpath(agent_answer, answer_field), answer_field, None
+            return resolve_answer_field(agent_answer, answer_field), answer_field, None
         except ValueError as exc:
             return None, answer_field, f"invalid jsonpath in answer_field: {exc}"
     if not isinstance(agent_answer, dict):
@@ -313,3 +313,10 @@ def _fail_grade(
         score=0.0,
         field_scores={},
     )
+
+
+def resolve_answer_field(value: Any, path: str) -> Any:
+    matches = resolve_jsonpath(value, path)
+    if "[*]" in path:
+        return matches
+    return matches[0] if matches else None
