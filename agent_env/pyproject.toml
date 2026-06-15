@@ -66,6 +66,7 @@ dependencies = [
     "scikit-misc",
     "scipy",
     "scrublet",
+    "scvi-tools",
     "seaborn",
     "setuptools<82",
     "six",
@@ -85,4 +86,3 @@ dependencies = [
 
 [tool.uv.extra-build-dependencies]
 pygeos = ["setuptools<82"]
-
