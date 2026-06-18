@@ -36,12 +36,12 @@ COPY --from=node:22-bookworm-slim /usr/local/lib/node_modules /usr/local/lib/nod
 RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
     ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx && \
     npm config set prefix /root/.local && \
-    npm install -g @openai/codex@0.125.0 @earendil-works/pi-coding-agent@0.78.1
+    npm install -g @openai/codex@0.139.0 @earendil-works/pi-coding-agent@0.79.1
 
 # Claude Code
 RUN curl -fsSL https://claude.ai/install.sh | bash
 ENV PATH="/root/.local/bin:$PATH"
-RUN claude install 2.1.119
+RUN claude install 2.1.174
 
 # R (from CRAN for a recent release on Bookworm)
 RUN curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x95C0FAF38DB3CCAD0C080A7BDC78B2DDEABC47B7" \
