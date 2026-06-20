@@ -246,6 +246,8 @@ def _run_cli_agent(
                 "PI_SKIP_VERSION_CHECK=1",
                 "-e",
                 "PI_TELEMETRY=0",
+                "-e",
+                "NODE_OPTIONS=--max-old-space-size=8192",
             ]
         )
     if memory_limit_bytes is None:
