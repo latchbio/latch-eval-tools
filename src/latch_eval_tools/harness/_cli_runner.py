@@ -207,7 +207,7 @@ def _run_cli_agent(
     model_name: str | None = None,
     eval_timeout: int = EVAL_TIMEOUT,
     model_map: dict[str, str] | None = None,
-    claude_code_extra_args: list[str] | None = ["--tools", "Bash"],
+    claude_code_extra_args: list[str] | None = None,
     docker_image: str = DEFAULT_DOCKER_IMAGE,
     memory_limit_bytes: int | None = None,
 ) -> dict:
