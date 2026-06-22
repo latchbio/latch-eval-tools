@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 
 from latch_eval_tools.harness._cli_runner import _run_cli_agent, EVAL_TIMEOUT
-from latch_eval_tools.harness.utils import DEFAULT_DOCKER_IMAGE
+from latch_eval_tools.harness.utils import DEFAULT_DOCKER_IMAGE, load_data_instructions
 
 MODEL_MAP = {
     "anthropic/claude-opus-4-6": "claude-opus-4-6",
@@ -22,6 +22,7 @@ def run_claudecode_task(
     eval_timeout: int = EVAL_TIMEOUT,
     docker_image: str = DEFAULT_DOCKER_IMAGE,
     memory_limit_bytes: int | None = None,
+    prompt_suffix: str | None = load_data_instructions(),
 ) -> dict:
     if not os.environ.get("ANTHROPIC_API_KEY"):
         raise ValueError("ANTHROPIC_API_KEY environment variable is required for Claude Code")
@@ -36,4 +37,5 @@ def run_claudecode_task(
         model_map=MODEL_MAP,
         docker_image=docker_image,
         memory_limit_bytes=memory_limit_bytes,
+        prompt_suffix=prompt_suffix,
     )
