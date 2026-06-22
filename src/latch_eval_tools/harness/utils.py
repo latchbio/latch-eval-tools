@@ -115,6 +115,12 @@ def render_packaged_prompt(filename: str, **template_values: object) -> str:
     )
 
 
+def prompt_with_suffix(task_prompt: str, prompt_suffix: str | None = None) -> str:
+    if prompt_suffix in (None, ""):
+        return task_prompt
+    return f"{task_prompt}\n{prompt_suffix}"
+
+
 def _inspect_docker_container_state(
     container_name: str,
     state_field: str,

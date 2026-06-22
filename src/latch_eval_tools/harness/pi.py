@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from latch_eval_tools.harness._cli_runner import _run_cli_agent, EVAL_TIMEOUT
-from latch_eval_tools.harness.utils import DEFAULT_DOCKER_IMAGE
+from latch_eval_tools.harness.utils import DEFAULT_DOCKER_IMAGE, load_data_instructions
 
 
 def _map_model_name(model_name: str | None) -> str | None:
@@ -18,6 +18,7 @@ def run_pi_task(
     eval_timeout: int = EVAL_TIMEOUT,
     docker_image: str = DEFAULT_DOCKER_IMAGE,
     memory_limit_bytes: int | None = None,
+    prompt_suffix: str | None = load_data_instructions(),
 ) -> dict:
     return _run_cli_agent(
         agent_type="pi",
@@ -28,4 +29,5 @@ def run_pi_task(
         eval_timeout=eval_timeout,
         docker_image=docker_image,
         memory_limit_bytes=memory_limit_bytes,
+        prompt_suffix=prompt_suffix,
     )

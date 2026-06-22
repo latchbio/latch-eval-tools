@@ -16,8 +16,8 @@ from latch_eval_tools.harness.utils import (
     get_memory_limit_bytes,
     is_docker_container_oom_killed,
     is_docker_container_running,
-    load_data_instructions,
     load_trajectory_identifier,
+    prompt_with_suffix,
     render_packaged_prompt,
 )
 
@@ -210,12 +210,12 @@ def _run_cli_agent(
     claude_code_extra_args: list[str] | None = None,
     docker_image: str = DEFAULT_DOCKER_IMAGE,
     memory_limit_bytes: int | None = None,
+    prompt_suffix: str | None = None,
 ) -> dict:
     agent_log_file = work_dir / "agent_output.log"
     if agent_log_file.exists():
         agent_log_file.unlink()
-    # todo(tim): clean up instructions based on early exit
-    enhanced_prompt = f"{task_prompt}\n{load_data_instructions()}"
+    enhanced_prompt = prompt_with_suffix(task_prompt, prompt_suffix)
 
     env = os.environ.copy()
 
