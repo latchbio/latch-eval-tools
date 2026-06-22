@@ -19,6 +19,7 @@ from latch_eval_tools.harness.utils import (
     get_memory_limit_bytes,
     is_docker_container_oom_killed,
     is_docker_container_running,
+    load_data_instructions,
     prompt_with_suffix,
     read_packaged_prompt,
     render_packaged_prompt,
@@ -161,7 +162,7 @@ def run_minisweagent_task(
     eval_timeout: int = EVAL_TIMEOUT,
     docker_image: str = DEFAULT_DOCKER_IMAGE,
     memory_limit_bytes: int | None = None,
-    prompt_suffix: str | None = None,
+    prompt_suffix: str | None = load_data_instructions(),
 ) -> dict:
     """Run MiniSWE agent on a task.
     
