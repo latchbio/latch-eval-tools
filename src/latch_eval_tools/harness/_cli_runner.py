@@ -187,6 +187,39 @@ def _start_cli_container(container_name: str) -> None:
         raise e
 
 
+def _extract_last_message(trajectory: list[dict], agent_type: str) -> str:
+    """Best-effort extract the agent's last assistant message from a CLI
+    trajectory. Used by completion mode to surface a non-null agent_answer.
+    Trajectory shape varies per CLI (claudecode/codex stream different events
+    than pi), so this is permissive — any string that looks like assistant
+    output works.
+    """
+    for event in reversed(trajectory):
+        if not isinstance(event, dict):
+            continue
+        message = event.get("message")
+        if isinstance(message, dict) and message.get("role") == "assistant":
+            content = message.get("content")
+            if isinstance(content, str) and content.strip() != "":
+                return content
+            if isinstance(content, list):
+                # Anthropic-style content blocks: [{"type":"text","text":"..."}]
+                for block in reversed(content):
+                    if (
+                        isinstance(block, dict)
+                        and block.get("type") == "text"
+                        and isinstance(block.get("text"), str)
+                        and block["text"].strip() != ""
+                    ):
+                        return block["text"]
+        # codex/claudecode sometimes emit top-level {"type":"text","text":...}
+        if event.get("type") == "text":
+            text = event.get("text")
+            if isinstance(text, str) and text.strip() != "":
+                return text
+    return ""
+
+
 def _pi_clean_exit_needs_resume(attempt_events: list[dict]) -> bool:
     for event in reversed(attempt_events):
         if event.get("type") == "compaction_end":
@@ -573,7 +606,9 @@ def _run_cli_agent(
         return agent_log_file.read_text()[-1000:]
 
     if completion:
-        # completion mode has no answer file. agent_answer stays None.
+        # completion mode has no answer file. Surface the agent's last
+        # message (extracted from the streamed trajectory) so downstream
+        # consumers have something more useful than ``null``.
         if not finished_file.exists():
             if timed_out:
                 error_msg = "Agent timed out"
@@ -587,6 +622,12 @@ def _run_cli_agent(
                 "log_tail": _log_tail(),
             }
             print(f"\nWarning: {error_msg}")
+        else:
+            last_message = _extract_last_message(trajectory, agent_type)
+            agent_answer = {
+                "last_message": last_message,
+                "finished_file_contents": finished_file.read_text(),
+            }
     elif not eval_answer_file.exists():
         if timed_out:
             error_msg = "Agent timed out"

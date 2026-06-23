@@ -441,8 +441,9 @@ def run_minisweagent_task(
 
         finished_file = agent_dir / "finished.txt"
         if completion:
-            # completion mode has no answer file. The agent's only signal is
-            # finished.txt; agent_answer stays None.
+            # completion mode has no answer file. Surface the agent's last
+            # assistant message as agent_answer so downstream consumers have
+            # something more useful than ``null``.
             if not finished_file.exists():
                 if timed_out:
                     error_msg = "Agent timed out"
@@ -457,6 +458,22 @@ def run_minisweagent_task(
                     "log_tail": _agent_log_tail(),
                 }
                 print(f"\nWarning: {error_msg}. {_trajectory_info()}")
+            else:
+                last_message = ""
+                if agent is not None and getattr(agent, "messages", None):
+                    for msg in reversed(agent.messages):
+                        if not isinstance(msg, dict):
+                            continue
+                        if msg.get("role") != "assistant":
+                            continue
+                        content = msg.get("content")
+                        if isinstance(content, str) and content.strip() != "":
+                            last_message = content
+                            break
+                agent_answer = {
+                    "last_message": last_message,
+                    "finished_file_contents": finished_file.read_text(),
+                }
         elif not eval_answer_file.exists():
             if timed_out:
                 error_msg = "Agent timed out"
