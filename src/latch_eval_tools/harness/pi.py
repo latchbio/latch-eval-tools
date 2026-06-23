@@ -19,6 +19,7 @@ def run_pi_task(
     docker_image: str = DEFAULT_DOCKER_IMAGE,
     memory_limit_bytes: int | None = None,
     prompt_suffix: str | None = load_data_instructions(),
+    completion: bool = False,
 ) -> dict:
     return _run_cli_agent(
         agent_type="pi",
@@ -30,4 +31,5 @@ def run_pi_task(
         docker_image=docker_image,
         memory_limit_bytes=memory_limit_bytes,
         prompt_suffix=prompt_suffix,
+        completion=completion,
     )
