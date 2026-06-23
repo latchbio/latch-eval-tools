@@ -162,10 +162,11 @@ def run_minisweagent_task(
     eval_timeout: int = EVAL_TIMEOUT,
     docker_image: str = DEFAULT_DOCKER_IMAGE,
     memory_limit_bytes: int | None = None,
+    inline_submission: bool = False,
     prompt_suffix: str | None = load_data_instructions(),
 ) -> dict:
     """Run MiniSWE agent on a task.
-    
+
     Args:
         task_prompt: Task description for the agent
         work_dir: Working directory for the agent
@@ -173,7 +174,12 @@ def run_minisweagent_task(
         agent_config: Optional agent configuration dict
         operation_timeout: Timeout for individual operations (seconds)
         eval_timeout: Timeout for entire evaluation (seconds)
-    
+        inline_submission: When True, the agent submits its final JSON answer
+            inline after the completion marker (in stdout). Skips the
+            eval_answer.json existence gate in _check_finished and reads the
+            answer from the Submitted exception's submission text instead of
+            disk.
+
     Returns:
         dict with keys "answer" (parsed JSON or None) and "metadata"
     """
@@ -275,7 +281,7 @@ def run_minisweagent_task(
             lines = output.get("output", "").lstrip().splitlines(keepends=True)
             if lines and lines[0].strip() == self.completion_marker and output["returncode"] == 0:
                 submission = "".join(lines[1:])
-                if not (agent_dir / "eval_answer.json").exists():
+                if not inline_submission and not (agent_dir / "eval_answer.json").exists():
                     return
                 raise Submitted(
                     {
@@ -404,15 +410,55 @@ def run_minisweagent_task(
         agent_answer = None
         error_details = None
 
-        if not eval_answer_file.exists():
-            agent_log_file = work_dir / "agent_output.log"
-            log_tail = ""
-            if agent_log_file.exists():
-                log_content = agent_log_file.read_text()
-                log_tail = log_content[-1000:]
+        def _agent_log_tail() -> str:
+            log_file = work_dir / "agent_output.log"
+            if not log_file.exists():
+                return ""
+            return log_file.read_text()[-1000:]
 
-            trajectory_info = f"Agent had {len(agent.messages)} message exchanges."
+        def _trajectory_info() -> str:
+            if agent is None:
+                return "Agent did not initialize."
+            return f"Agent had {len(agent.messages)} message exchanges."
 
+        if inline_submission:
+            submission_text = ""
+            if agent is not None and getattr(agent, "messages", None):
+                last = agent.messages[-1]
+                if isinstance(last, dict) and last.get("role") == "exit":
+                    submission_text = (last.get("extra") or {}).get("submission") or ""
+
+            if eval_answer_file.exists():
+                print(
+                    "\nWarning: inline_submission=True but eval_answer.json was "
+                    "written to disk; the prompt may not be migrated to the "
+                    "inline-submission contract."
+                )
+
+            if submission_text.strip() == "":
+                if timed_out:
+                    error_msg = "Agent timed out"
+                elif agent_error is not None:
+                    error_msg = f"{type(agent_error).__name__}: {agent_error}"
+                else:
+                    error_msg = "Agent did not submit an inline answer"
+                error_details = {
+                    "error": error_msg,
+                    "timed_out": timed_out,
+                    "trajectory_info": _trajectory_info(),
+                    "log_tail": _agent_log_tail(),
+                }
+                print(f"\nWarning: {error_msg}. {_trajectory_info()}")
+            else:
+                try:
+                    agent_answer = json.loads(submission_text)
+                except json.JSONDecodeError as e:
+                    error_details = {
+                        "error": f"Failed to parse inline submission as JSON: {e}",
+                        "submission_head": submission_text[:500],
+                    }
+                    print(f"\nWarning: Failed to parse inline submission as JSON: {e}")
+        elif not eval_answer_file.exists():
             if timed_out:
                 error_msg = "Agent timed out"
             elif agent_error is not None:
@@ -422,10 +468,10 @@ def run_minisweagent_task(
             error_details = {
                 "error": error_msg,
                 "timed_out": timed_out,
-                "trajectory_info": trajectory_info,
-                "log_tail": log_tail
+                "trajectory_info": _trajectory_info(),
+                "log_tail": _agent_log_tail(),
             }
-            print(f"\nWarning: {error_msg}. {trajectory_info}")
+            print(f"\nWarning: {error_msg}. {_trajectory_info()}")
         else:
             try:
                 agent_answer = json.loads(eval_answer_file.read_text())
