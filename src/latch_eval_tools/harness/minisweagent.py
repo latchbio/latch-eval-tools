@@ -20,6 +20,7 @@ from latch_eval_tools.harness.utils import (
     is_docker_container_oom_killed,
     is_docker_container_running,
     load_data_instructions,
+    prompt_with_suffix,
     read_packaged_prompt,
     render_packaged_prompt,
 )
@@ -162,6 +163,7 @@ def run_minisweagent_task(
     docker_image: str = DEFAULT_DOCKER_IMAGE,
     memory_limit_bytes: int | None = None,
     inline_submission: bool = False,
+    prompt_suffix: str | None = load_data_instructions(),
 ) -> dict:
     """Run MiniSWE agent on a task.
 
@@ -329,9 +331,7 @@ def run_minisweagent_task(
 
 
 
-        enhanced_prompt = task_prompt
-
-        enhanced_prompt = f"{task_prompt}\n{load_data_instructions()}"
+        enhanced_prompt = prompt_with_suffix(task_prompt, prompt_suffix)
         config = yaml.safe_load(read_packaged_prompt("miniswe_config.yaml"))
         effective_agent_config: dict[str, Any] = config["agent"] | (agent_config if isinstance(agent_config, dict) else {})
         effective_env_config: dict[str, Any] = config["environment"] | (env_config if isinstance(env_config, dict) else {})

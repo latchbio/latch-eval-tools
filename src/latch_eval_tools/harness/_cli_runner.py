@@ -16,8 +16,8 @@ from latch_eval_tools.harness.utils import (
     get_memory_limit_bytes,
     is_docker_container_oom_killed,
     is_docker_container_running,
-    load_data_instructions,
     load_trajectory_identifier,
+    prompt_with_suffix,
     render_packaged_prompt,
 )
 
@@ -187,6 +187,18 @@ def _start_cli_container(container_name: str) -> None:
         raise e
 
 
+def _pi_clean_exit_needs_resume(attempt_events: list[dict]) -> bool:
+    for event in reversed(attempt_events):
+        if event.get("type") == "compaction_end":
+            return event.get("aborted") is not True
+
+        message = event.get("message") or {}
+        if message.get("role") == "assistant" and message.get("stopReason") == "length":
+            return True
+
+    return False
+
+
 def _run_cli_agent(
     agent_type: str,
     cli_command: list[str],
@@ -195,15 +207,15 @@ def _run_cli_agent(
     model_name: str | None = None,
     eval_timeout: int = EVAL_TIMEOUT,
     model_map: dict[str, str] | None = None,
-    claude_code_extra_args: list[str] | None = ["--tools", "Bash"],
+    claude_code_extra_args: list[str] | None = None,
     docker_image: str = DEFAULT_DOCKER_IMAGE,
     memory_limit_bytes: int | None = None,
+    prompt_suffix: str | None = None,
 ) -> dict:
     agent_log_file = work_dir / "agent_output.log"
     if agent_log_file.exists():
         agent_log_file.unlink()
-    # todo(tim): clean up instructions based on early exit
-    enhanced_prompt = f"{task_prompt}\n{load_data_instructions()}"
+    enhanced_prompt = prompt_with_suffix(task_prompt, prompt_suffix)
 
     env = os.environ.copy()
 
@@ -246,6 +258,8 @@ def _run_cli_agent(
                 "PI_SKIP_VERSION_CHECK=1",
                 "-e",
                 "PI_TELEMETRY=0",
+                "-e",
+                "NODE_OPTIONS=--max-old-space-size=8192",
             ]
         )
     if memory_limit_bytes is None:
@@ -298,6 +312,7 @@ def _run_cli_agent(
                     log_file.flush()
                     break
 
+                attempt_start_index = len(trajectory)
                 agent_cmd = _build_agent_command(
                     agent_type=agent_type,
                     cli_command=cli_command,
@@ -406,6 +421,7 @@ def _run_cli_agent(
                 stdout_thread.join(timeout=5)
                 stderr_thread.join(timeout=5)
                 last_return_code = process.returncode
+                attempt_events = trajectory[attempt_start_index:]
                 if answer_submitted:
                     log_file.write("\n\nDetected eval_answer.json, stopping agent\n")
                     log_file.flush()
@@ -419,6 +435,31 @@ def _run_cli_agent(
                     break
 
                 if last_return_code == 0:
+                    if (
+                        agent_type == "pi"
+                        and not eval_answer_file.exists()
+                        and _pi_clean_exit_needs_resume(attempt_events)
+                    ):
+                        persist_trajectory()
+                        resume_identifier = load_trajectory_identifier(
+                            trajectory_file,
+                            AGENT_IDENTIFIER_KEYS["pi"],
+                        )
+                        if resume_identifier is None:
+                            agent_error = RuntimeError(
+                                "pi compacted or hit length before emitting "
+                                "a session id"
+                            )
+                            break
+
+                        log_file.write(
+                            "\n\nPi compacted or hit length before writing "
+                            "eval_answer.json; resuming session "
+                            f"{resume_identifier}\n"
+                        )
+                        log_file.flush()
+                        prompt_text = "Continue."
+                        continue
                     break
 
                 container_running = is_docker_container_running(container_name)
