@@ -18,6 +18,7 @@ def run_pi_task(
     eval_timeout: int = EVAL_TIMEOUT,
     docker_image: str = DEFAULT_DOCKER_IMAGE,
     memory_limit_bytes: int | None = None,
+    system_prompt: str | None = None,
     prompt_suffix: str | None = load_data_instructions(),
     completion: bool = False,
 ) -> dict:
@@ -30,6 +31,7 @@ def run_pi_task(
         eval_timeout=eval_timeout,
         docker_image=docker_image,
         memory_limit_bytes=memory_limit_bytes,
+        system_prompt=system_prompt,
         prompt_suffix=prompt_suffix,
         completion=completion,
     )

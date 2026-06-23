@@ -162,8 +162,9 @@ def run_minisweagent_task(
     eval_timeout: int = EVAL_TIMEOUT,
     docker_image: str = DEFAULT_DOCKER_IMAGE,
     memory_limit_bytes: int | None = None,
-    completion: bool = False,
+    system_prompt: str | None = None,
     prompt_suffix: str | None = load_data_instructions(),
+    completion: bool = False,
 ) -> dict:
     """Run MiniSWE agent on a task.
 
@@ -352,6 +353,8 @@ def run_minisweagent_task(
         enhanced_prompt = prompt_with_suffix(task_prompt, prompt_suffix)
         config = yaml.safe_load(read_packaged_prompt("miniswe_config.yaml"))
         effective_agent_config: dict[str, Any] = config["agent"] | (agent_config if isinstance(agent_config, dict) else {})
+        if system_prompt not in (None, ""):
+            effective_agent_config["system_template"] = "{{ latch_system_prompt }}"
         effective_env_config: dict[str, Any] = config["environment"] | (env_config if isinstance(env_config, dict) else {})
         effective_model_config: dict[str, Any] = (
             config["model"] | get_model_kwargs(model_name) | (model_config if isinstance(model_config, dict) else {})
@@ -400,7 +403,10 @@ def run_minisweagent_task(
         signal.alarm(eval_timeout)
 
         try:
-            agent.run(enhanced_prompt)
+            agent.run(
+                enhanced_prompt,
+                latch_system_prompt=system_prompt or "",
+            )
         except AgentTimeoutError:
             timed_out = True
             print(f"\nAgent timed out after {eval_timeout} seconds")
