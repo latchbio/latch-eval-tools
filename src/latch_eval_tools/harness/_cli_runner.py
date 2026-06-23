@@ -636,18 +636,25 @@ def _run_cli_agent(
                 "finished_file_contents": finished_file.read_text(),
             }
     elif not eval_answer_file.exists():
-        if timed_out:
-            error_msg = "Agent timed out"
-        elif agent_error is not None:
-            error_msg = f"{type(agent_error).__name__}: {agent_error}"
+        if finished_file.exists():
+            last_message = _extract_last_message(trajectory, agent_type)
+            agent_answer = {
+                "last_message": last_message,
+                "finished_file_contents": finished_file.read_text(),
+            }
         else:
-            error_msg = "Agent did not create eval_answer.json"
-        error_details = {
-            "error": error_msg,
-            "timed_out": timed_out,
-            "log_tail": _log_tail(),
-        }
-        print(f"\nWarning: {error_msg}")
+            if timed_out:
+                error_msg = "Agent timed out"
+            elif agent_error is not None:
+                error_msg = f"{type(agent_error).__name__}: {agent_error}"
+            else:
+                error_msg = "no final answer provided (either eval_answer.json or finished.txt)"
+            error_details = {
+                "error": error_msg,
+                "timed_out": timed_out,
+                "log_tail": _log_tail(),
+            }
+            print(f"\nWarning: {error_msg}")
     else:
         try:
             agent_answer = json.loads(eval_answer_file.read_text())

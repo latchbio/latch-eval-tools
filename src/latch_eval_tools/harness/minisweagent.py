@@ -481,19 +481,36 @@ def run_minisweagent_task(
                     "finished_file_contents": finished_file.read_text(),
                 }
         elif not eval_answer_file.exists():
-            if timed_out:
-                error_msg = "Agent timed out"
-            elif agent_error is not None:
-                error_msg = f"{type(agent_error).__name__}: {agent_error}"
+            if finished_file.exists():
+                last_message = ""
+                if agent is not None and getattr(agent, "messages", None):
+                    for msg in reversed(agent.messages):
+                        if not isinstance(msg, dict):
+                            continue
+                        if msg.get("role") != "assistant":
+                            continue
+                        content = msg.get("content")
+                        if isinstance(content, str) and content.strip() != "":
+                            last_message = content
+                            break
+                agent_answer = {
+                    "last_message": last_message,
+                    "finished_file_contents": finished_file.read_text(),
+                }
             else:
-                error_msg = "Agent did not create eval_answer.json"
-            error_details = {
-                "error": error_msg,
-                "timed_out": timed_out,
-                "trajectory_info": _trajectory_info(),
-                "log_tail": _agent_log_tail(),
-            }
-            print(f"\nWarning: {error_msg}. {_trajectory_info()}")
+                if timed_out:
+                    error_msg = "Agent timed out"
+                elif agent_error is not None:
+                    error_msg = f"{type(agent_error).__name__}: {agent_error}"
+                else:
+                    error_msg = "no final answer provided (either eval_answer.json or finished.txt)"
+                error_details = {
+                    "error": error_msg,
+                    "timed_out": timed_out,
+                    "trajectory_info": _trajectory_info(),
+                    "log_tail": _agent_log_tail(),
+                }
+                print(f"\nWarning: {error_msg}. {_trajectory_info()}")
         else:
             try:
                 agent_answer = json.loads(eval_answer_file.read_text())
