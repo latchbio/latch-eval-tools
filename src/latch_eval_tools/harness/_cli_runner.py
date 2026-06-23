@@ -76,6 +76,7 @@ def _build_agent_command(
     model_map: dict[str, str] | None,
     claude_code_extra_args: list[str] | None,
     resume_identifier: str | None = None,
+    system_prompt: str | None = None,
 ) -> list[str]:
     if agent_type == "claudecode":
         agent_cmd = list(cli_command)
@@ -94,6 +95,8 @@ def _build_agent_command(
         )
         if claude_code_extra_args:
             agent_cmd.extend(claude_code_extra_args)
+        if system_prompt not in (None, ""):
+            agent_cmd.extend(["--system-prompt", system_prompt])
     elif agent_type == "openaicodex":
         agent_cmd = list(cli_command)
         if resume_identifier is not None:
@@ -114,6 +117,8 @@ def _build_agent_command(
             agent_cmd.extend(["--session", resume_identifier])
         agent_cmd.extend(["--thinking", "xhigh"])
         agent_cmd.extend(["--extension", PI_TOOL_TIMEOUT_EXTENSION_CONTAINER_PATH])
+        if system_prompt not in (None, ""):
+            agent_cmd.extend(["--system-prompt", system_prompt])
     else:
         raise ValueError(f"Unknown agent type: {agent_type}")
 
@@ -243,6 +248,7 @@ def _run_cli_agent(
     claude_code_extra_args: list[str] | None = None,
     docker_image: str = DEFAULT_DOCKER_IMAGE,
     memory_limit_bytes: int | None = None,
+    system_prompt: str | None = None,
     prompt_suffix: str | None = None,
     completion: bool = False,
 ) -> dict:
@@ -355,6 +361,7 @@ def _run_cli_agent(
                     model_map=model_map,
                     claude_code_extra_args=claude_code_extra_args,
                     resume_identifier=resume_identifier,
+                    system_prompt=system_prompt,
                 )
 
                 process = subprocess.Popen(
