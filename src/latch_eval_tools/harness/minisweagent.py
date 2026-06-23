@@ -162,7 +162,7 @@ def run_minisweagent_task(
     eval_timeout: int = EVAL_TIMEOUT,
     docker_image: str = DEFAULT_DOCKER_IMAGE,
     memory_limit_bytes: int | None = None,
-    inline_submission: bool = False,
+    completion: bool = False,
     prompt_suffix: str | None = load_data_instructions(),
 ) -> dict:
     """Run MiniSWE agent on a task.
@@ -174,11 +174,8 @@ def run_minisweagent_task(
         agent_config: Optional agent configuration dict
         operation_timeout: Timeout for individual operations (seconds)
         eval_timeout: Timeout for entire evaluation (seconds)
-        inline_submission: When True, the agent submits its final JSON answer
-            inline after the completion marker (in stdout). Skips the
-            eval_answer.json existence gate in _check_finished and reads the
-            answer from the Submitted exception's submission text instead of
-            disk.
+        completion: When True, completion is signaled by the agent writing the
+            file ``finished.txt`` in its workspace
 
     Returns:
         dict with keys "answer" (parsed JSON or None) and "metadata"
@@ -277,11 +274,32 @@ def run_minisweagent_task(
             return output
 
         def _check_finished(self, output: dict):
-            """Raises Submitted if the output indicates task completion."""
+            """Raises Submitted when the agent has signaled completion.
+
+            With ``completion=True`` the agent signals completion by writing
+            ``finished.txt`` into its workspace. The marker-based protocol is
+            disabled in that mode.
+            """
+            if completion:
+                finished_file = agent_dir / "finished.txt"
+                if not finished_file.exists():
+                    return
+                try:
+                    submission = finished_file.read_text()
+                except OSError:
+                    submission = ""
+                raise Submitted(
+                    {
+                        "role": "exit",
+                        "content": submission,
+                        "extra": {"exit_status": "Submitted", "submission": submission},
+                    }
+                )
+
             lines = output.get("output", "").lstrip().splitlines(keepends=True)
             if lines and lines[0].strip() == self.completion_marker and output["returncode"] == 0:
                 submission = "".join(lines[1:])
-                if not inline_submission and not (agent_dir / "eval_answer.json").exists():
+                if not (agent_dir / "eval_answer.json").exists():
                     return
                 raise Submitted(
                     {
@@ -421,27 +439,17 @@ def run_minisweagent_task(
                 return "Agent did not initialize."
             return f"Agent had {len(agent.messages)} message exchanges."
 
-        if inline_submission:
-            submission_text = ""
-            if agent is not None and getattr(agent, "messages", None):
-                last = agent.messages[-1]
-                if isinstance(last, dict) and last.get("role") == "exit":
-                    submission_text = (last.get("extra") or {}).get("submission") or ""
-
-            if eval_answer_file.exists():
-                print(
-                    "\nWarning: inline_submission=True but eval_answer.json was "
-                    "written to disk; the prompt may not be migrated to the "
-                    "inline-submission contract."
-                )
-
-            if submission_text.strip() == "":
+        finished_file = agent_dir / "finished.txt"
+        if completion:
+            # completion mode has no answer file. The agent's only signal is
+            # finished.txt; agent_answer stays None.
+            if not finished_file.exists():
                 if timed_out:
                     error_msg = "Agent timed out"
                 elif agent_error is not None:
                     error_msg = f"{type(agent_error).__name__}: {agent_error}"
                 else:
-                    error_msg = "Agent did not submit an inline answer"
+                    error_msg = "Agent did not create finished.txt"
                 error_details = {
                     "error": error_msg,
                     "timed_out": timed_out,
@@ -449,15 +457,6 @@ def run_minisweagent_task(
                     "log_tail": _agent_log_tail(),
                 }
                 print(f"\nWarning: {error_msg}. {_trajectory_info()}")
-            else:
-                try:
-                    agent_answer = json.loads(submission_text)
-                except json.JSONDecodeError as e:
-                    error_details = {
-                        "error": f"Failed to parse inline submission as JSON: {e}",
-                        "submission_head": submission_text[:500],
-                    }
-                    print(f"\nWarning: Failed to parse inline submission as JSON: {e}")
         elif not eval_answer_file.exists():
             if timed_out:
                 error_msg = "Agent timed out"

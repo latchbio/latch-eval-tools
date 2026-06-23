@@ -23,6 +23,7 @@ def run_claudecode_task(
     docker_image: str = DEFAULT_DOCKER_IMAGE,
     memory_limit_bytes: int | None = None,
     prompt_suffix: str | None = load_data_instructions(),
+    completion: bool = False,
 ) -> dict:
     if not os.environ.get("ANTHROPIC_API_KEY"):
         raise ValueError("ANTHROPIC_API_KEY environment variable is required for Claude Code")
@@ -38,4 +39,5 @@ def run_claudecode_task(
         docker_image=docker_image,
         memory_limit_bytes=memory_limit_bytes,
         prompt_suffix=prompt_suffix,
+        completion=completion,
     )

@@ -211,6 +211,7 @@ def _run_cli_agent(
     docker_image: str = DEFAULT_DOCKER_IMAGE,
     memory_limit_bytes: int | None = None,
     prompt_suffix: str | None = None,
+    completion: bool = False,
 ) -> dict:
     agent_log_file = work_dir / "agent_output.log"
     if agent_log_file.exists():
@@ -274,6 +275,7 @@ def _run_cli_agent(
     trajectory_file = work_dir / "trajectory.json"
     trajectory_file.write_text(json.dumps(trajectory, indent=2))
     eval_answer_file = agent_dir / "eval_answer.json"
+    finished_file = agent_dir / "finished.txt"
     oom_detected = False
     oom_restarts = 0
 
@@ -399,16 +401,20 @@ def _run_cli_agent(
                             )
 
                         try:
-                            if agent_type == "pi" and eval_answer_file.exists():
-                                json.loads(eval_answer_file.read_text())
-                                answer_submitted = True
-                                process.terminate()
-                                try:
-                                    process.wait(timeout=10)
-                                except subprocess.TimeoutExpired:
-                                    process.kill()
-                                    process.wait()
-                                break
+                            if agent_type == "pi":
+                                if completion and finished_file.exists():
+                                    answer_submitted = True
+                                elif not completion and eval_answer_file.exists():
+                                    json.loads(eval_answer_file.read_text())
+                                    answer_submitted = True
+                                if answer_submitted:
+                                    process.terminate()
+                                    try:
+                                        process.wait(timeout=10)
+                                    except subprocess.TimeoutExpired:
+                                        process.kill()
+                                        process.wait()
+                                    break
                         except (json.JSONDecodeError, OSError):
                             pass
 
@@ -561,12 +567,27 @@ def _run_cli_agent(
     agent_answer = None
     error_details = None
 
-    if not eval_answer_file.exists():
-        log_tail = ""
-        if agent_log_file.exists():
-            log_content = agent_log_file.read_text()
-            log_tail = log_content[-1000:]
+    def _log_tail() -> str:
+        if not agent_log_file.exists():
+            return ""
+        return agent_log_file.read_text()[-1000:]
 
+    if completion:
+        # completion mode has no answer file. agent_answer stays None.
+        if not finished_file.exists():
+            if timed_out:
+                error_msg = "Agent timed out"
+            elif agent_error is not None:
+                error_msg = f"{type(agent_error).__name__}: {agent_error}"
+            else:
+                error_msg = "Agent did not create finished.txt"
+            error_details = {
+                "error": error_msg,
+                "timed_out": timed_out,
+                "log_tail": _log_tail(),
+            }
+            print(f"\nWarning: {error_msg}")
+    elif not eval_answer_file.exists():
         if timed_out:
             error_msg = "Agent timed out"
         elif agent_error is not None:
@@ -576,7 +597,7 @@ def _run_cli_agent(
         error_details = {
             "error": error_msg,
             "timed_out": timed_out,
-            "log_tail": log_tail,
+            "log_tail": _log_tail(),
         }
         print(f"\nWarning: {error_msg}")
     else:
