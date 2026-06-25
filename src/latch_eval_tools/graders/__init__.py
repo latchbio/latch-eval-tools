@@ -8,6 +8,7 @@ from .multiple_choice import MultipleChoiceGrader
 from .refusal import RefusalVocabGrader
 from .predicate import PredicateLeafGrader
 from .composite import AllOfGrader, ListMatchGrader, DictMatchGrader
+from .longest_subsequence import LongestSubsequenceGrader
 from .helpers import grade_multiple_graders_single_answer  # noqa: E402 -- depends on GRADER_REGISTRY
 
 GRADER_REGISTRY = {
@@ -25,6 +26,7 @@ GRADER_REGISTRY = {
     "all_of": AllOfGrader,
     "list_match": ListMatchGrader,
     "dict_match": DictMatchGrader,
+    "longest_subsequence": LongestSubsequenceGrader,
 }
 
 
@@ -53,6 +55,7 @@ __all__ = [
     "AllOfGrader",
     "ListMatchGrader",
     "DictMatchGrader",
+    "LongestSubsequenceGrader",
     "GRADER_REGISTRY",
     "get_grader",
     "grade_multiple_graders_single_answer",
