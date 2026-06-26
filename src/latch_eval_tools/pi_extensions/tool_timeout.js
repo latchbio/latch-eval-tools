@@ -1,6 +1,11 @@
 import { pathToFileURL } from "node:url";
 
-const DEFAULT_BASH_TIMEOUT_SECONDS = 300;
+const FALLBACK_BASH_TIMEOUT_SECONDS = 300;
+const envBashTimeout = Number(process.env.PI_BASH_DEFAULT_TIMEOUT_SECONDS);
+const DEFAULT_BASH_TIMEOUT_SECONDS =
+  Number.isFinite(envBashTimeout) && envBashTimeout > 0
+    ? envBashTimeout
+    : FALLBACK_BASH_TIMEOUT_SECONDS;
 const PI_BASH_TOOL_PATH =
   "/root/.local/lib/node_modules/@earendil-works/pi-coding-agent/dist/core/tools/bash.js";
 
@@ -10,7 +15,7 @@ const { createBashToolDefinition } = await import(
 
 export default function(pi) {
   const bash = createBashToolDefinition(process.cwd());
-  bash.parameters.properties.timeout.description = "Timeout in seconds (300s default)";
+  bash.parameters.properties.timeout.description = `Timeout in seconds (${DEFAULT_BASH_TIMEOUT_SECONDS}s default)`;
 
   pi.registerTool({
     ...bash,

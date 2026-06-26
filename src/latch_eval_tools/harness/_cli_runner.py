@@ -251,6 +251,7 @@ def _run_cli_agent(
     system_prompt: str | None = None,
     prompt_suffix: str | None = None,
     completion: bool = False,
+    operation_timeout: int = 0,
 ) -> dict:
     agent_log_file = work_dir / "agent_output.log"
     if agent_log_file.exists():
@@ -302,6 +303,10 @@ def _run_cli_agent(
                 "NODE_OPTIONS=--max-old-space-size=8192",
             ]
         )
+        if operation_timeout > 0:
+            env_flags.extend(
+                ["-e", f"PI_BASH_DEFAULT_TIMEOUT_SECONDS={operation_timeout}"]
+            )
     if memory_limit_bytes is None:
         memory_limit_bytes = get_memory_limit_bytes()
     container_name = f"eval-{agent_type}-{uuid.uuid4().hex[:8]}"
