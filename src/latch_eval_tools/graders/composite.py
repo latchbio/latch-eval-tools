@@ -62,7 +62,7 @@ def _evaluate_leaf(leaf: dict, value: Any) -> tuple[str, bool, float, str, dict]
 
     try:
         raw = evaluate_predicate(predicate, value)
-    except (ValueError, KeyError, TypeError) as exc:
+    except (ValueError, TypeError) as exc:
         return kind, False, 0.0, label, {"error": str(exc), "role": role, "op": op}
 
     kind, passed, score = _apply_role(role, raw, is_scalar, threshold)
@@ -102,7 +102,7 @@ def _evaluate_all_of_child(
         )
     try:
         sub = get_grader(child_type).evaluate_answer(agent_answer, child_config)
-    except (ValueError, KeyError, TypeError) as exc:
+    except (ValueError, TypeError) as exc:
         return "scoring", False, 0.0, child_type, {"error": str(exc)}
     return (
         "scoring",
