@@ -39,6 +39,34 @@ def _longest_subsequence_fail(
     )
 
 
+def _parse_pass_threshold(
+    agent_answer: Any, answer_field: Any, config: dict
+) -> GraderResult | float:
+    scoring = config.get("scoring", {})
+    if not isinstance(scoring, dict):
+        return _longest_subsequence_fail(
+            agent_answer, answer_field, "'scoring' must be an object"
+        )
+
+    raw_threshold = scoring.get("pass_threshold", 1.0)
+    if isinstance(raw_threshold, bool) or not isinstance(raw_threshold, (int, float)):
+        return _longest_subsequence_fail(
+            agent_answer,
+            answer_field,
+            "'scoring.pass_threshold' must be a number in [0, 1]",
+        )
+
+    pass_threshold = float(raw_threshold)
+    if pass_threshold < 0.0 or pass_threshold > 1.0:
+        return _longest_subsequence_fail(
+            agent_answer,
+            answer_field,
+            "'scoring.pass_threshold' must be a number in [0, 1]",
+        )
+
+    return pass_threshold
+
+
 class LongestSubsequenceGrader(BinaryGrader):
     def evaluate_answer(self, agent_answer: dict, config: dict) -> GraderResult:
         answer_field = config.get("answer_field")
@@ -53,6 +81,10 @@ class LongestSubsequenceGrader(BinaryGrader):
             return _longest_subsequence_fail(
                 agent_answer, answer_field, "'ground_truth' must be a list of tuples"
             )
+
+        pass_threshold = _parse_pass_threshold(agent_answer, answer_field, config)
+        if isinstance(pass_threshold, GraderResult):
+            return pass_threshold
 
         agent_list = (
             agent_answer.get(answer_field) if isinstance(agent_answer, dict) else None
@@ -79,7 +111,7 @@ class LongestSubsequenceGrader(BinaryGrader):
         agent_length = len(normalized_agent)
         denominator = max(gt_length, agent_length, 1)
         score = lcs_length / denominator
-        passed = score == 1.0
+        passed = score >= pass_threshold
 
         return GraderResult(
             passed=passed,
@@ -89,9 +121,16 @@ class LongestSubsequenceGrader(BinaryGrader):
                 "gt_length": gt_length,
                 "agent_length": agent_length,
                 "denominator": denominator,
+                "pass_threshold": pass_threshold,
             },
             reasoning=_format_longest_subsequence(
-                answer_field, lcs_length, gt_length, agent_length, score, passed
+                answer_field,
+                lcs_length,
+                gt_length,
+                agent_length,
+                score,
+                pass_threshold,
+                passed,
             ),
             agent_answer=agent_answer,
             field_scores={answer_field: score},
@@ -104,12 +143,17 @@ def _format_longest_subsequence(
     gt_length: int,
     agent_length: int,
     score: float,
+    pass_threshold: float,
     passed: bool,
 ) -> str:
     verdict = "PASS" if passed else "FAIL"
     marker = "+" if passed else "x"
     lines = [
         f"longest_subsequence (answer_field={answer_field!r}): {verdict}",
-        f"  {marker} LCS={lcs_length} (gt_len={gt_length}, agent_len={agent_length}, score={score:.4f})",
+        (
+            f"  {marker} LCS={lcs_length} "
+            f"(gt_len={gt_length}, agent_len={agent_length}, "
+            f"score={score:.4f}, threshold={pass_threshold:.4f})"
+        ),
     ]
     return "\n".join(lines)
