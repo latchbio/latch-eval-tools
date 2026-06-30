@@ -9,6 +9,7 @@ from .refusal import RefusalVocabGrader
 from .predicate import PredicateLeafGrader
 from .composite import AllOfGrader, ListMatchGrader, DictMatchGrader
 from .longest_subsequence import LongestSubsequenceGrader
+from .completion import FinishedFileGrader
 from .helpers import grade_multiple_graders_single_answer  # noqa: E402 -- depends on GRADER_REGISTRY
 
 GRADER_REGISTRY = {
@@ -27,6 +28,7 @@ GRADER_REGISTRY = {
     "list_match": ListMatchGrader,
     "dict_match": DictMatchGrader,
     "longest_subsequence": LongestSubsequenceGrader,
+    "finished_file": FinishedFileGrader,
 }
 
 
@@ -56,6 +58,7 @@ __all__ = [
     "ListMatchGrader",
     "DictMatchGrader",
     "LongestSubsequenceGrader",
+    "FinishedFileGrader",
     "GRADER_REGISTRY",
     "get_grader",
     "grade_multiple_graders_single_answer",
