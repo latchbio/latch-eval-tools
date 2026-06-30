@@ -91,6 +91,7 @@ def _build_agent_command(
                 "--verbose",
                 "--output-format",
                 "stream-json",
+                "--include-partial-messages",
             ]
         )
         if claude_code_extra_args:
@@ -108,6 +109,14 @@ def _build_agent_command(
                 "--json",
                 "-c",
                 'model_reasoning_effort="xhigh"',
+                "-c",
+                'model_reasoning_summary="detailed"',
+                "-c",
+                "hide_agent_reasoning=false",
+                "-c",
+                "show_raw_agent_reasoning=true",
+                "-c",
+                "model_supports_reasoning_summaries=true",
             ]
         )
     elif agent_type == "pi":
@@ -235,6 +244,64 @@ def _pi_clean_exit_needs_resume(attempt_events: list[dict]) -> bool:
             return True
 
     return False
+
+
+def _append_codex_sidecar_reasoning(
+    work_dir: Path,
+    trajectory: list[dict],
+) -> int:
+    trajectory_file = work_dir / "trajectory.json"
+    thread_id = load_trajectory_identifier(trajectory_file, "thread_id")
+    if thread_id is None:
+        return 0
+
+    codex_dir = work_dir / AGENT_STATE_DIRS["openaicodex"]
+    if not codex_dir.exists():
+        return 0
+
+    existing_reasoning_ids = {
+        event.get("payload", {}).get("id")
+        for event in trajectory
+        if (
+            isinstance(event, dict)
+            and event.get("type") == "response_item"
+            and isinstance(event.get("payload"), dict)
+            and event["payload"].get("type") == "reasoning"
+        )
+    }
+
+    appended = 0
+    for source in sorted(codex_dir.rglob("*")):
+        if source.is_dir() or source.is_symlink() or thread_id not in source.name:
+            continue
+        for line in source.read_text().splitlines():
+            stripped = line.strip()
+            if stripped == "":
+                continue
+            try:
+                event = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict) or event.get("type") != "response_item":
+                continue
+            payload = event.get("payload")
+            if not isinstance(payload, dict) or payload.get("type") != "reasoning":
+                continue
+            payload_id = payload.get("id")
+            if payload_id in existing_reasoning_ids:
+                continue
+            trajectory.append(
+                {
+                    "type": "response_item",
+                    "source": "codex_sidecar",
+                    "timestamp": event.get("timestamp"),
+                    "payload": payload,
+                }
+            )
+            existing_reasoning_ids.add(payload_id)
+            appended += 1
+
+    return appended
 
 
 def _run_cli_agent(
@@ -603,6 +670,14 @@ def _run_cli_agent(
     print(
         f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Agent output saved to: {agent_log_file}"
     )
+
+    if agent_type == "openaicodex" and trajectory:
+        appended_reasoning = _append_codex_sidecar_reasoning(work_dir, trajectory)
+        if appended_reasoning > 0:
+            print(
+                "Appended "
+                f"{appended_reasoning} Codex reasoning item(s) from sidecar to trajectory"
+            )
 
     if trajectory:
         persist_trajectory()
