@@ -42,7 +42,9 @@ If your agent writes `eval_answer.json` in `work_dir`, the runner will load it a
 
 Available grader types:
 
-`numeric_tolerance`, `jaccard_label_set`, `distribution_comparison`, `marker_gene_precision_recall`, `marker_gene_separation`, `spatial_adjacency`, `multiple_choice`, `refusal_vocab`
+`numeric_tolerance`, `numeric_range`, `label_set_jaccard`, `jaccard_label_set`, `distribution_comparison`, `marker_gene_precision_recall`, `marker_gene_separation`, `spatial_adjacency`, `multiple_choice`, `refusal_vocab`, `predicate_leaf`, `all_of`, `list_match`, `dict_match`, `longest_subsequence`, `finished_file`
+
+`jaccard_label_set` is a backward-compatible alias of `label_set_jaccard`.
 
 ```python
 from latch_eval_tools.graders import get_grader
@@ -57,6 +59,13 @@ result = grader.evaluate_answer(
 )
 print(result.passed, result.reasoning)
 ```
+
+`longest_subsequence` grades an ordered list of tuples/lists using longest
+common subsequence. Configure `answer_field`, `ground_truth`, and optionally
+`scoring.pass_threshold`; the score is `lcs_length / max(gt_len, agent_len, 1)`.
+
+`finished_file` compares `finished_file_contents.strip()` against `config.expected`, defaulting to
+`"finished"`.
 
 `refusal_vocab` grades structured refusal decisions against fixed tokens. The
 agent answer should be JSON, for example:
