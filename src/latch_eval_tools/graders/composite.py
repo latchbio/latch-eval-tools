@@ -9,7 +9,6 @@ from .predicate import (
     _apply_role,
     evaluate_predicate,
     resolve_answer_field,
-    resolve_jsonpath,
 )
 
 # shared helper functions vv
@@ -36,6 +35,86 @@ def _normalize_match_key(value: Any, mode: str) -> Any:
     return _hashable(value)
 
 
+def _as_numeric(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    return None
+
+
+def _predicate_score_max(predicate: Any) -> float:
+    if not isinstance(predicate, dict):
+        return 1.0
+
+    if predicate.get("op") != "weighted_label":
+        return 1.0
+
+    scores: list[float] = []
+    table = predicate.get("table")
+    if isinstance(table, dict):
+        for raw_score in table.values():
+            score = _as_numeric(raw_score)
+            if score is not None:
+                scores.append(score)
+
+    default_score = _as_numeric(predicate.get("default", 0))
+    if default_score is not None:
+        scores.append(default_score)
+
+    positive_scores = [score for score in scores if score > 0.0]
+    if not positive_scores:
+        return 0.0
+    return max(positive_scores)
+
+
+def _leaf_score_max(leaf: Any) -> float:
+    if not isinstance(leaf, dict):
+        return 0.0
+    if leaf.get("role") == "hard_fail":
+        return 0.0
+    return _predicate_score_max(leaf.get("predicate"))
+
+
+def _normalize_score(score: float, denominator: float) -> float:
+    if denominator <= 0.0:
+        return 0.0
+
+    normalized = score / denominator
+    if normalized < 0.0:
+        return 0.0
+    if normalized > 1.0:
+        return 1.0
+    return normalized
+
+
+def _list_match_additive_score_denominator(gt_entries: Any) -> float:
+    additive_score_max = 0.0
+    if isinstance(gt_entries, list):
+        for gt_entry in gt_entries:
+            if not isinstance(gt_entry, dict):
+                continue
+            fields = gt_entry.get("fields")
+            if not isinstance(fields, dict):
+                continue
+            for leaf in fields.values():
+                if isinstance(leaf, dict) and leaf.get("role") == "additive":
+                    additive_score_max += _leaf_score_max(leaf)
+
+    return additive_score_max
+
+
+def _dict_match_entry_score_denominator(gt_entry: Any) -> float:
+    if not isinstance(gt_entry, dict):
+        return 0.0
+    if "predicate" in gt_entry:
+        return _leaf_score_max(gt_entry)
+    fields = gt_entry.get("fields")
+    if not isinstance(fields, dict):
+        return 0.0
+    return sum(_leaf_score_max(leaf) for leaf in fields.values())
+
+
 def _bind_field(value: Any, field: Any) -> Any:
     """Same binding rules as :class:`PredicateLeafGrader`: plain-key or JSONPath."""
     if field is None:
@@ -50,8 +129,8 @@ def _bind_field(value: Any, field: Any) -> Any:
     return None
 
 
-def _evaluate_leaf(leaf: dict, value: Any) -> tuple[str, bool, float, str, dict]:
-    """Returns (kind, passed, score, label, info). kind: scoring | hard_fail."""
+def _evaluate_leaf(leaf: dict, value: Any) -> tuple[str, bool, float, float, str, dict]:
+    """Returns (kind, passed, score, score_max, label, info)."""
     role = leaf.get("role")
     predicate = leaf.get("predicate")
     threshold = leaf.get("threshold", 1.0)
@@ -59,17 +138,23 @@ def _evaluate_leaf(leaf: dict, value: Any) -> tuple[str, bool, float, str, dict]
     is_scalar = op in SCALAR_OPS
     label = leaf.get("name") or (f"{op}-leaf" if op else "(unnamed)")
     kind = "hard_fail" if role == "hard_fail" else "scoring"
+    score_max = _leaf_score_max(leaf)
 
     try:
         raw = evaluate_predicate(predicate, value)
     except (ValueError, TypeError) as exc:
-        return kind, False, 0.0, label, {"error": str(exc), "role": role, "op": op}
+        return kind, False, 0.0, score_max, label, {
+            "error": str(exc),
+            "role": role,
+            "op": op,
+        }
 
     kind, passed, score = _apply_role(role, raw, is_scalar, threshold)
     return (
         kind,
         passed,
         score,
+        score_max,
         label,
         {
             "op": op,
@@ -82,7 +167,7 @@ def _evaluate_leaf(leaf: dict, value: Any) -> tuple[str, bool, float, str, dict]
 
 def _evaluate_all_of_child(
     child: Any, agent_answer: Any
-) -> tuple[str, bool, float, str, dict]:
+) -> tuple[str, bool, float, float, str, dict]:
     """Dispatch one ``all_of`` child: bare leaf vs composite envelope."""
     if _is_leaf(child):
         value = _bind_field(agent_answer, child.get("answer_field"))
@@ -97,17 +182,22 @@ def _evaluate_all_of_child(
             "scoring",
             False,
             0.0,
+            1.0,
             "?",
             {"error": "composite child missing 'type' and not a bare predicate-leaf"},
         )
     try:
         sub = get_grader(child_type).evaluate_answer(agent_answer, child_config)
     except (ValueError, TypeError) as exc:
-        return "scoring", False, 0.0, child_type, {"error": str(exc)}
+        return "scoring", False, 0.0, 1.0, child_type, {"error": str(exc)}
+    score_max = 1.0
+    if child_type == "predicate_leaf" and isinstance(child_config, dict):
+        score_max = _leaf_score_max(child_config)
     return (
         "scoring",
         sub.passed,
         sub.score,
+        score_max,
         child_type,
         {
             "sub_metrics": sub.metrics,
@@ -134,47 +224,50 @@ class AllOfGrader(BinaryGrader):
     """Conjunction over scoring children plus veto from hard_fail children."""
 
     def evaluate_answer(self, agent_answer: dict, config: dict) -> GraderResult:
-        scoring: list[tuple[bool, float, str, dict]] = []
+        scoring: list[tuple[bool, float, float, str, dict]] = []
         hard_fails: list[tuple[bool, str, dict]] = []
 
         for child in config.get("children", []):
-            kind, passed, score, label, info = _evaluate_all_of_child(
+            kind, passed, score, score_max, label, info = _evaluate_all_of_child(
                 child, agent_answer
             )
             if kind == "hard_fail":
                 hard_fails.append((passed, label, info))
             else:
-                scoring.append((passed, score, label, info))
+                scoring.append((passed, score, score_max, label, info))
 
+        scoring_total_score = sum(s for _, s, *_ in scoring)
+        score_denominator = sum(s_max for _, _, s_max, *_ in scoring)
+        scoring_count = len(scoring)
+        scoring_passed = sum(1 for p, *_ in scoring if p)
         veto = any(not p for p, _, _ in hard_fails)
         pass_rule = config.get("pass_rule", "all")
         if pass_rule == "all":
             scoring_ok = all(p for p, *_ in scoring) if scoring else True
         elif pass_rule == "min_passing":
-            scoring_ok = sum(1 for p, *_ in scoring if p) >= config.get(
-                "min_passing_children", 0
-            )
+            scoring_ok = scoring_passed >= config.get("min_passing_children", 0)
         elif pass_rule == "score_threshold":
-            scoring_ok = sum(s for _, s, *_ in scoring) >= config.get(
-                "score_threshold", 0.0
-            )
+            scoring_ok = scoring_total_score >= config.get("score_threshold", 0.0)
         else:
             scoring_ok = False
+
+        score = _normalize_score(scoring_total_score, score_denominator)
 
         passed = scoring_ok and not veto
         return GraderResult(
             passed=passed,
-            score=sum(s for _, s, *_ in scoring),
+            score=score,
             metrics={
                 "pass_rule": pass_rule,
-                "scoring_count": len(scoring),
-                "scoring_passed": sum(1 for p, *_ in scoring if p),
-                "scoring_total_score": sum(s for _, s, *_ in scoring),
+                "scoring_count": scoring_count,
+                "scoring_passed": scoring_passed,
+                "scoring_total_score": scoring_total_score,
+                "score_denominator": score_denominator,
                 "hard_fail_triggered": [name for p, name, _ in hard_fails if not p],
             },
             reasoning=_format_all_of(scoring, hard_fails, pass_rule, passed),
             agent_answer=agent_answer,
-            field_scores={name: s for _, s, name, _ in scoring},
+            field_scores={name: s for _, s, _, name, _ in scoring},
         )
 
 
@@ -223,6 +316,7 @@ class ListMatchGrader(BinaryGrader):
         tuple_pass_count = 0
         additive_score = 0.0
         field_scores: dict = {}
+        consumed_gt_keys: set[Any] = set()
 
         for i, tup in enumerate(agent_list):
             if not isinstance(tup, dict):
@@ -243,13 +337,24 @@ class ListMatchGrader(BinaryGrader):
                     }
                 )
                 continue
+            if normalized in consumed_gt_keys:
+                tuple_summaries.append(
+                    {
+                        "index": i,
+                        "match_key_value": key_val,
+                        "passed": False,
+                        "reason": f"duplicate match_key {key_val!r}",
+                    }
+                )
+                continue
+            consumed_gt_keys.add(normalized)
 
             per_field: dict = {}
             all_pass = True
             gate_pass = True
             for fname, leaf in gt.get("fields", {}).items():
                 fvalue = tup.get(fname)
-                _, passed, score, _, _ = _evaluate_leaf(leaf, fvalue)
+                _, passed, score, _, _, _ = _evaluate_leaf(leaf, fvalue)
                 role = leaf.get("role") if isinstance(leaf, dict) else None
                 per_field[fname] = {"passed": passed, "score": score, "role": role}
                 field_scores[f"{key_val}.{fname}"] = score
@@ -275,16 +380,21 @@ class ListMatchGrader(BinaryGrader):
         passed = (tuple_pass_count >= tuple_pass_min) and (
             additive_score >= additive_score_min
         )
+        score_denominator = _list_match_additive_score_denominator(
+            list(gt_by_key.values())
+        )
+        score = _normalize_score(additive_score, score_denominator)
 
         return GraderResult(
             passed=passed,
-            score=additive_score,
+            score=score,
             metrics={
                 "k": config.get("k"),
                 "tuple_pass_count": tuple_pass_count,
                 "tuple_pass_min": tuple_pass_min,
                 "additive_score": additive_score,
                 "additive_score_min": additive_score_min,
+                "additive_score_denominator": score_denominator,
                 "n_tuples_evaluated": len(agent_list),
             },
             reasoning=_format_list_match(
@@ -321,16 +431,22 @@ class DictMatchGrader(BinaryGrader):
         entry_results: list[dict] = []
         field_scores: dict = {}
         all_pass = True
+        raw_score = 0.0
+        score_denominator = 0.0
 
         for gt_key, gt_entry in gt.items():
+            entry_score_denominator = _dict_match_entry_score_denominator(gt_entry)
             if gt_key not in agent_dict:
                 if all_keys_required:
+                    score_denominator += entry_score_denominator
                     entry_results.append(
                         {"key": gt_key, "passed": False, "reason": "missing"}
                     )
                     field_scores[gt_key] = 0.0
                     all_pass = False
                 else:
+                    raw_score += entry_score_denominator
+                    score_denominator += entry_score_denominator
                     entry_results.append(
                         {
                             "key": gt_key,
@@ -341,13 +457,16 @@ class DictMatchGrader(BinaryGrader):
                     field_scores[gt_key] = 0.0
                 continue
             agent_val = agent_dict[gt_key]
+            score_denominator += entry_score_denominator
 
             if isinstance(gt_entry, dict) and "predicate" in gt_entry:
-                _, passed, score, _, info = _evaluate_leaf(gt_entry, agent_val)
+                kind, passed, score, _, _, info = _evaluate_leaf(gt_entry, agent_val)
                 entry_results.append(
                     {"key": gt_key, "passed": passed, "shape": "scalar", "info": info}
                 )
                 field_scores[gt_key] = score
+                if kind != "hard_fail":
+                    raw_score += score
                 if not passed:
                     all_pass = False
                 continue
@@ -360,10 +479,12 @@ class DictMatchGrader(BinaryGrader):
                     fvalue = (
                         agent_val.get(fname) if isinstance(agent_val, dict) else None
                     )
-                    _, passed, score, _, _ = _evaluate_leaf(leaf, fvalue)
+                    kind, passed, score, _, _, _ = _evaluate_leaf(leaf, fvalue)
                     role = leaf.get("role") if isinstance(leaf, dict) else None
                     per_field[fname] = {"passed": passed, "score": score, "role": role}
                     field_scores[f"{gt_key}.{fname}"] = score
+                    if kind != "hard_fail":
+                        raw_score += score
                     if not passed:
                         ok = False
                     if role == "gate" and not passed:
@@ -387,12 +508,18 @@ class DictMatchGrader(BinaryGrader):
             field_scores[gt_key] = 0.0
             all_pass = False
 
+        entries_total = len(entry_results)
+        entries_passed = sum(1 for r in entry_results if r.get("passed"))
+        score = _normalize_score(raw_score, score_denominator)
+
         return GraderResult(
             passed=all_pass,
-            score=sum(1.0 for r in entry_results if r.get("passed")),
+            score=score,
             metrics={
-                "entries_total": len(entry_results),
-                "entries_passed": sum(1 for r in entry_results if r.get("passed")),
+                "entries_total": entries_total,
+                "entries_passed": entries_passed,
+                "raw_score": raw_score,
+                "score_denominator": score_denominator,
                 "failing_keys": [
                     r["key"] for r in entry_results if not r.get("passed")
                 ],
@@ -411,7 +538,7 @@ def _format_all_of(
 ) -> str:
     verdict = "PASS" if passed else "FAIL"
     lines = [f"all_of [pass_rule={pass_rule}]: {verdict}"]
-    for p, score, label, info in scoring:
+    for p, score, _, label, info in scoring:
         marker = "+" if p else "x"
         sub = info.get("sub_reasoning")
         if sub:
