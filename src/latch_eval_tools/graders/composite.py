@@ -387,12 +387,19 @@ class DictMatchGrader(BinaryGrader):
             field_scores[gt_key] = 0.0
             all_pass = False
 
+        entries_total = len(entry_results)
+        entries_passed = sum(1 for r in entry_results if r.get("passed"))
         return GraderResult(
             passed=all_pass,
-            score=sum(1.0 for r in entry_results if r.get("passed")),
+            # Fraction of entries passed, in [0, 1]. Previously this was the raw
+            # pass count, which for multi-key ground truth could exceed 1.0 and
+            # trip the downstream (Taiga) assertion that every subscore is <= 1.0.
+            # ``passed`` is derived from ``all_pass`` above, so normalizing the
+            # score here does not change pass/fail semantics.
+            score=entries_passed / entries_total if entries_total else 0.0,
             metrics={
-                "entries_total": len(entry_results),
-                "entries_passed": sum(1 for r in entry_results if r.get("passed")),
+                "entries_total": entries_total,
+                "entries_passed": entries_passed,
                 "failing_keys": [
                     r["key"] for r in entry_results if not r.get("passed")
                 ],
