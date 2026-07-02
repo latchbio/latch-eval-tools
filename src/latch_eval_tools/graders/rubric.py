@@ -1,5 +1,7 @@
+import asyncio
 from copy import deepcopy
 import json
+import random
 from typing import Any
 
 import litellm
@@ -18,6 +20,41 @@ DEFAULT_MODEL_PARAMS: dict[str, Any] = {
 RUBRIC_GRADER_SYSTEM_PROMPT = "You are a teacher grading a test response vs a rubric."
 MAX_OUTPUT_NORMALIZATION_DEPTH = 8
 RAW_CONTENT_DEBUG_LIMIT = 20000
+
+# The rubric model runs with adaptive thinking, which prevents litellm from forcing
+# tool_choice for Anthropic structured output. That path occasionally emits malformed
+# or wrapper-nested JSON, so we retry the whole completion+parse a few times before
+# giving up. Retries also cover transient API errors (rate limits, timeouts, 5xx).
+GRADER_MAX_RETRIES = 3
+GRADER_MAX_ATTEMPTS = GRADER_MAX_RETRIES + 1
+RETRY_BASE_DELAY_SECONDS = 0.5
+RETRY_MAX_DELAY_SECONDS = 8.0
+RETRY_JITTER_SECONDS = 0.5
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 30
+
+
+def _transient_litellm_errors() -> tuple[type[BaseException], ...]:
+    names = (
+        "RateLimitError",
+        "Timeout",
+        "APITimeoutError",
+        "APIConnectionError",
+        "InternalServerError",
+        "ServiceUnavailableError",
+    )
+    return tuple(
+        err
+        for name in names
+        if isinstance(err := getattr(litellm, name, None), type) and issubclass(err, BaseException)
+    )
+
+
+TRANSIENT_LITELLM_ERRORS = _transient_litellm_errors()
+
+
+def retry_backoff_seconds(attempt: int) -> float:
+    base = min(RETRY_BASE_DELAY_SECONDS * (2**attempt), RETRY_MAX_DELAY_SECONDS)
+    return base + random.uniform(0, RETRY_JITTER_SECONDS)
 
 
 class RubricGraderOutputParseError(ValueError):
@@ -162,6 +199,8 @@ def build_rubric_user_prompt(response: str, config: RubricGraderConfig) -> str:
 
 Judge each rubric item independently against the response. Please output your answer in the following json format: {fmt}
 
+Return one judgment per rubric item, using the item's bracketed number as its index. Respond with only the raw JSON object: no markdown code fences, no commentary before or after.
+
 Keep each rationale under 256 characters."""
 
 
@@ -199,6 +238,19 @@ def content_block_text(blocks: list[Any]) -> str | None:
     return "".join(parts)
 
 
+def strip_code_fences(text: str) -> str:
+    """Strip a leading/trailing markdown code fence (```` ```json ... ``` ````) if present."""
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return text
+    lines = stripped.splitlines()
+    if lines and lines[0].startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip().startswith("```"):
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
 def validate_rubric_grader_output_candidate(value: Any) -> RubricGraderOutput | None:
     if isinstance(value, RubricGraderOutput):
         return value
@@ -221,11 +273,12 @@ def normalize_rubric_grader_output(value: Any, *, depth: int = 0) -> Any:
         return output
 
     if isinstance(value, str):
+        text = strip_code_fences(value)
         try:
-            parsed = json.loads(value)
+            parsed = json.loads(text)
         except json.JSONDecodeError:
             return value
-        if parsed == value:
+        if parsed == text:
             return value
         return normalize_rubric_grader_output(parsed, depth=depth + 1)
 
@@ -272,6 +325,66 @@ def parse_rubric_grader_output(value: Any) -> RubricGraderOutput:
     raise ValueError(f"expected rubric grader output object or JSON string, got {type(value).__name__}")
 
 
+def validate_judgment_coverage(config: RubricGraderConfig, output: RubricGraderOutput) -> None:
+    """Ensure the model judged exactly the rubric criteria, once each.
+
+    Without this, a model that returns judgments for the wrong/missing indices
+    would silently score criteria it never judged as unmet, masking a malformed
+    grader response as a legitimate low score.
+    """
+    expected = set(range(len(config.criteria)))
+    seen = [judgment.index for judgment in output.judgments]
+    seen_set = set(seen)
+
+    if len(seen) != len(seen_set):
+        duplicates = sorted({index for index in seen if seen.count(index) > 1})
+        raise ValueError(f"rubric grader output has duplicate judgment indices: {duplicates}")
+
+    missing = sorted(expected - seen_set)
+    extra = sorted(seen_set - expected)
+    if missing or extra:
+        raise ValueError(
+            f"rubric grader judgment indices {sorted(seen_set)} do not match rubric criteria "
+            f"indices {sorted(expected)} (missing={missing}, extra={extra})"
+        )
+
+
+def rubric_output_was_wrapped(content: Any) -> bool:
+    """True when the model content was not already a canonical {"judgments": [...]} JSON string.
+
+    Recorded as a metric so we can monitor how often the litellm tool-emulation path
+    produces non-canonical output even when parsing ultimately succeeds.
+    """
+    if not isinstance(content, str):
+        return True
+    try:
+        parsed = json.loads(strip_code_fences(content))
+    except json.JSONDecodeError:
+        return True
+    return not (isinstance(parsed, dict) and set(parsed.keys()) == {"judgments"})
+
+
+def build_rubric_completion_kwargs(
+    response: str,
+    config: RubricGraderConfig,
+    *,
+    api_key: str,
+    base_url: str | None,
+) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "model": config.model_id,
+        "messages": build_rubric_messages(response, config),
+        "api_key": api_key,
+        "base_url": base_url,
+        "response_format": rubric_response_format(),
+        **rubric_litellm_params(config.model_params),
+    }
+    if "timeout" not in config.model_params:
+        kwargs["timeout"] = DEFAULT_REQUEST_TIMEOUT_SECONDS
+    kwargs.update(config.model_params)
+    return kwargs
+
+
 class RubricGrader:
     async def evaluate_answer_llm(
         self,
@@ -294,33 +407,59 @@ class RubricGrader:
             )
 
         response = str(answer)[: parsed_config.truncation_length]
-        completion = await litellm.acompletion(
-            model=parsed_config.model_id,
-            messages=build_rubric_messages(response, parsed_config),
-            api_key=api_key,
-            base_url=base_url,
-            response_format=rubric_response_format(),
-            **rubric_litellm_params(parsed_config.model_params),
-            **parsed_config.model_params,
+        completion_kwargs = build_rubric_completion_kwargs(
+            response, parsed_config, api_key=api_key, base_url=base_url
         )
-        choice = completion.choices[0]
-        message = choice.message
-        content = message.content
-        try:
-            output = parse_rubric_grader_output(content)
-        except (ValidationError, ValueError) as exc:
-            if isinstance(exc, RubricGraderOutputParseError):
-                raise
-            raw_content = content if isinstance(content, str) else repr(content)
-            raise RubricGraderOutputParseError(
-                f"could not parse rubric grader output: {exc}\n\n"
-                f"finish_reason={getattr(choice, 'finish_reason', None)!r} "
-                f"had_tool_calls={bool(getattr(message, 'tool_calls', None))}\n"
-                f"raw_content={raw_content[:RAW_CONTENT_DEBUG_LIMIT]}",
-                raw_content=content,
-                finish_reason=getattr(choice, "finish_reason", None),
-                had_tool_calls=bool(getattr(message, "tool_calls", None)),
-            ) from exc
+
+        output: RubricGraderOutput | None = None
+        content: Any = None
+        finish_reason: Any = None
+        had_tool_calls = False
+        attempts_used = 0
+
+        for attempt in range(GRADER_MAX_ATTEMPTS):
+            attempts_used = attempt + 1
+            is_last_attempt = attempt == GRADER_MAX_ATTEMPTS - 1
+            try:
+                completion = await litellm.acompletion(**completion_kwargs)
+            except TRANSIENT_LITELLM_ERRORS:
+                if is_last_attempt:
+                    raise
+                await asyncio.sleep(retry_backoff_seconds(attempt))
+                continue
+
+            choice = completion.choices[0]
+            message = choice.message
+            content = message.content
+            finish_reason = getattr(choice, "finish_reason", None)
+            had_tool_calls = bool(getattr(message, "tool_calls", None))
+
+            try:
+                candidate = parse_rubric_grader_output(content)
+                validate_judgment_coverage(parsed_config, candidate)
+            except (ValidationError, ValueError) as exc:
+                if isinstance(exc, RubricGraderOutputParseError):
+                    parse_error = exc
+                else:
+                    raw_content = content if isinstance(content, str) else repr(content)
+                    parse_error = RubricGraderOutputParseError(
+                        f"could not parse rubric grader output after {attempts_used} attempt(s): {exc}\n\n"
+                        f"finish_reason={finish_reason!r} had_tool_calls={had_tool_calls}\n"
+                        f"raw_content={raw_content[:RAW_CONTENT_DEBUG_LIMIT]}",
+                        raw_content=content,
+                        finish_reason=finish_reason,
+                        had_tool_calls=had_tool_calls,
+                    )
+                if is_last_attempt:
+                    raise parse_error from exc
+                await asyncio.sleep(retry_backoff_seconds(attempt))
+                continue
+
+            output = candidate
+            break
+
+        assert output is not None  # the loop either assigns output or raises
+
         score_result = compute_rubric_reward(parsed_config, output)
 
         metrics = {
@@ -332,6 +471,10 @@ class RubricGrader:
             "raw_score": score_result.raw_score,
             "max_score": score_result.max_score,
             "reward": score_result.reward,
+            "parse_attempts": attempts_used,
+            "output_normalization_applied": rubric_output_was_wrapped(content),
+            "finish_reason": finish_reason,
+            "had_tool_calls": had_tool_calls,
             "judgments": [judgment.model_dump(mode="json") for judgment in output.judgments],
         }
         return GraderResult(
