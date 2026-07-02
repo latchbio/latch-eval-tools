@@ -1,3 +1,5 @@
+import json
+
 from pydantic import ValidationError
 
 from latch_eval_tools.graders import LLM_GRADER_REGISTRY
@@ -11,6 +13,7 @@ from latch_eval_tools.graders.rubric import (
     RubricGraderOutput,
     build_rubric_messages,
     compute_rubric_reward,
+    parse_rubric_grader_output,
     rubric_litellm_params,
 )
 
@@ -100,6 +103,25 @@ def test_rubric_output_preserves_rationale() -> None:
     )
 
     assert len(output.judgments[0].rationale) == 300
+
+
+def test_parse_rubric_grader_output_accepts_structured_output_wrappers() -> None:
+    judgment = {"index": 0, "met": True, "rationale": "present"}
+    payloads = [
+        {"judgments": [judgment]},
+        json.dumps({"judgments": [judgment]}),
+        json.dumps({"judgments": json.dumps({"judgments": [judgment]})}),
+        json.dumps({"judgments": json.dumps([judgment])}),
+        json.dumps({"json_value": {"judgments": [judgment]}}),
+        json.dumps({"$PARAMETER_NAME": {"judgments": [judgment]}}),
+    ]
+
+    for payload in payloads:
+        output = parse_rubric_grader_output(payload)
+
+        assert output.judgments[0].index == 0
+        assert output.judgments[0].met is True
+        assert output.judgments[0].rationale == "present"
 
 
 def test_rubric_litellm_params_allowlists_configured_thinking() -> None:

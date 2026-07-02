@@ -16,6 +16,7 @@ DEFAULT_MODEL_PARAMS: dict[str, Any] = {
     }
 }
 RUBRIC_GRADER_SYSTEM_PROMPT = "You are a teacher grading a test response vs a rubric."
+STRUCTURED_OUTPUT_WRAPPER_KEYS = {"json_value", "$PARAMETER_NAME"}
 
 
 def default_model_params() -> dict[str, Any]:
@@ -155,13 +156,49 @@ def rubric_litellm_params(model_params: dict[str, Any]) -> dict[str, Any]:
     return params
 
 
-def parse_rubric_grader_output(value: Any) -> RubricGraderOutput:
+def normalize_rubric_grader_output(value: Any, *, depth: int = 0) -> Any:
+    if depth > 4:
+        return value
+
     if isinstance(value, RubricGraderOutput):
         return value
     if isinstance(value, dict):
-        return RubricGraderOutput.model_validate(value)
+        keys = set(value.keys())
+        if len(keys) == 1:
+            key = next(iter(keys))
+            if key in STRUCTURED_OUTPUT_WRAPPER_KEYS:
+                return normalize_rubric_grader_output(value[key], depth=depth + 1)
+
+        judgments = value.get("judgments")
+        if isinstance(judgments, str):
+            parsed_judgments = normalize_rubric_grader_output(judgments, depth=depth + 1)
+            if isinstance(parsed_judgments, list):
+                return {**value, "judgments": parsed_judgments}
+            if isinstance(parsed_judgments, dict) and "judgments" in parsed_judgments:
+                return parsed_judgments
+        if isinstance(judgments, dict) and "judgments" in judgments:
+            return judgments
+
+        return value
     if isinstance(value, str):
-        return RubricGraderOutput.model_validate_json(value)
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return value
+        if parsed == value:
+            return value
+        return normalize_rubric_grader_output(parsed, depth=depth + 1)
+    return value
+
+
+def parse_rubric_grader_output(value: Any) -> RubricGraderOutput:
+    normalized = normalize_rubric_grader_output(value)
+    if isinstance(normalized, RubricGraderOutput):
+        return normalized
+    if isinstance(normalized, dict):
+        return RubricGraderOutput.model_validate(normalized)
+    if isinstance(normalized, str):
+        return RubricGraderOutput.model_validate_json(normalized)
     raise ValueError(f"expected rubric grader output object or JSON string, got {type(value).__name__}")
 
 
