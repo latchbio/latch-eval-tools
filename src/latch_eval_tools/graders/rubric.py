@@ -3,7 +3,7 @@ import json
 from typing import Any
 
 import litellm
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from .base import GraderResult, get_nested_value
 
@@ -16,7 +16,30 @@ DEFAULT_MODEL_PARAMS: dict[str, Any] = {
     }
 }
 RUBRIC_GRADER_SYSTEM_PROMPT = "You are a teacher grading a test response vs a rubric."
-STRUCTURED_OUTPUT_WRAPPER_KEYS = {"json_value", "$PARAMETER_NAME"}
+MAX_OUTPUT_NORMALIZATION_DEPTH = 8
+RAW_CONTENT_DEBUG_LIMIT = 20000
+
+
+class RubricGraderOutputParseError(ValueError):
+    """Raised when the rubric grader model output cannot be parsed.
+
+    Carries the untruncated raw model content and response metadata so a
+    downstream failure record (which otherwise only sees a truncated pydantic
+    error) contains everything needed to debug a new/unexpected output shape.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        raw_content: Any = None,
+        finish_reason: Any = None,
+        had_tool_calls: bool = False,
+    ) -> None:
+        self.raw_content = raw_content
+        self.finish_reason = finish_reason
+        self.had_tool_calls = had_tool_calls
+        super().__init__(message)
 
 
 def default_model_params() -> dict[str, Any]:
@@ -74,7 +97,7 @@ class RubricCriterionJudgment(BaseModel):
 class RubricGraderOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    judgments: list[RubricCriterionJudgment]
+    judgments: list[RubricCriterionJudgment] = Field(min_length=1)
 
 
 class RubricScoreResult(BaseModel):
@@ -156,30 +179,47 @@ def rubric_litellm_params(model_params: dict[str, Any]) -> dict[str, Any]:
     return params
 
 
-def normalize_rubric_grader_output(value: Any, *, depth: int = 0) -> Any:
-    if depth > 4:
-        return value
+def content_block_text(blocks: list[Any]) -> str | None:
+    """Join the text of a provider content-block list (e.g. [{"type": "text", "text": ...}]).
 
+    Returns None when the list does not look like text content blocks, so the
+    caller can leave the value untouched rather than fabricating a string.
+    """
+    parts: list[str] = []
+    for block in blocks:
+        if not isinstance(block, dict):
+            return None
+        for key in ("text", "content"):
+            candidate = block.get(key)
+            if isinstance(candidate, str):
+                parts.append(candidate)
+                break
+    if not parts:
+        return None
+    return "".join(parts)
+
+
+def validate_rubric_grader_output_candidate(value: Any) -> RubricGraderOutput | None:
     if isinstance(value, RubricGraderOutput):
         return value
-    if isinstance(value, dict):
-        keys = set(value.keys())
-        if len(keys) == 1:
-            key = next(iter(keys))
-            if key in STRUCTURED_OUTPUT_WRAPPER_KEYS:
-                return normalize_rubric_grader_output(value[key], depth=depth + 1)
+    try:
+        if isinstance(value, list):
+            return RubricGraderOutput.model_validate({"judgments": value})
+        if isinstance(value, dict):
+            return RubricGraderOutput.model_validate(value)
+    except ValidationError:
+        return None
+    return None
 
-        judgments = value.get("judgments")
-        if isinstance(judgments, str):
-            parsed_judgments = normalize_rubric_grader_output(judgments, depth=depth + 1)
-            if isinstance(parsed_judgments, list):
-                return {**value, "judgments": parsed_judgments}
-            if isinstance(parsed_judgments, dict) and "judgments" in parsed_judgments:
-                return parsed_judgments
-        if isinstance(judgments, dict) and "judgments" in judgments:
-            return judgments
 
+def normalize_rubric_grader_output(value: Any, *, depth: int = 0) -> Any:
+    if depth > MAX_OUTPUT_NORMALIZATION_DEPTH:
         return value
+
+    output = validate_rubric_grader_output_candidate(value)
+    if output is not None:
+        return output
+
     if isinstance(value, str):
         try:
             parsed = json.loads(value)
@@ -188,6 +228,34 @@ def normalize_rubric_grader_output(value: Any, *, depth: int = 0) -> Any:
         if parsed == value:
             return value
         return normalize_rubric_grader_output(parsed, depth=depth + 1)
+
+    if isinstance(value, list):
+        text = content_block_text(value)
+        if text is not None:
+            return normalize_rubric_grader_output(text, depth=depth + 1)
+        return value
+
+    if isinstance(value, dict):
+        judgments = value.get("judgments")
+        if isinstance(judgments, str | dict | list):
+            normalized_judgments = normalize_rubric_grader_output(judgments, depth=depth + 1)
+            output = validate_rubric_grader_output_candidate(normalized_judgments)
+            if output is not None:
+                return output
+            if isinstance(normalized_judgments, list):
+                output = validate_rubric_grader_output_candidate({**value, "judgments": normalized_judgments})
+                if output is not None:
+                    return output
+
+        candidates: list[RubricGraderOutput] = []
+        for nested_value in value.values():
+            normalized_value = normalize_rubric_grader_output(nested_value, depth=depth + 1)
+            output = validate_rubric_grader_output_candidate(normalized_value)
+            if output is not None:
+                candidates.append(output)
+        if len(candidates) == 1:
+            return candidates[0]
+
     return value
 
 
@@ -197,6 +265,8 @@ def parse_rubric_grader_output(value: Any) -> RubricGraderOutput:
         return normalized
     if isinstance(normalized, dict):
         return RubricGraderOutput.model_validate(normalized)
+    if isinstance(normalized, list):
+        return RubricGraderOutput.model_validate({"judgments": normalized})
     if isinstance(normalized, str):
         return RubricGraderOutput.model_validate_json(normalized)
     raise ValueError(f"expected rubric grader output object or JSON string, got {type(value).__name__}")
@@ -233,8 +303,24 @@ class RubricGrader:
             **rubric_litellm_params(parsed_config.model_params),
             **parsed_config.model_params,
         )
-        content = completion.choices[0].message.content
-        output = parse_rubric_grader_output(content)
+        choice = completion.choices[0]
+        message = choice.message
+        content = message.content
+        try:
+            output = parse_rubric_grader_output(content)
+        except (ValidationError, ValueError) as exc:
+            if isinstance(exc, RubricGraderOutputParseError):
+                raise
+            raw_content = content if isinstance(content, str) else repr(content)
+            raise RubricGraderOutputParseError(
+                f"could not parse rubric grader output: {exc}\n\n"
+                f"finish_reason={getattr(choice, 'finish_reason', None)!r} "
+                f"had_tool_calls={bool(getattr(message, 'tool_calls', None))}\n"
+                f"raw_content={raw_content[:RAW_CONTENT_DEBUG_LIMIT]}",
+                raw_content=content,
+                finish_reason=getattr(choice, "finish_reason", None),
+                had_tool_calls=bool(getattr(message, "tool_calls", None)),
+            ) from exc
         score_result = compute_rubric_reward(parsed_config, output)
 
         metrics = {
