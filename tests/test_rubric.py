@@ -1,5 +1,8 @@
+import asyncio
 import json
+import types
 
+import pytest
 from pydantic import ValidationError
 
 from latch_eval_tools.graders import LLM_GRADER_REGISTRY
@@ -11,6 +14,7 @@ from latch_eval_tools.graders.rubric import (
     RubricGrader,
     RubricGraderConfig,
     RubricGraderOutput,
+    RubricGraderOutputParseError,
     build_rubric_messages,
     compute_rubric_reward,
     parse_rubric_grader_output,
@@ -114,6 +118,10 @@ def test_parse_rubric_grader_output_accepts_structured_output_wrappers() -> None
         json.dumps({"judgments": json.dumps([judgment])}),
         json.dumps({"json_value": {"judgments": [judgment]}}),
         json.dumps({"$PARAMETER_NAME": {"judgments": [judgment]}}),
+        json.dumps({"$PARAMETER_VALUE": {"judgments": [judgment]}}),
+        json.dumps({"arbitrary_provider_wrapper": {"judgments": [judgment]}}),
+        json.dumps({"tool_call": {"arguments": json.dumps({"judgments": [judgment]})}}),
+        json.dumps([judgment]),
     ]
 
     for payload in payloads:
@@ -122,6 +130,100 @@ def test_parse_rubric_grader_output_accepts_structured_output_wrappers() -> None
         assert output.judgments[0].index == 0
         assert output.judgments[0].met is True
         assert output.judgments[0].rationale == "present"
+
+
+def test_parse_rubric_grader_output_accepts_content_block_lists() -> None:
+    judgment = {"index": 0, "met": True, "rationale": "present"}
+    full_json = json.dumps({"judgments": [judgment]})
+
+    single_block = [{"type": "text", "text": full_json}]
+    split_blocks = [
+        {"type": "text", "text": '{"judgments":'},
+        {"type": "text", "text": json.dumps([judgment]) + "}"},
+    ]
+
+    for payload in (single_block, split_blocks):
+        output = parse_rubric_grader_output(payload)
+
+        assert output.judgments[0].index == 0
+        assert output.judgments[0].met is True
+        assert output.judgments[0].rationale == "present"
+
+
+def test_rubric_output_rejects_empty_judgments() -> None:
+    with pytest.raises(ValidationError):
+        RubricGraderOutput.model_validate({"judgments": []})
+
+    with pytest.raises(ValidationError):
+        parse_rubric_grader_output(json.dumps({"judgments": []}))
+
+
+def _fake_completion(content: object, *, finish_reason: str = "stop", tool_calls: object = None) -> object:
+    message = types.SimpleNamespace(content=content, tool_calls=tool_calls)
+    choice = types.SimpleNamespace(message=message, finish_reason=finish_reason)
+    return types.SimpleNamespace(choices=[choice])
+
+
+def _run_rubric_grader(monkeypatch: pytest.MonkeyPatch, completion: object) -> None:
+    async def fake_acompletion(**_kwargs: object) -> object:
+        return completion
+
+    monkeypatch.setattr(
+        "latch_eval_tools.graders.rubric.litellm.acompletion",
+        fake_acompletion,
+    )
+    config = {
+        "answer_field": "rationale",
+        "criteria": [{"description": "states that hERG is required", "score_delta": 1}],
+    }
+    asyncio.run(RubricGrader().evaluate_answer_llm({"rationale": "hi"}, config, api_key="k"))
+
+
+def test_evaluate_answer_llm_wraps_parse_failure_with_raw_content(monkeypatch: pytest.MonkeyPatch) -> None:
+    raw_content = json.dumps({"totally_unexpected": {"nope": 1}})
+
+    with pytest.raises(RubricGraderOutputParseError) as exc_info:
+        _run_rubric_grader(monkeypatch, _fake_completion(raw_content, finish_reason="stop"))
+
+    exc = exc_info.value
+    assert exc.raw_content == raw_content
+    assert exc.finish_reason == "stop"
+    assert exc.had_tool_calls is False
+    assert "totally_unexpected" in str(exc)
+
+
+def test_evaluate_answer_llm_reports_none_content(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(RubricGraderOutputParseError) as exc_info:
+        _run_rubric_grader(
+            monkeypatch,
+            _fake_completion(None, finish_reason="tool_calls", tool_calls=[{"id": "1"}]),
+        )
+
+    exc = exc_info.value
+    assert exc.raw_content is None
+    assert exc.finish_reason == "tool_calls"
+    assert exc.had_tool_calls is True
+
+
+def test_evaluate_answer_llm_parses_content_block_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    judgments = json.dumps({"judgments": [{"index": 0, "met": True, "rationale": "present"}]})
+    completion = _fake_completion([{"type": "text", "text": judgments}])
+
+    async def fake_acompletion(**_kwargs: object) -> object:
+        return completion
+
+    monkeypatch.setattr(
+        "latch_eval_tools.graders.rubric.litellm.acompletion",
+        fake_acompletion,
+    )
+    config = {
+        "answer_field": "rationale",
+        "criteria": [{"description": "states that hERG is required", "score_delta": 1}],
+    }
+    result = asyncio.run(RubricGrader().evaluate_answer_llm({"rationale": "hi"}, config, api_key="k"))
+
+    assert result.passed is True
+    assert result.metrics["judgments"][0]["met"] is True
 
 
 def test_rubric_litellm_params_allowlists_configured_thinking() -> None:
