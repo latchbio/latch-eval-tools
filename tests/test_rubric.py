@@ -2,6 +2,7 @@ import asyncio
 import json
 import types
 
+import litellm
 import pytest
 from pydantic import ValidationError
 
@@ -164,6 +165,13 @@ def _fake_completion(content: object, *, finish_reason: str = "stop", tool_calls
     return types.SimpleNamespace(choices=[choice])
 
 
+def _patch_no_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr("latch_eval_tools.graders.rubric.asyncio.sleep", fake_sleep)
+
+
 def _run_rubric_grader(monkeypatch: pytest.MonkeyPatch, completion: object) -> None:
     async def fake_acompletion(**_kwargs: object) -> object:
         return completion
@@ -172,6 +180,7 @@ def _run_rubric_grader(monkeypatch: pytest.MonkeyPatch, completion: object) -> N
         "latch_eval_tools.graders.rubric.litellm.acompletion",
         fake_acompletion,
     )
+    _patch_no_sleep(monkeypatch)
     config = {
         "answer_field": "rationale",
         "criteria": [{"description": "states that hERG is required", "score_delta": 1}],
@@ -224,6 +233,86 @@ def test_evaluate_answer_llm_parses_content_block_list(monkeypatch: pytest.Monke
 
     assert result.passed is True
     assert result.metrics["judgments"][0]["met"] is True
+
+
+def test_parse_rubric_grader_output_strips_code_fences() -> None:
+    judgment = {"index": 0, "met": True, "rationale": "present"}
+    fenced = "```json\n" + json.dumps({"judgments": [judgment]}) + "\n```"
+
+    output = parse_rubric_grader_output(fenced)
+
+    assert output.judgments[0].index == 0
+    assert output.judgments[0].met is True
+
+
+def test_evaluate_answer_llm_retries_until_valid(monkeypatch: pytest.MonkeyPatch) -> None:
+    good = json.dumps({"judgments": [{"index": 0, "met": True, "rationale": "present"}]})
+    completions = [
+        _fake_completion(json.dumps({"totally_unexpected": {"nope": 1}})),
+        _fake_completion(None),
+        _fake_completion(good),
+    ]
+
+    async def fake_acompletion(**_kwargs: object) -> object:
+        return completions.pop(0)
+
+    monkeypatch.setattr("latch_eval_tools.graders.rubric.litellm.acompletion", fake_acompletion)
+    _patch_no_sleep(monkeypatch)
+    config = {
+        "answer_field": "rationale",
+        "criteria": [{"description": "states that hERG is required", "score_delta": 1}],
+    }
+
+    result = asyncio.run(RubricGrader().evaluate_answer_llm({"rationale": "hi"}, config, api_key="k"))
+
+    assert result.passed is True
+    assert result.metrics["parse_attempts"] == 3
+    assert completions == []
+
+
+def test_evaluate_answer_llm_retries_transient_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    good = json.dumps({"judgments": [{"index": 0, "met": True, "rationale": "present"}]})
+    calls = {"n": 0}
+
+    async def fake_acompletion(**_kwargs: object) -> object:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise litellm.RateLimitError("rate limited", llm_provider="anthropic", model="claude")
+        return _fake_completion(good)
+
+    monkeypatch.setattr("latch_eval_tools.graders.rubric.litellm.acompletion", fake_acompletion)
+    _patch_no_sleep(monkeypatch)
+    config = {
+        "answer_field": "rationale",
+        "criteria": [{"description": "states that hERG is required", "score_delta": 1}],
+    }
+
+    result = asyncio.run(RubricGrader().evaluate_answer_llm({"rationale": "hi"}, config, api_key="k"))
+
+    assert result.passed is True
+    assert result.metrics["parse_attempts"] == 2
+
+
+def test_evaluate_answer_llm_rejects_incomplete_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
+    only_first = json.dumps({"judgments": [{"index": 0, "met": True, "rationale": "present"}]})
+
+    async def fake_acompletion(**_kwargs: object) -> object:
+        return _fake_completion(only_first)
+
+    monkeypatch.setattr("latch_eval_tools.graders.rubric.litellm.acompletion", fake_acompletion)
+    _patch_no_sleep(monkeypatch)
+    config = {
+        "answer_field": "rationale",
+        "criteria": [
+            {"description": "states that hERG is required", "score_delta": 1},
+            {"description": "includes a second correct reason", "score_delta": 1},
+        ],
+    }
+
+    with pytest.raises(RubricGraderOutputParseError) as exc_info:
+        asyncio.run(RubricGrader().evaluate_answer_llm({"rationale": "hi"}, config, api_key="k"))
+
+    assert "missing=[1]" in str(exc_info.value)
 
 
 def test_rubric_litellm_params_allowlists_configured_thinking() -> None:
