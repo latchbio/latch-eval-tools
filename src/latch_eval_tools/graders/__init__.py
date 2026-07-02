@@ -10,6 +10,17 @@ from .predicate import PredicateLeafGrader
 from .composite import AllOfGrader, ListMatchGrader, DictMatchGrader
 from .longest_subsequence import LongestSubsequenceGrader
 from .completion import FinishedFileGrader
+from .rubric import (
+    RubricCriterion,
+    RubricCriterionJudgment,
+    RubricGrader,
+    RubricGraderConfig,
+    RubricGraderOutput,
+    RubricScoreResult,
+    build_rubric_messages,
+    build_rubric_user_prompt,
+    compute_rubric_reward,
+)
 from .helpers import grade_multiple_graders_single_answer  # noqa: E402 -- depends on GRADER_REGISTRY
 
 GRADER_REGISTRY = {
@@ -29,6 +40,10 @@ GRADER_REGISTRY = {
     "dict_match": DictMatchGrader,
     "longest_subsequence": LongestSubsequenceGrader,
     "finished_file": FinishedFileGrader,
+}
+
+LLM_GRADER_REGISTRY = {
+    "rubric": RubricGrader,
 }
 
 
@@ -59,7 +74,17 @@ __all__ = [
     "DictMatchGrader",
     "LongestSubsequenceGrader",
     "FinishedFileGrader",
+    "RubricCriterion",
+    "RubricCriterionJudgment",
+    "RubricGrader",
+    "RubricGraderConfig",
+    "RubricGraderOutput",
+    "RubricScoreResult",
     "GRADER_REGISTRY",
+    "LLM_GRADER_REGISTRY",
+    "build_rubric_messages",
+    "build_rubric_user_prompt",
+    "compute_rubric_reward",
     "get_grader",
     "grade_multiple_graders_single_answer",
 ]
