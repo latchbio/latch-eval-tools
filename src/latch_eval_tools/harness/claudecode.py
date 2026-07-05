@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from latch_eval_tools.harness._cli_runner import _run_cli_agent, EVAL_TIMEOUT
+from latch_eval_tools.harness._cli_runner import EVAL_TIMEOUT, _run_cli_agent
 from latch_eval_tools.harness.utils import DEFAULT_DOCKER_IMAGE, load_data_instructions
 
 MODEL_MAP = {
@@ -27,7 +27,12 @@ def run_claudecode_task(
     completion: bool = False,
 ) -> dict:
     if not os.environ.get("ANTHROPIC_API_KEY"):
-        raise ValueError("ANTHROPIC_API_KEY environment variable is required for Claude Code")
+        raise ValueError(
+            "ANTHROPIC_API_KEY environment variable is required for Claude Code"
+        )
+
+    if prompt_suffix is None:
+        prompt_suffix = ""
 
     return _run_cli_agent(
         agent_type="claudecode",
@@ -40,6 +45,7 @@ def run_claudecode_task(
         docker_image=docker_image,
         memory_limit_bytes=memory_limit_bytes,
         system_prompt=system_prompt,
-        prompt_suffix=prompt_suffix,
+        prompt_suffix=prompt_suffix
+        + "\n\nNote: Ending your turn ends this session. Nothing will resume or re-invoke you afterward.",
         completion=completion,
     )
