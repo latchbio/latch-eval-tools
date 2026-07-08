@@ -134,7 +134,6 @@ class RubricCriterionGradeResult(BaseModel):
     judgment: RubricCriterionJudgment
     attempts_used: int
     finish_reason: Any = None
-    had_tool_calls: bool = False
 
 
 class RubricScoreResult(BaseModel):
@@ -390,7 +389,6 @@ async def grade_rubric_criterion(
             ),
             attempts_used=attempts_used,
             finish_reason=finish_reason,
-            had_tool_calls=had_tool_calls,
         )
 
     raise AssertionError("unreachable: criterion grading loop must return or raise")
@@ -452,9 +450,6 @@ class RubricGrader:
         finish_reasons = {
             f"criterion_{result.judgment.index}": result.finish_reason for result in criterion_results
         }
-        had_tool_calls_by_criterion = {
-            f"criterion_{result.judgment.index}": result.had_tool_calls for result in criterion_results
-        }
         metrics = {
             "answer_field": parsed_config.answer_field,
             "model_id": parsed_config.model_id,
@@ -467,8 +462,6 @@ class RubricGrader:
             "parse_attempts": sum(criterion_parse_attempts.values()),
             "criterion_parse_attempts": criterion_parse_attempts,
             "finish_reason": finish_reasons,
-            "had_tool_calls": any(had_tool_calls_by_criterion.values()),
-            "had_tool_calls_by_criterion": had_tool_calls_by_criterion,
             "grading_transport": "anthropic_api",
             "judgments": [judgment.model_dump(mode="json") for judgment in output.judgments],
         }
