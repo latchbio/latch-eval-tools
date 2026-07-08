@@ -1,10 +1,9 @@
 import asyncio
 from copy import deepcopy
-import json
 import random
 from typing import Any
 
-import litellm
+from anthropic import APIConnectionError, APIStatusError, APITimeoutError, AsyncAnthropic, RateLimitError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from .base import GraderResult, get_nested_value
@@ -18,38 +17,23 @@ DEFAULT_MODEL_PARAMS: dict[str, Any] = {
     }
 }
 RUBRIC_GRADER_SYSTEM_PROMPT = "You are a teacher grading a test response vs a rubric."
-MAX_OUTPUT_NORMALIZATION_DEPTH = 8
 RAW_CONTENT_DEBUG_LIMIT = 20000
 
-# The rubric model runs with adaptive thinking, which prevents litellm from forcing
-# tool_choice for Anthropic structured output. That path occasionally emits malformed
-# or wrapper-nested JSON, so we retry the whole completion+parse a few times before
-# giving up. Retries also cover transient API errors (rate limits, timeouts, 5xx).
+# Use the native Anthropic API instead of LiteLLM because LiteLLM structured
+# output could not be made reliable for this grader; output_config.format gives
+# schema-constrained decoding while preserving extended thinking.
 GRADER_MAX_RETRIES = 3
 GRADER_MAX_ATTEMPTS = GRADER_MAX_RETRIES + 1
 RETRY_BASE_DELAY_SECONDS = 0.5
 RETRY_MAX_DELAY_SECONDS = 8.0
 RETRY_JITTER_SECONDS = 0.5
-DEFAULT_REQUEST_TIMEOUT_SECONDS = 30
+REQUEST_TIMEOUT_SECONDS = 60.0
+DEFAULT_MAX_TOKENS_WITH_THINKING = 16_000
+DEFAULT_MAX_TOKENS = 4_096
+ANTHROPIC_PROVIDER_PREFIX = "anthropic/"
 
 
-def _transient_litellm_errors() -> tuple[type[BaseException], ...]:
-    names = (
-        "RateLimitError",
-        "Timeout",
-        "APITimeoutError",
-        "APIConnectionError",
-        "InternalServerError",
-        "ServiceUnavailableError",
-    )
-    return tuple(
-        err
-        for name in names
-        if isinstance(err := getattr(litellm, name, None), type) and issubclass(err, BaseException)
-    )
-
-
-TRANSIENT_LITELLM_ERRORS = _transient_litellm_errors()
+TRANSIENT_ANTHROPIC_ERRORS = (RateLimitError, APITimeoutError, APIConnectionError)
 
 
 def retry_backoff_seconds(attempt: int) -> float:
@@ -137,6 +121,22 @@ class RubricGraderOutput(BaseModel):
     judgments: list[RubricCriterionJudgment] = Field(min_length=1)
 
 
+class RubricCriterionGraderOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    met: bool
+    rationale: str = ""
+
+
+class RubricCriterionGradeResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    judgment: RubricCriterionJudgment
+    attempts_used: int
+    finish_reason: Any = None
+    had_tool_calls: bool = False
+
+
 class RubricScoreResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -173,22 +173,36 @@ def compute_rubric_reward(config: RubricGraderConfig, output: RubricGraderOutput
     )
 
 
-def rubric_response_format() -> dict[str, Any]:
-    return {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "RubricGraderOutput",
-            "schema": RubricGraderOutput.model_json_schema(),
-            "strict": True,
-        },
+def rubric_output_config(model_params: dict[str, Any] | None = None) -> dict[str, Any]:
+    return rubric_json_schema_output_config(RubricGraderOutput, model_params)
+
+
+def rubric_criterion_output_config(model_params: dict[str, Any] | None = None) -> dict[str, Any]:
+    return rubric_json_schema_output_config(RubricCriterionGraderOutput, model_params)
+
+
+def rubric_json_schema_output_config(
+    output_model: type[BaseModel],
+    model_params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    output_config = {
+        "format": {
+            "type": "json_schema",
+            "schema": output_model.model_json_schema(),
+        }
     }
+    configured_output_config = (model_params or {}).get("output_config")
+    if isinstance(configured_output_config, dict):
+        output_config.update(
+            {key: value for key, value in configured_output_config.items() if key != "format"}
+        )
+    return output_config
 
 
 def build_rubric_user_prompt(response: str, config: RubricGraderConfig) -> str:
     rubric = "\n".join(
         f"[{index}] {criterion.description}" for index, criterion in enumerate(config.criteria)
     )
-    fmt = json.dumps(RubricGraderOutput.model_json_schema(), sort_keys=True)
     return f"""<response>
 {response}
 </response>
@@ -197,11 +211,27 @@ def build_rubric_user_prompt(response: str, config: RubricGraderConfig) -> str:
 {rubric}
 </rubric>
 
-Judge each rubric item independently against the response. Please output your answer in the following json format: {fmt}
-
-Return one judgment per rubric item, using the item's bracketed number as its index. Respond with only the raw JSON object: no markdown code fences, no commentary before or after.
+Judge each rubric item independently against the response. Return one judgment per rubric item, using the item's bracketed number as its index.
 
 Keep each rationale under 256 characters."""
+
+
+def build_rubric_criterion_user_prompt(
+    response: str,
+    criterion: RubricCriterion,
+    criterion_index: int,
+) -> str:
+    return f"""<response>
+{response}
+</response>
+
+<criterion index="{criterion_index}">
+{criterion.description}
+</criterion>
+
+Judge whether this single rubric criterion is met by the response.
+
+Keep the rationale under 256 characters."""
 
 
 def build_rubric_messages(response: str, config: RubricGraderConfig) -> list[dict[str, str]]:
@@ -211,118 +241,62 @@ def build_rubric_messages(response: str, config: RubricGraderConfig) -> list[dic
     ]
 
 
-def rubric_litellm_params(model_params: dict[str, Any]) -> dict[str, Any]:
-    params: dict[str, Any] = {}
-    if "thinking" in model_params:
-        params["allowed_openai_params"] = ["thinking"]
-    return params
+def resolve_anthropic_model_name(model_id: str) -> str:
+    if model_id.startswith(ANTHROPIC_PROVIDER_PREFIX):
+        return model_id[len(ANTHROPIC_PROVIDER_PREFIX) :]
+    return model_id
 
 
-def content_block_text(blocks: list[Any]) -> str | None:
-    """Join the text of a provider content-block list (e.g. [{"type": "text", "text": ...}]).
-
-    Returns None when the list does not look like text content blocks, so the
-    caller can leave the value untouched rather than fabricating a string.
-    """
+def anthropic_message_text(message: Any) -> str:
     parts: list[str] = []
-    for block in blocks:
-        if not isinstance(block, dict):
-            return None
-        for key in ("text", "content"):
-            candidate = block.get(key)
-            if isinstance(candidate, str):
-                parts.append(candidate)
-                break
-    if not parts:
-        return None
+    for block in getattr(message, "content", None) or []:
+        if getattr(block, "type", None) != "text":
+            continue
+        text = getattr(block, "text", None)
+        if isinstance(text, str):
+            parts.append(text)
     return "".join(parts)
 
 
-def strip_code_fences(text: str) -> str:
-    """Strip a leading/trailing markdown code fence (```` ```json ... ``` ````) if present."""
-    stripped = text.strip()
-    if not stripped.startswith("```"):
-        return text
-    lines = stripped.splitlines()
-    if lines and lines[0].startswith("```"):
-        lines = lines[1:]
-    if lines and lines[-1].strip().startswith("```"):
-        lines = lines[:-1]
-    return "\n".join(lines).strip()
-
-
-def validate_rubric_grader_output_candidate(value: Any) -> RubricGraderOutput | None:
-    if isinstance(value, RubricGraderOutput):
-        return value
-    try:
-        if isinstance(value, list):
-            return RubricGraderOutput.model_validate({"judgments": value})
-        if isinstance(value, dict):
-            return RubricGraderOutput.model_validate(value)
-    except ValidationError:
-        return None
-    return None
-
-
-def normalize_rubric_grader_output(value: Any, *, depth: int = 0) -> Any:
-    if depth > MAX_OUTPUT_NORMALIZATION_DEPTH:
-        return value
-
-    output = validate_rubric_grader_output_candidate(value)
-    if output is not None:
-        return output
-
-    if isinstance(value, str):
-        text = strip_code_fences(value)
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            return value
-        if parsed == text:
-            return value
-        return normalize_rubric_grader_output(parsed, depth=depth + 1)
-
-    if isinstance(value, list):
-        text = content_block_text(value)
-        if text is not None:
-            return normalize_rubric_grader_output(text, depth=depth + 1)
-        return value
-
-    if isinstance(value, dict):
-        judgments = value.get("judgments")
-        if isinstance(judgments, str | dict | list):
-            normalized_judgments = normalize_rubric_grader_output(judgments, depth=depth + 1)
-            output = validate_rubric_grader_output_candidate(normalized_judgments)
-            if output is not None:
-                return output
-            if isinstance(normalized_judgments, list):
-                output = validate_rubric_grader_output_candidate({**value, "judgments": normalized_judgments})
-                if output is not None:
-                    return output
-
-        candidates: list[RubricGraderOutput] = []
-        for nested_value in value.values():
-            normalized_value = normalize_rubric_grader_output(nested_value, depth=depth + 1)
-            output = validate_rubric_grader_output_candidate(normalized_value)
-            if output is not None:
-                candidates.append(output)
-        if len(candidates) == 1:
-            return candidates[0]
-
-    return value
+async def create_rubric_message(
+    client: AsyncAnthropic,
+    config: RubricGraderConfig,
+    user_prompt: str,
+    output_config: dict[str, Any] | None = None,
+) -> Any:
+    kwargs: dict[str, Any] = {
+        "model": resolve_anthropic_model_name(config.model_id),
+        "max_tokens": DEFAULT_MAX_TOKENS_WITH_THINKING if "thinking" in config.model_params else DEFAULT_MAX_TOKENS,
+        "system": RUBRIC_GRADER_SYSTEM_PROMPT,
+        "messages": [{"role": "user", "content": user_prompt}],
+        "output_config": output_config or rubric_output_config(config.model_params),
+        "timeout": config.model_params.get("timeout", REQUEST_TIMEOUT_SECONDS),
+    }
+    if "thinking" in config.model_params:
+        kwargs["thinking"] = config.model_params["thinking"]
+    return await client.messages.create(**kwargs)
 
 
 def parse_rubric_grader_output(value: Any) -> RubricGraderOutput:
-    normalized = normalize_rubric_grader_output(value)
-    if isinstance(normalized, RubricGraderOutput):
-        return normalized
-    if isinstance(normalized, dict):
-        return RubricGraderOutput.model_validate(normalized)
-    if isinstance(normalized, list):
-        return RubricGraderOutput.model_validate({"judgments": normalized})
-    if isinstance(normalized, str):
-        return RubricGraderOutput.model_validate_json(normalized)
+    if isinstance(value, RubricGraderOutput):
+        return value
+    if isinstance(value, dict):
+        return RubricGraderOutput.model_validate(value)
+    if isinstance(value, str):
+        return RubricGraderOutput.model_validate_json(value)
     raise ValueError(f"expected rubric grader output object or JSON string, got {type(value).__name__}")
+
+
+def parse_rubric_criterion_grader_output(value: Any) -> RubricCriterionGraderOutput:
+    if isinstance(value, RubricCriterionGraderOutput):
+        return value
+    if isinstance(value, dict):
+        return RubricCriterionGraderOutput.model_validate(value)
+    if isinstance(value, str):
+        return RubricCriterionGraderOutput.model_validate_json(value)
+    raise ValueError(
+        f"expected rubric criterion grader output object or JSON string, got {type(value).__name__}"
+    )
 
 
 def validate_judgment_coverage(config: RubricGraderConfig, output: RubricGraderOutput) -> None:
@@ -349,40 +323,77 @@ def validate_judgment_coverage(config: RubricGraderConfig, output: RubricGraderO
         )
 
 
-def rubric_output_was_wrapped(content: Any) -> bool:
-    """True when the model content was not already a canonical {"judgments": [...]} JSON string.
-
-    Recorded as a metric so we can monitor how often the litellm tool-emulation path
-    produces non-canonical output even when parsing ultimately succeeds.
-    """
-    if not isinstance(content, str):
-        return True
-    try:
-        parsed = json.loads(strip_code_fences(content))
-    except json.JSONDecodeError:
-        return True
-    return not (isinstance(parsed, dict) and set(parsed.keys()) == {"judgments"})
-
-
-def build_rubric_completion_kwargs(
-    response: str,
+async def grade_rubric_criterion(
+    client: AsyncAnthropic,
     config: RubricGraderConfig,
-    *,
-    api_key: str,
-    base_url: str | None,
-) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {
-        "model": config.model_id,
-        "messages": build_rubric_messages(response, config),
-        "api_key": api_key,
-        "base_url": base_url,
-        "response_format": rubric_response_format(),
-        **rubric_litellm_params(config.model_params),
-    }
-    if "timeout" not in config.model_params:
-        kwargs["timeout"] = DEFAULT_REQUEST_TIMEOUT_SECONDS
-    kwargs.update(config.model_params)
-    return kwargs
+    response: str,
+    criterion: RubricCriterion,
+    criterion_index: int,
+) -> RubricCriterionGradeResult:
+    user_prompt = build_rubric_criterion_user_prompt(response, criterion, criterion_index)
+    content: Any = None
+    finish_reason: Any = None
+    had_tool_calls = False
+    attempts_used = 0
+
+    for attempt in range(GRADER_MAX_ATTEMPTS):
+        attempts_used = attempt + 1
+        is_last_attempt = attempt == GRADER_MAX_ATTEMPTS - 1
+        try:
+            message = await create_rubric_message(
+                client,
+                config,
+                user_prompt,
+                rubric_criterion_output_config(config.model_params),
+            )
+        except TRANSIENT_ANTHROPIC_ERRORS:
+            if is_last_attempt:
+                raise
+            await asyncio.sleep(retry_backoff_seconds(attempt))
+            continue
+        except APIStatusError as exc:
+            if exc.status_code >= 500 and not is_last_attempt:
+                await asyncio.sleep(retry_backoff_seconds(attempt))
+                continue
+            raise
+
+        content = anthropic_message_text(message)
+        finish_reason = getattr(message, "stop_reason", None)
+
+        try:
+            if finish_reason in {"refusal", "max_tokens"}:
+                raise ValueError(f"rubric criterion grader model stopped with stop_reason={finish_reason!r}")
+            candidate = parse_rubric_criterion_grader_output(content)
+        except (ValidationError, ValueError) as exc:
+            if isinstance(exc, RubricGraderOutputParseError):
+                parse_error = exc
+            else:
+                raw_content = content if isinstance(content, str) else repr(content)
+                parse_error = RubricGraderOutputParseError(
+                    f"could not parse rubric criterion {criterion_index} output after {attempts_used} attempt(s): {exc}\n\n"
+                    f"finish_reason={finish_reason!r} had_tool_calls={had_tool_calls}\n"
+                    f"raw_content={raw_content[:RAW_CONTENT_DEBUG_LIMIT]}",
+                    raw_content=content,
+                    finish_reason=finish_reason,
+                    had_tool_calls=had_tool_calls,
+                )
+            if is_last_attempt:
+                raise parse_error from exc
+            await asyncio.sleep(retry_backoff_seconds(attempt))
+            continue
+
+        return RubricCriterionGradeResult(
+            judgment=RubricCriterionJudgment(
+                index=criterion_index,
+                met=candidate.met,
+                rationale=candidate.rationale,
+            ),
+            attempts_used=attempts_used,
+            finish_reason=finish_reason,
+            had_tool_calls=had_tool_calls,
+        )
+
+    raise AssertionError("unreachable: criterion grading loop must return or raise")
 
 
 class RubricGrader:
@@ -391,9 +402,17 @@ class RubricGrader:
         agent_answer: dict,
         config: dict,
         *,
-        api_key: str,
+        api_key: str | None = None,
         base_url: str | None = None,
     ) -> GraderResult:
+        """Grade ``agent_answer`` against a rubric via the Anthropic Messages API.
+
+        When ``api_key`` / ``base_url`` are ``None`` the Anthropic client falls
+        back to ``ANTHROPIC_API_KEY`` / ``ANTHROPIC_BASE_URL`` from the
+        environment. This lets a caller running inside a managed Anthropic API
+        environment (e.g. a Taiga grader container with ``enable_anthropic_api``)
+        invoke the grader without threading credentials through.
+        """
         parsed_config = RubricGraderConfig.model_validate(config)
         answer, found = get_nested_value(agent_answer, parsed_config.answer_field)
         if not found:
@@ -407,61 +426,35 @@ class RubricGrader:
             )
 
         response = str(answer)[: parsed_config.truncation_length]
-        completion_kwargs = build_rubric_completion_kwargs(
-            response, parsed_config, api_key=api_key, base_url=base_url
+        client_kwargs: dict[str, Any] = {}
+        if api_key is not None:
+            client_kwargs["api_key"] = api_key
+        if base_url is not None:
+            client_kwargs["base_url"] = base_url
+        client = AsyncAnthropic(**client_kwargs)
+
+        criterion_results = await asyncio.gather(
+            *(
+                grade_rubric_criterion(client, parsed_config, response, criterion, criterion_index)
+                for criterion_index, criterion in enumerate(parsed_config.criteria)
+            )
         )
-
-        output: RubricGraderOutput | None = None
-        content: Any = None
-        finish_reason: Any = None
-        had_tool_calls = False
-        attempts_used = 0
-
-        for attempt in range(GRADER_MAX_ATTEMPTS):
-            attempts_used = attempt + 1
-            is_last_attempt = attempt == GRADER_MAX_ATTEMPTS - 1
-            try:
-                completion = await litellm.acompletion(**completion_kwargs)
-            except TRANSIENT_LITELLM_ERRORS:
-                if is_last_attempt:
-                    raise
-                await asyncio.sleep(retry_backoff_seconds(attempt))
-                continue
-
-            choice = completion.choices[0]
-            message = choice.message
-            content = message.content
-            finish_reason = getattr(choice, "finish_reason", None)
-            had_tool_calls = bool(getattr(message, "tool_calls", None))
-
-            try:
-                candidate = parse_rubric_grader_output(content)
-                validate_judgment_coverage(parsed_config, candidate)
-            except (ValidationError, ValueError) as exc:
-                if isinstance(exc, RubricGraderOutputParseError):
-                    parse_error = exc
-                else:
-                    raw_content = content if isinstance(content, str) else repr(content)
-                    parse_error = RubricGraderOutputParseError(
-                        f"could not parse rubric grader output after {attempts_used} attempt(s): {exc}\n\n"
-                        f"finish_reason={finish_reason!r} had_tool_calls={had_tool_calls}\n"
-                        f"raw_content={raw_content[:RAW_CONTENT_DEBUG_LIMIT]}",
-                        raw_content=content,
-                        finish_reason=finish_reason,
-                        had_tool_calls=had_tool_calls,
-                    )
-                if is_last_attempt:
-                    raise parse_error from exc
-                await asyncio.sleep(retry_backoff_seconds(attempt))
-                continue
-
-            output = candidate
-            break
-
-        assert output is not None  # the loop either assigns output or raises
+        output = RubricGraderOutput(
+            judgments=[result.judgment for result in sorted(criterion_results, key=lambda result: result.judgment.index)]
+        )
+        validate_judgment_coverage(parsed_config, output)
 
         score_result = compute_rubric_reward(parsed_config, output)
 
+        criterion_parse_attempts = {
+            f"criterion_{result.judgment.index}": result.attempts_used for result in criterion_results
+        }
+        finish_reasons = {
+            f"criterion_{result.judgment.index}": result.finish_reason for result in criterion_results
+        }
+        had_tool_calls_by_criterion = {
+            f"criterion_{result.judgment.index}": result.had_tool_calls for result in criterion_results
+        }
         metrics = {
             "answer_field": parsed_config.answer_field,
             "model_id": parsed_config.model_id,
@@ -471,10 +464,12 @@ class RubricGrader:
             "raw_score": score_result.raw_score,
             "max_score": score_result.max_score,
             "reward": score_result.reward,
-            "parse_attempts": attempts_used,
-            "output_normalization_applied": rubric_output_was_wrapped(content),
-            "finish_reason": finish_reason,
-            "had_tool_calls": had_tool_calls,
+            "parse_attempts": sum(criterion_parse_attempts.values()),
+            "criterion_parse_attempts": criterion_parse_attempts,
+            "finish_reason": finish_reasons,
+            "had_tool_calls": any(had_tool_calls_by_criterion.values()),
+            "had_tool_calls_by_criterion": had_tool_calls_by_criterion,
+            "grading_transport": "anthropic_api",
             "judgments": [judgment.model_dump(mode="json") for judgment in output.judgments],
         }
         return GraderResult(

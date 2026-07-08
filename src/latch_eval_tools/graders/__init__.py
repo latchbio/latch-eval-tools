@@ -12,6 +12,7 @@ from .longest_subsequence import LongestSubsequenceGrader
 from .completion import FinishedFileGrader
 from .rubric import (
     RubricCriterion,
+    RubricCriterionGraderOutput,
     RubricCriterionJudgment,
     RubricGrader,
     RubricGraderConfig,
@@ -21,6 +22,8 @@ from .rubric import (
     build_rubric_messages,
     build_rubric_user_prompt,
     compute_rubric_reward,
+    rubric_criterion_output_config,
+    rubric_output_config,
 )
 from .helpers import grade_multiple_graders_single_answer  # noqa: E402 -- depends on GRADER_REGISTRY
 
@@ -76,6 +79,7 @@ __all__ = [
     "LongestSubsequenceGrader",
     "FinishedFileGrader",
     "RubricCriterion",
+    "RubricCriterionGraderOutput",
     "RubricCriterionJudgment",
     "RubricGrader",
     "RubricGraderConfig",
@@ -87,6 +91,8 @@ __all__ = [
     "build_rubric_messages",
     "build_rubric_user_prompt",
     "compute_rubric_reward",
+    "rubric_criterion_output_config",
+    "rubric_output_config",
     "get_grader",
     "grade_multiple_graders_single_answer",
 ]
