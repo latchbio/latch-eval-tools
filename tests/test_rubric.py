@@ -2,7 +2,9 @@ import asyncio
 import json
 import types
 
+import httpx
 import pytest
+from anthropic import APIStatusError, APITimeoutError, RateLimitError
 from pydantic import ValidationError
 
 from latch_eval_tools.graders import LLM_GRADER_REGISTRY
@@ -11,17 +13,19 @@ from latch_eval_tools.graders.rubric import (
     DEFAULT_MODEL_PARAMS,
     DEFAULT_TRUNCATION_LENGTH,
     RUBRIC_GRADER_SYSTEM_PROMPT,
+    GraderError,
+    GraderTransientError,
     RubricCriterionGraderOutput,
     RubricGrader,
     RubricGraderConfig,
     RubricGraderOutput,
     RubricGraderOutputParseError,
-    build_rubric_messages,
+    TransientRetryController,
+    classify_transient_error,
     compute_rubric_reward,
-    parse_rubric_grader_output,
     resolve_anthropic_model_name,
+    retry_after_seconds_from_error,
     rubric_criterion_output_config,
-    rubric_output_config,
 )
 
 
@@ -86,22 +90,8 @@ def test_compute_rubric_reward_normalizes_and_clamps() -> None:
     }
 
 
-def test_rubric_prompt_and_llm_registry() -> None:
-    config = RubricGraderConfig.model_validate(
-        {
-            "answer_field": "rationale",
-            "criteria": [{"description": "states that hERG is required", "score_delta": 1}],
-        }
-    )
-
-    messages = build_rubric_messages("hERG is required.", config)
-
+def test_llm_registry() -> None:
     assert LLM_GRADER_REGISTRY == {"rubric": RubricGrader}
-    assert messages[0] == {"role": "system", "content": RUBRIC_GRADER_SYSTEM_PROMPT}
-    assert "<response>\nhERG is required.\n</response>" in messages[1]["content"]
-    assert "[0] states that hERG is required" in messages[1]["content"]
-    assert "Return one judgment per rubric item" in messages[1]["content"]
-    assert "Keep each rationale under 256 characters." in messages[1]["content"]
 
 
 def test_rubric_output_preserves_rationale() -> None:
@@ -112,43 +102,162 @@ def test_rubric_output_preserves_rationale() -> None:
     assert len(output.judgments[0].rationale) == 300
 
 
-def test_parse_rubric_grader_output_accepts_canonical_output() -> None:
-    judgment = {"index": 0, "met": True, "rationale": "present"}
-    payloads = [
-        {"judgments": [judgment]},
-        json.dumps({"judgments": [judgment]}),
-        RubricGraderOutput.model_validate({"judgments": [judgment]}),
-    ]
-
-    for payload in payloads:
-        output = parse_rubric_grader_output(payload)
-
-        assert output.judgments[0].index == 0
-        assert output.judgments[0].met is True
-        assert output.judgments[0].rationale == "present"
-
-
-def test_parse_rubric_grader_output_rejects_noncanonical_output() -> None:
-    judgment = {"index": 0, "met": True, "rationale": "present"}
-    payloads = [
-        json.dumps({"judgments": json.dumps([judgment])}),
-        json.dumps({"json_value": {"judgments": [judgment]}}),
-        json.dumps([judgment]),
-        "```json\n" + json.dumps({"judgments": [judgment]}) + "\n```",
-        [{"type": "text", "text": json.dumps({"judgments": [judgment]})}],
-    ]
-
-    for payload in payloads:
-        with pytest.raises((ValidationError, ValueError)):
-            parse_rubric_grader_output(payload)
-
-
 def test_rubric_output_rejects_empty_judgments() -> None:
     with pytest.raises(ValidationError):
         RubricGraderOutput.model_validate({"judgments": []})
 
-    with pytest.raises(ValidationError):
-        parse_rubric_grader_output(json.dumps({"judgments": []}))
+
+def test_anthropic_model_and_output_config_resolution() -> None:
+    assert resolve_anthropic_model_name("anthropic/claude-sonnet-5") == "claude-sonnet-5"
+    assert resolve_anthropic_model_name("claude-sonnet-5") == "claude-sonnet-5"
+    assert rubric_criterion_output_config()["format"]["schema"] == RubricCriterionGraderOutput.model_json_schema()
+    assert rubric_criterion_output_config({"output_config": {"effort": "low"}}) == {
+        "format": {
+            "type": "json_schema",
+            "schema": RubricCriterionGraderOutput.model_json_schema(),
+        },
+        "effort": "low",
+    }
+
+
+def _api_request() -> httpx.Request:
+    return httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+
+
+def _status_error(status_code: int, headers: dict[str, str] | None = None) -> APIStatusError:
+    response = httpx.Response(status_code, headers=headers or {}, request=_api_request())
+    if status_code == 429:
+        return RateLimitError("rate limited", response=response, body=None)
+    return APIStatusError(f"status {status_code}", response=response, body=None)
+
+
+def test_classify_transient_error() -> None:
+    info_429 = classify_transient_error(_status_error(429))
+    assert info_429 is not None
+    assert info_429.status_code == 429
+    assert info_429.rate_pressure is True
+
+    info_529 = classify_transient_error(_status_error(529))
+    assert info_529 is not None
+    assert info_529.status_code == 529
+    assert info_529.rate_pressure is True
+
+    info_500 = classify_transient_error(_status_error(500))
+    assert info_500 is not None
+    assert info_500.status_code == 500
+    assert info_500.rate_pressure is False
+
+    info_timeout = classify_transient_error(APITimeoutError(request=_api_request()))
+    assert info_timeout is not None
+    assert info_timeout.status_code is None
+    assert info_timeout.rate_pressure is False
+
+    assert classify_transient_error(_status_error(400)) is None
+    assert classify_transient_error(_status_error(401)) is None
+    assert classify_transient_error(_status_error(404)) is None
+    assert classify_transient_error(_status_error(413)) is None
+    assert classify_transient_error(ValueError("nope")) is None
+
+
+def test_retry_after_seconds_from_error() -> None:
+    assert retry_after_seconds_from_error(_status_error(429, {"retry-after": "7"})) == 7.0
+    assert retry_after_seconds_from_error(_status_error(429, {"retry-after-ms": "250"})) == 0.25
+    assert retry_after_seconds_from_error(_status_error(429, {"retry-after": "nonsense"})) is None
+    assert retry_after_seconds_from_error(_status_error(429)) is None
+
+
+class _FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.sleeps: list[float] = []
+
+    def time(self) -> float:
+        return self.now
+
+    async def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+def _controller(budget: float = 30.0) -> tuple[TransientRetryController, _FakeClock]:
+    clock = _FakeClock()
+    controller = TransientRetryController(budget, time_source=clock.time, sleep=clock.sleep)
+    return controller, clock
+
+
+def _max_jitter(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "latch_eval_tools.graders.rubric.random",
+        types.SimpleNamespace(uniform=lambda _low, high: high),
+    )
+
+
+def test_controller_budget_exhaustion_raises_transient(monkeypatch: pytest.MonkeyPatch) -> None:
+    _max_jitter(monkeypatch)
+    controller, clock = _controller(budget=30.0)
+    error = _status_error(529)
+    info = classify_transient_error(error)
+    assert info is not None
+
+    async def run() -> None:
+        # Full-jitter caps: 2, 4, 8, 16 -> exactly the 30s budget.
+        for attempt in range(4):
+            await controller.backoff(attempt, info, error)
+        with pytest.raises(GraderTransientError) as exc_info:
+            await controller.backoff(4, info, error)
+        assert exc_info.value.status_code == 529
+        assert exc_info.value.sleep_used_seconds == pytest.approx(30.0)
+
+    asyncio.run(run())
+    assert clock.now == pytest.approx(30.0)
+
+
+def test_controller_serializes_on_rate_pressure(monkeypatch: pytest.MonkeyPatch) -> None:
+    _max_jitter(monkeypatch)
+    controller, _clock = _controller()
+    error = _status_error(429)
+    info = classify_transient_error(error)
+    assert info is not None
+    assert controller.serialized is False
+
+    asyncio.run(controller.backoff(0, info, error))
+
+    assert controller.serialized is True
+
+
+def test_controller_overlapping_backoffs_share_one_cooldown(monkeypatch: pytest.MonkeyPatch) -> None:
+    _max_jitter(monkeypatch)
+    controller, clock = _controller(budget=30.0)
+    error = _status_error(529)
+    info = classify_transient_error(error)
+    assert info is not None
+
+    async def run() -> None:
+        # Two tasks failing at the same instant with the same delay charge the
+        # budget once: the second backoff's window is already covered.
+        await controller.backoff(0, info, error)
+        assert controller.sleep_used_seconds == pytest.approx(2.0)
+        clock.now = 0.0
+        await controller.backoff(0, info, error)
+
+    asyncio.run(run())
+    assert controller.sleep_used_seconds == pytest.approx(2.0)
+    assert clock.now == pytest.approx(2.0)
+
+
+def test_controller_honors_retry_after(monkeypatch: pytest.MonkeyPatch) -> None:
+    _max_jitter(monkeypatch)
+    controller, clock = _controller(budget=30.0)
+    error = _status_error(429, {"retry-after": "11"})
+    info = classify_transient_error(error)
+    assert info is not None
+    assert info.retry_after_seconds == 11.0
+
+    # retry-after (11s) exceeds the attempt-0 jitter cap (2s) and wins.
+    asyncio.run(controller.backoff(0, info, error))
+
+    assert controller.sleep_used_seconds == pytest.approx(11.0)
+    assert clock.now == pytest.approx(11.0)
 
 
 def _fake_message(content: str, *, stop_reason: str = "end_turn") -> object:
@@ -158,15 +267,25 @@ def _fake_message(content: str, *, stop_reason: str = "end_turn") -> object:
     )
 
 
-class FakeTransientAnthropicError(Exception):
-    pass
-
-
 def _patch_no_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_sleep(_seconds: float) -> None:
         return None
 
     monkeypatch.setattr("latch_eval_tools.graders.rubric.asyncio.sleep", fake_sleep)
+
+
+def _patch_fake_clock_controller(monkeypatch: pytest.MonkeyPatch, budget: float = 30.0) -> _FakeClock:
+    clock = _FakeClock()
+
+    def factory(sleep_budget_seconds: float = budget) -> TransientRetryController:
+        return TransientRetryController(
+            sleep_budget_seconds,
+            time_source=clock.time,
+            sleep=clock.sleep,
+        )
+
+    monkeypatch.setattr("latch_eval_tools.graders.rubric.TransientRetryController", factory)
+    return clock
 
 
 def _patch_anthropic(
@@ -219,6 +338,7 @@ def test_evaluate_answer_llm_wraps_parse_failure_with_raw_content(monkeypatch: p
     assert exc.finish_reason == "end_turn"
     assert exc.had_tool_calls is False
     assert "totally_unexpected" in str(exc)
+    assert isinstance(exc, GraderError)
 
 
 def test_evaluate_answer_llm_reports_refusal_stop_reason(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -253,7 +373,7 @@ def test_evaluate_answer_llm_uses_anthropic_structured_output(monkeypatch: pytes
     assert result.passed is True
     assert result.metrics["judgments"][0]["met"] is True
     assert result.metrics["grading_transport"] == "anthropic_api"
-    assert observed_clients == [{"api_key": "k"}]
+    assert observed_clients == [{"max_retries": 0, "api_key": "k"}]
     assert observed_requests[0]["model"] == "claude-sonnet-5"
     assert observed_requests[0]["system"] == RUBRIC_GRADER_SYSTEM_PROMPT
     assert observed_requests[0]["output_config"] == rubric_criterion_output_config()
@@ -322,13 +442,16 @@ def test_evaluate_answer_llm_retries_until_valid(monkeypatch: pytest.MonkeyPatch
     assert result.metrics["parse_attempts"] == 3
 
 
-def test_evaluate_answer_llm_retries_transient_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_evaluate_answer_llm_recovers_from_transient_error(monkeypatch: pytest.MonkeyPatch) -> None:
     good = json.dumps({"met": True, "rationale": "present"})
-    monkeypatch.setattr(
-        "latch_eval_tools.graders.rubric.TRANSIENT_ANTHROPIC_ERRORS",
-        (FakeTransientAnthropicError,),
+    observed_requests: list[dict[str, object]] = []
+    _patch_anthropic(
+        monkeypatch,
+        [_status_error(529), _status_error(429), _fake_message(good)],
+        observed_requests=observed_requests,
     )
-    _patch_anthropic(monkeypatch, [FakeTransientAnthropicError("rate limited"), _fake_message(good)])
+    _patch_fake_clock_controller(monkeypatch)
+    _max_jitter(monkeypatch)
     config = {
         "answer_field": "rationale",
         "criteria": [{"description": "states that hERG is required", "score_delta": 1}],
@@ -337,39 +460,58 @@ def test_evaluate_answer_llm_retries_transient_error(monkeypatch: pytest.MonkeyP
     result = asyncio.run(RubricGrader().evaluate_answer_llm({"rationale": "hi"}, config, api_key="k"))
 
     assert result.passed is True
-    assert result.metrics["parse_attempts"] == 2
+    assert len(observed_requests) == 3
 
 
-def test_evaluate_answer_llm_rejects_full_rubric_response_shape(monkeypatch: pytest.MonkeyPatch) -> None:
-    only_first = json.dumps({"judgments": [{"index": 0, "met": True, "rationale": "present"}]})
-
-    _patch_anthropic(monkeypatch, [_fake_message(only_first)] * 4)
+def test_evaluate_answer_llm_raises_transient_after_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_anthropic(monkeypatch, [_status_error(529) for _ in range(20)])
+    clock = _patch_fake_clock_controller(monkeypatch, budget=30.0)
+    _max_jitter(monkeypatch)
     config = {
         "answer_field": "rationale",
         "criteria": [{"description": "states that hERG is required", "score_delta": 1}],
     }
 
-    with pytest.raises(RubricGraderOutputParseError) as exc_info:
+    with pytest.raises(GraderTransientError) as exc_info:
         asyncio.run(RubricGrader().evaluate_answer_llm({"rationale": "hi"}, config, api_key="k"))
 
-    assert "could not parse rubric criterion 0 output" in str(exc_info.value)
+    assert exc_info.value.status_code == 529
+    assert exc_info.value.sleep_used_seconds == pytest.approx(30.0)
+    assert clock.now == pytest.approx(30.0)
 
 
-def test_anthropic_model_thinking_and_output_config_resolution() -> None:
-    assert resolve_anthropic_model_name("anthropic/claude-sonnet-5") == "claude-sonnet-5"
-    assert resolve_anthropic_model_name("claude-sonnet-5") == "claude-sonnet-5"
-    assert rubric_output_config({"output_config": {"effort": "low"}}) == {
-        "format": {
-            "type": "json_schema",
-            "schema": RubricGraderOutput.model_json_schema(),
-        },
-        "effort": "low",
+def test_evaluate_answer_llm_raises_grader_error_on_bad_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed_requests: list[dict[str, object]] = []
+    _patch_anthropic(monkeypatch, [_status_error(400)], observed_requests=observed_requests)
+    config = {
+        "answer_field": "rationale",
+        "criteria": [{"description": "states that hERG is required", "score_delta": 1}],
     }
-    assert rubric_criterion_output_config()["format"]["schema"] == RubricCriterionGraderOutput.model_json_schema()
-    assert rubric_output_config({"output_config": {"format": {"type": "text"}, "effort": "low"}}) == {
-        "format": {
-            "type": "json_schema",
-            "schema": RubricGraderOutput.model_json_schema(),
-        },
-        "effort": "low",
+
+    with pytest.raises(GraderError) as exc_info:
+        asyncio.run(RubricGrader().evaluate_answer_llm({"rationale": "hi"}, config, api_key="k"))
+
+    assert not isinstance(exc_info.value, GraderTransientError)
+    assert "non-retryable" in str(exc_info.value)
+    assert len(observed_requests) == 1
+
+
+def test_evaluate_answer_llm_prioritizes_transient_over_fatal(monkeypatch: pytest.MonkeyPatch) -> None:
+    # One criterion hits a 400 (fatal), the other exhausts the budget on 529s.
+    # The transient error must win so callers schedule a retry instead of
+    # permanently recording a system error.
+    messages: list[object] = [_status_error(400)]
+    messages.extend(_status_error(529) for _ in range(20))
+    _patch_anthropic(monkeypatch, messages)
+    _patch_fake_clock_controller(monkeypatch, budget=30.0)
+    _max_jitter(monkeypatch)
+    config = {
+        "answer_field": "rationale",
+        "criteria": [
+            {"description": "states that hERG is required", "score_delta": 1},
+            {"description": "includes a second correct reason", "score_delta": 1},
+        ],
     }
+
+    with pytest.raises(GraderTransientError):
+        asyncio.run(RubricGrader().evaluate_answer_llm({"rationale": "hi"}, config, api_key="k"))

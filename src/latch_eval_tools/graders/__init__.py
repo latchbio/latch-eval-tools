@@ -11,6 +11,8 @@ from .composite import AllOfGrader, ListMatchGrader, DictMatchGrader
 from .longest_subsequence import LongestSubsequenceGrader
 from .completion import FinishedFileGrader
 from .rubric import (
+    GraderError,
+    GraderTransientError,
     RubricCriterion,
     RubricCriterionGraderOutput,
     RubricCriterionJudgment,
@@ -19,11 +21,8 @@ from .rubric import (
     RubricGraderOutput,
     RubricGraderOutputParseError,
     RubricScoreResult,
-    build_rubric_messages,
-    build_rubric_user_prompt,
     compute_rubric_reward,
     rubric_criterion_output_config,
-    rubric_output_config,
 )
 from .helpers import grade_multiple_graders_single_answer  # noqa: E402 -- depends on GRADER_REGISTRY
 
@@ -78,6 +77,8 @@ __all__ = [
     "DictMatchGrader",
     "LongestSubsequenceGrader",
     "FinishedFileGrader",
+    "GraderError",
+    "GraderTransientError",
     "RubricCriterion",
     "RubricCriterionGraderOutput",
     "RubricCriterionJudgment",
@@ -88,11 +89,8 @@ __all__ = [
     "RubricScoreResult",
     "GRADER_REGISTRY",
     "LLM_GRADER_REGISTRY",
-    "build_rubric_messages",
-    "build_rubric_user_prompt",
     "compute_rubric_reward",
     "rubric_criterion_output_config",
-    "rubric_output_config",
     "get_grader",
     "grade_multiple_graders_single_answer",
 ]
