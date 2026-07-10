@@ -5,6 +5,9 @@ from latch_eval_tools.harness._cli_runner import _run_cli_agent, EVAL_TIMEOUT
 from latch_eval_tools.harness.utils import DEFAULT_DOCKER_IMAGE, load_data_instructions
 
 MODEL_MAP = {
+    "openai/gpt-5.6-terra": "gpt-5.6-terra",
+    "openai/gpt-5.6-luna": "gpt-5.6-luna",
+    "openai/gpt-5.6-sol": "gpt-5.6-sol",
     "openai/gpt-5.5": "gpt-5.5",
     "openai/gpt-5.4": "gpt-5.4",
     "openai/gpt-5.3-codex": "gpt-5.3-codex",

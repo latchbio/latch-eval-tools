@@ -45,6 +45,9 @@ def run_claudecode_task(
         memory_limit_bytes=memory_limit_bytes,
         system_prompt=system_prompt,
         prompt_suffix=prompt_suffix
-        + "\n\nNote: Ending your turn ends this session. Nothing will resume or re-invoke you afterward.",
+        + "\n\nNote: Do not end your turn while a background process is still"
+        " running. Nothing will alert you it is done. Ending your turn may"
+        " complete the session and kill the process; instead, block"
+        " synchronously and poll until the job finishes before returning.",
         completion=completion,
     )

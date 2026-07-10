@@ -34,6 +34,23 @@ PI_ENV_KEYS = {
 
 OOM_EXIT_CODE = 137
 MAX_OOM_RESTARTS = 10
+
+# claude-code runs one-shot (`--print`): when the model ends its turn the
+# process exits, ending the session and killing any background tasks it
+# started. Agents routinely end their turn to "wait" for a long-running job,
+# expecting to be re-invoked -- nothing does that, so the run terminates
+# immediately with no answer. When claude-code exits cleanly without an answer
+# file, re-invoke `claude --resume` with a nudge (up to this many times) so the
+# agent notices the unfinished work and blocks on it synchronously instead.
+MAX_CLAUDECODE_ANSWER_RESUMES = 30
+CLAUDECODE_RESUME_NUDGE = (
+    "You ended your turn without submitting a final answer, so the session was"
+    " about to end. Any background process you started has been killed and is no"
+    " longer running. Check the current state on disk, finish any unfinished"
+    " work using a synchronous foreground command that blocks until the job"
+    " completes, then submit your final answer. Do not end your turn again"
+    " until the work is done and the answer has been written."
+)
 AGENT_STATE_DIRS = {
     "claudecode": ".claude",
     "openaicodex": ".codex",
@@ -424,6 +441,7 @@ def _run_cli_agent(
             prompt_text = enhanced_prompt
             resume_identifier: str | None = None
             last_return_code: int | None = None
+            claudecode_answer_resumes = 0
 
             while True:
                 remaining_timeout = deadline - time.time()
@@ -588,6 +606,34 @@ def _run_cli_agent(
                         log_file.flush()
                         prompt_text = "Continue."
                         continue
+                    if agent_type == "claudecode":
+                        answer_present = (
+                            finished_file.exists()
+                            if completion
+                            else eval_answer_file.exists()
+                        )
+                        if (
+                            not answer_present
+                            and claudecode_answer_resumes
+                            < MAX_CLAUDECODE_ANSWER_RESUMES
+                        ):
+                            persist_trajectory()
+                            resume_identifier = load_trajectory_identifier(
+                                trajectory_file,
+                                AGENT_IDENTIFIER_KEYS["claudecode"],
+                            )
+                            if resume_identifier is not None:
+                                claudecode_answer_resumes += 1
+                                log_file.write(
+                                    "\n\nClaude Code ended its turn without a "
+                                    "final answer; resuming session "
+                                    f"{resume_identifier} (resume "
+                                    f"{claudecode_answer_resumes}/"
+                                    f"{MAX_CLAUDECODE_ANSWER_RESUMES})\n"
+                                )
+                                log_file.flush()
+                                prompt_text = CLAUDECODE_RESUME_NUDGE
+                                continue
                     break
 
                 container_running = is_docker_container_running(container_name)
