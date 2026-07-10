@@ -62,9 +62,7 @@ AGENT_IDENTIFIER_KEYS = {
     "pi": "id",
 }
 PI_IGNORED_EVENT_TYPES = {"message_update", "tool_execution_update"}
-PI_TOOL_TIMEOUT_EXTENSION_RELATIVE_PATH = Path(
-    ".latch_eval_tools", "tool_timeout.js"
-)
+PI_TOOL_TIMEOUT_EXTENSION_RELATIVE_PATH = Path(".latch_eval_tools", "tool_timeout.js")
 PI_TOOL_TIMEOUT_EXTENSION_CONTAINER_PATH = (
     f"/workspace/{PI_TOOL_TIMEOUT_EXTENSION_RELATIVE_PATH}"
 )
@@ -109,6 +107,8 @@ def _build_agent_command(
                 "--output-format",
                 "stream-json",
                 "--include-partial-messages",
+                "--settings",
+                json.dumps({"showThinkingSummaries": True}),
             ]
         )
         if claude_code_extra_args:
@@ -206,13 +206,13 @@ def _start_cli_container(container_name: str) -> None:
     try:
         result = subprocess.run(
             ["docker", "start", container_name],
-                capture_output=True,
-                text=True,
-            )
+            capture_output=True,
+            text=True,
+        )
         if result.returncode != 0:
             stderr = result.stderr.strip()
             print(f"Failed to start container {container_name}: {stderr}")
-        assert result.returncode == 0,f"Failed to start container {container_name}"
+        assert result.returncode == 0, f"Failed to start container {container_name}"
     except Exception as e:
         print(f"Error starting container {container_name}: {e}")
         raise e
@@ -784,7 +784,9 @@ def _run_cli_agent(
             elif agent_error is not None:
                 error_msg = f"{type(agent_error).__name__}: {agent_error}"
             else:
-                error_msg = "no final answer provided (either eval_answer.json or finished.txt)"
+                error_msg = (
+                    "no final answer provided (either eval_answer.json or finished.txt)"
+                )
             error_details = {
                 "error": error_msg,
                 "timed_out": timed_out,
