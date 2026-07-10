@@ -314,7 +314,7 @@ class ListMatchGrader(BinaryGrader):
                 deduped.append(tup)
             agent_list = deduped
 
-        if isinstance(k, int) and k >= 0:
+        if isinstance(k, int) and not isinstance(k, bool) and k >= 0:
             agent_list = agent_list[:k]
 
         gt_by_key: dict = {
