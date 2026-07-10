@@ -359,6 +359,16 @@ def _run_cli_agent(
         value = env.get(key)
         if value:
             env_flags.extend(["-e", f"{key}={value}"])
+    if agent_type == "claudecode":
+        bash_timeout_ms = eval_timeout * 1000
+        env_flags.extend(
+            [
+                "-e",
+                f"BASH_DEFAULT_TIMEOUT_MS={bash_timeout_ms}",
+                "-e",
+                f"BASH_MAX_TIMEOUT_MS={bash_timeout_ms}",
+            ]
+        )
     if agent_type == "pi":
         env_flags.extend(
             [
