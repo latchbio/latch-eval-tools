@@ -14,12 +14,6 @@ MODEL_MAP = {
     "anthropic/claude-opus-4-8": "claude-opus-4-8",
 }
 
-CLAUDE_CODE_DENY_BACKGROUND_ARGS = [
-    "--disallowedTools",
-    "Bash(run_in_background:true)",
-]
-
-
 def run_claudecode_task(
     task_prompt: str,
     work_dir: Path,
@@ -49,7 +43,6 @@ def run_claudecode_task(
         model_map=MODEL_MAP,
         docker_image=docker_image,
         memory_limit_bytes=memory_limit_bytes,
-        claude_code_extra_args=CLAUDE_CODE_DENY_BACKGROUND_ARGS,
         system_prompt=system_prompt,
         prompt_suffix=prompt_suffix
         + "\n\nNote: Ending your turn ends this session. Nothing will resume or re-invoke you afterward.",
