@@ -143,11 +143,18 @@ def _evaluate_leaf(leaf: dict, value: Any) -> tuple[str, bool, float, float, str
     try:
         raw = evaluate_predicate(predicate, value)
     except (ValueError, TypeError) as exc:
-        return kind, False, 0.0, score_max, label, {
-            "error": str(exc),
-            "role": role,
-            "op": op,
-        }
+        return (
+            kind,
+            False,
+            0.0,
+            score_max,
+            label,
+            {
+                "error": str(exc),
+                "role": role,
+                "op": op,
+            },
+        )
 
     kind, passed, score = _apply_role(role, raw, is_scalar, threshold)
     return (
@@ -283,6 +290,7 @@ class ListMatchGrader(BinaryGrader):
         per_tuple_rule = config.get("per_tuple_rule", "gates_all_pass")
         tuple_pass_min = config.get("tuple_pass_min", 0)
         additive_score_min = config.get("additive_score_min", 0)
+        k = config.get("k")
 
         agent_list = (
             agent_answer.get(answer_field) if isinstance(agent_answer, dict) else None
@@ -305,6 +313,9 @@ class ListMatchGrader(BinaryGrader):
                 seen.add(hk)
                 deduped.append(tup)
             agent_list = deduped
+
+        if isinstance(k, int) and not isinstance(k, bool) and k >= 0:
+            agent_list = agent_list[:k]
 
         gt_by_key: dict = {
             _normalize_match_key(gt.get(match_key), normalize_mode): gt
@@ -389,7 +400,7 @@ class ListMatchGrader(BinaryGrader):
             passed=passed,
             score=score,
             metrics={
-                "k": config.get("k"),
+                "k": k,
                 "tuple_pass_count": tuple_pass_count,
                 "tuple_pass_min": tuple_pass_min,
                 "additive_score": additive_score,
