@@ -107,8 +107,8 @@ def _build_agent_command(
                 "--output-format",
                 "stream-json",
                 "--include-partial-messages",
-                "--settings",
-                json.dumps({"showThinkingSummaries": True}),
+                "--thinking-display",
+                "summarized",
             ]
         )
         if claude_code_extra_args:
