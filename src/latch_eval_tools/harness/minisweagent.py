@@ -29,6 +29,66 @@ OPERATION_TIMEOUT = 300
 EVAL_TIMEOUT = 600
 OOM_EXIT_CODE = 137
 MAX_OOM_RESTARTS = 10
+MAX_TOOL_OUTPUT_BYTES = 64 * 1024
+UTF8_SIZE_CHUNK_CHARS = 1024 * 1024
+
+
+def _utf8_size_bytes(value: str) -> int:
+    if value.isascii():
+        return len(value)
+
+    size_bytes = 0
+    for offset in range(0, len(value), UTF8_SIZE_CHUNK_CHARS):
+        chunk = value[offset : offset + UTF8_SIZE_CHUNK_CHARS]
+        size_bytes += len(chunk.encode("utf-8"))
+    return size_bytes
+
+
+def _utf8_prefix_within_budget(value: str, budget_bytes: int) -> str:
+    candidate = value[:budget_bytes].encode("utf-8")
+    return candidate[:budget_bytes].decode("utf-8", errors="ignore")
+
+
+def _utf8_suffix_within_budget(value: str, budget_bytes: int) -> str:
+    candidate = value[-budget_bytes:].encode("utf-8")
+    return candidate[-budget_bytes:].decode("utf-8", errors="ignore")
+
+
+def _truncate_message_raw_output(message: dict[str, Any]) -> None:
+    raw_extra = message.get("extra")
+    if raw_extra is None:
+        return
+    if not isinstance(raw_extra, dict):
+        raise TypeError("mini-swe-agent message extra must be a dictionary")
+
+    raw_output = raw_extra.get("raw_output")
+    if raw_output is None:
+        return
+    if not isinstance(raw_output, str):
+        raise TypeError("mini-swe-agent message raw_output must be a string")
+
+    original_size_bytes = _utf8_size_bytes(raw_output)
+    if original_size_bytes <= MAX_TOOL_OUTPUT_BYTES:
+        return
+
+    prefix = (
+        "[tool output truncated by latch-eval-tools; "
+        f"original_size_bytes={original_size_bytes}; "
+        f"retained_limit_bytes={MAX_TOOL_OUTPUT_BYTES}]\n"
+    )
+    separator = "\n...[middle of tool output elided]...\n"
+    payload_budget_bytes = MAX_TOOL_OUTPUT_BYTES - len(prefix) - len(separator)
+    head_budget_bytes = payload_budget_bytes // 2
+    tail_budget_bytes = payload_budget_bytes - head_budget_bytes
+    head = _utf8_prefix_within_budget(raw_output, head_budget_bytes)
+    tail = _utf8_suffix_within_budget(raw_output, tail_budget_bytes)
+    retained_output = prefix + head + separator + tail
+
+    raw_extra["raw_output"] = retained_output
+    raw_extra["tool_output_truncated"] = True
+    raw_extra["tool_output_original_size_bytes"] = original_size_bytes
+    raw_extra["tool_output_retained_size_bytes"] = _utf8_size_bytes(retained_output)
+
 
 class AgentTimeoutError(KeyboardInterrupt):
     # Use a KeyboardInterrupt-style base so model/provider retry layers that catch
@@ -97,7 +157,12 @@ def _patch_agent_for_progress(log_file, trajectory_file: Path, agent_class):
 
     original_add_messages = agent_class.add_messages
 
-    def patched_add_messages(self, *messages):
+    def patched_add_messages(
+        self: Any,
+        *messages: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        for message in messages:
+            _truncate_message_raw_output(message)
         added_messages = original_add_messages(self, *messages)
 
         with open(log_file, "a") as f:
