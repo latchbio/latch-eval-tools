@@ -32,6 +32,10 @@ from latch_eval_tools.graders import (
     GRADER_REGISTRY,
     get_grader,
 )
+from latch_eval_tools.llm_refusal import (
+    LLMRefusalDiagnostic,
+    detect_llm_refusal,
+)
 
 __all__ = [
     # Types
@@ -70,6 +74,9 @@ __all__ = [
     "DictMatchGrader",
     "GRADER_REGISTRY",
     "get_grader",
+    # LLM refusal detection
+    "LLMRefusalDiagnostic",
+    "detect_llm_refusal",
 ]
 
 __version__ = "0.1.0"
