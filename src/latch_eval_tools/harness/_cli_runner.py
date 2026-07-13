@@ -335,6 +335,7 @@ def _run_cli_agent(
     system_prompt: str | None = None,
     prompt_suffix: str | None = None,
     completion: bool = False,
+    benchmark: bool = False,
     operation_timeout: int = 0,
 ) -> dict:
     agent_log_file = work_dir / "agent_output.log"
@@ -607,33 +608,34 @@ def _run_cli_agent(
                         prompt_text = "Continue."
                         continue
                     if agent_type == "claudecode":
-                        answer_present = (
-                            finished_file.exists()
-                            if completion
-                            else eval_answer_file.exists()
-                        )
-                        if (
-                            not answer_present
-                            and claudecode_answer_resumes
-                            < MAX_CLAUDECODE_ANSWER_RESUMES
-                        ):
-                            persist_trajectory()
-                            resume_identifier = load_trajectory_identifier(
-                                trajectory_file,
-                                AGENT_IDENTIFIER_KEYS["claudecode"],
+                        if benchmark:
+                            answer_present = (
+                                finished_file.exists()
+                                if completion
+                                else eval_answer_file.exists()
                             )
-                            if resume_identifier is not None:
-                                claudecode_answer_resumes += 1
-                                log_file.write(
-                                    "\n\nClaude Code ended its turn without a "
-                                    "final answer; resuming session "
-                                    f"{resume_identifier} (resume "
-                                    f"{claudecode_answer_resumes}/"
-                                    f"{MAX_CLAUDECODE_ANSWER_RESUMES})\n"
+                            if (
+                                not answer_present
+                                and claudecode_answer_resumes
+                                < MAX_CLAUDECODE_ANSWER_RESUMES
+                            ):
+                                persist_trajectory()
+                                resume_identifier = load_trajectory_identifier(
+                                    trajectory_file,
+                                    AGENT_IDENTIFIER_KEYS["claudecode"],
                                 )
-                                log_file.flush()
-                                prompt_text = CLAUDECODE_RESUME_NUDGE
-                                continue
+                                if resume_identifier is not None:
+                                    claudecode_answer_resumes += 1
+                                    log_file.write(
+                                        "\n\nClaude Code ended its turn without a "
+                                        "final answer; resuming session "
+                                        f"{resume_identifier} (resume "
+                                        f"{claudecode_answer_resumes}/"
+                                        f"{MAX_CLAUDECODE_ANSWER_RESUMES})\n"
+                                    )
+                                    log_file.flush()
+                                    prompt_text = CLAUDECODE_RESUME_NUDGE
+                                    continue
                     break
 
                 container_running = is_docker_container_running(container_name)
