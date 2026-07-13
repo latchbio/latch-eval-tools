@@ -24,6 +24,7 @@ def run_claudecode_task(
     system_prompt: str | None = None,
     prompt_suffix: str | None = load_data_instructions(),
     completion: bool = False,
+    benchmark: bool = False,
 ) -> dict:
     if not os.environ.get("ANTHROPIC_API_KEY"):
         raise ValueError(
@@ -50,4 +51,5 @@ def run_claudecode_task(
         " complete the session and kill the process; instead, block"
         " synchronously and poll until the job finishes before returning.",
         completion=completion,
+        benchmark=benchmark,
     )
