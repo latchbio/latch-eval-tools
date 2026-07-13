@@ -8,6 +8,7 @@ import time
 import uuid
 from pathlib import Path
 
+from latch_eval_tools.llm_refusal import detect_llm_refusal
 from latch_eval_tools.harness.utils import (
     DEFAULT_DOCKER_IMAGE,
     ensure_docker_image,
@@ -20,6 +21,20 @@ from latch_eval_tools.harness.utils import (
     prompt_with_suffix,
     render_packaged_prompt,
 )
+
+REFUSAL_VERDICT_FILENAME = "refusal_verdict.json"
+
+
+def _write_refusal_verdict(work_dir: Path, trajectory: list[dict]) -> None:
+    # Detect refusals against the in-memory trajectory here (the harness has it
+    # local) and persist the verdict, so consumers never re-read the trajectory.
+    try:
+        refusal = detect_llm_refusal(trajectory_data=trajectory)
+        payload = refusal.model_dump(mode="json") if refusal is not None else None
+        (work_dir / REFUSAL_VERDICT_FILENAME).write_text(json.dumps(payload))
+    except Exception as exc:
+        print(f"failed to write refusal verdict: {exc}")
+
 
 EVAL_TIMEOUT = 600
 ANTHROPIC_ENV_KEYS = {"ANTHROPIC_API_KEY"}
@@ -815,6 +830,8 @@ def _run_cli_agent(
         oom_restarts=oom_restarts,
         memory_limit_bytes=memory_limit_bytes,
     )
+
+    _write_refusal_verdict(work_dir, trajectory)
 
     return {"answer": agent_answer, "metadata": metadata}
 
