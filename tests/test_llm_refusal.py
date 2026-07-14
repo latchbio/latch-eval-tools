@@ -1,5 +1,5 @@
 import json
-from latch_eval_tools.llm_refusal import detect_llm_refusal
+from latch_eval_tools.llm_refusal import LLMRefusalDiagnostic, detect_llm_refusal
 
 
 def test_detects_anthropic_usage_policy_refusal_in_trajectory() -> None:
@@ -34,6 +34,36 @@ def test_sidecar_events_take_precedence() -> None:
     assert result is not None
     assert result.source == "refusal_sidecar"
     assert result.provider == "anthropic"
+
+
+def test_precomputed_trajectory_refusal_is_returned() -> None:
+    precomputed = LLMRefusalDiagnostic(
+        provider="anthropic", message="refused", source="trajectory"
+    )
+    assert detect_llm_refusal(trajectory_refusal=precomputed) is precomputed
+
+
+def test_precomputed_trajectory_refusal_beats_raw_scan() -> None:
+    precomputed = LLMRefusalDiagnostic(
+        provider="anthropic", message="precomputed", source="trajectory"
+    )
+    result = detect_llm_refusal(
+        trajectory_refusal=precomputed,
+        trajectory_data={"finish_reason": "content_filter"},
+    )
+    assert result is precomputed
+
+
+def test_sidecar_beats_precomputed_trajectory_refusal() -> None:
+    precomputed = LLMRefusalDiagnostic(
+        provider="anthropic", message="refused", source="trajectory"
+    )
+    result = detect_llm_refusal(
+        trajectory_refusal=precomputed,
+        refusal_events_data=[{"provider": "openai", "raw_reason": "safety"}],
+    )
+    assert result is not None
+    assert result.source == "refusal_sidecar"
 
 
 def test_write_refusal_verdict_writes_diagnostic(tmp_path) -> None:

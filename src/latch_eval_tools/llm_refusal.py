@@ -234,6 +234,7 @@ def _detect_from_value(
 def detect_llm_refusal(
     *,
     trajectory_data: Any | None = None,
+    trajectory_refusal: LLMRefusalDiagnostic | None = None,
     workflow_error_data: str | None = None,
     agent_error: str | None = None,
     agent_output_data: Any | None = None,
@@ -244,9 +245,12 @@ def detect_llm_refusal(
         if isinstance(first, dict):
             return _diagnostic_from_sidecar(first)
 
-    trajectory_refusal = _detect_from_value(trajectory_data, source="trajectory")
     if trajectory_refusal is not None:
         return trajectory_refusal
+
+    scanned_trajectory_refusal = _detect_from_value(trajectory_data, source="trajectory")
+    if scanned_trajectory_refusal is not None:
+        return scanned_trajectory_refusal
 
     workflow_error = _parse_json_record(workflow_error_data)
     workflow_refusal = _detect_from_value(
