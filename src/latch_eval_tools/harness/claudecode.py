@@ -12,6 +12,7 @@ MODEL_MAP = {
     "anthropic/claude-opus-4-7": "claude-opus-4-7",
     "anthropic/claude-sonnet-4-7": "claude-sonnet-4-7",
     "anthropic/claude-opus-4-8": "claude-opus-4-8",
+    "anthropic/claude-halva-eap": "claude-halva-eap",
 }
 
 def run_claudecode_task(
