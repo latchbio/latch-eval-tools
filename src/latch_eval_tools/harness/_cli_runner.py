@@ -45,7 +45,68 @@ PI_ENV_KEYS = {
     "OPENAI_API_KEY",
     "GEMINI_API_KEY",
     "XAI_API_KEY",
+    "OPENROUTER_API_KEY",
 }
+
+# pi ships no built-in OpenRouter provider, so we register a custom
+# openai-completions provider in /root/.pi/agent/models.json. The pi state dir
+# (work_dir/.pi) is bind-mounted to /root/.pi, so writing the file on the host
+# lands it where pi looks. Notes on the fields:
+#   - cost is per-MILLION tokens (OpenRouter list price: $3 / $15, $0.30 cache read).
+#   - contextWindow/maxTokens must be explicit; pi defaults to 128k/16k and would
+#     otherwise truncate K3's 1M window and long reasoning. (maxTokens passthrough
+#     for openai-completions requires pi >= 0.80.3, issue #5595.)
+#   - compat.thinkingFormat "reasoning_effort" sends the top-level reasoning_effort
+#     field Moonshot documents for K3; K3 only supports the "max" level, so every
+#     pi thinking level maps to "max".
+#   - compat.supportsUsageInStreaming keeps stream_options.include_usage on so
+#     usage (input/output/cache tokens) and cost are reported back.
+OPENROUTER_PROVIDER_NAME = "openrouter"
+OPENROUTER_PROVIDER_BASE_URL = "https://openrouter.ai/api/v1"
+OPENROUTER_MODEL_CONFIGS: dict[str, dict] = {
+    "openrouter/moonshotai/kimi-k3": {
+        "id": "moonshotai/kimi-k3",
+        "name": "Kimi K3",
+        "reasoning": True,
+        "input": ["text", "image"],
+        "contextWindow": 1048576,
+        "maxTokens": 131072,
+        "cost": {"input": 3, "output": 15, "cacheRead": 0.3, "cacheWrite": 0},
+        "thinkingLevelMap": {
+            "low": "max",
+            "medium": "max",
+            "high": "max",
+            "xhigh": "max",
+            "max": "max",
+        },
+        "compat": {
+            "thinkingFormat": "reasoning_effort",
+            "supportsReasoningEffort": True,
+            "supportsUsageInStreaming": True,
+        },
+    },
+}
+
+
+def _write_pi_openrouter_models_json(work_dir: Path, model_name: str) -> None:
+    if model_name not in OPENROUTER_MODEL_CONFIGS:
+        raise ValueError(
+            f"No pi OpenRouter model config registered for {model_name!r}; "
+            "add it to OPENROUTER_MODEL_CONFIGS in _cli_runner.py"
+        )
+    models_json = {
+        "providers": {
+            OPENROUTER_PROVIDER_NAME: {
+                "baseUrl": OPENROUTER_PROVIDER_BASE_URL,
+                "apiKey": "$OPENROUTER_API_KEY",
+                "api": "openai-completions",
+                "models": [OPENROUTER_MODEL_CONFIGS[model_name]],
+            }
+        }
+    }
+    models_path = work_dir / AGENT_STATE_DIRS["pi"] / "agent" / "models.json"
+    models_path.parent.mkdir(parents=True, exist_ok=True)
+    models_path.write_text(json.dumps(models_json, indent=2), encoding="utf-8")
 
 OOM_EXIT_CODE = 137
 MAX_OOM_RESTARTS = 10
@@ -449,6 +510,10 @@ def _run_cli_agent(
             docker_image=docker_image,
             memory_limit_bytes=memory_limit_bytes,
         )
+        # Register the custom OpenRouter provider into the (bind-mounted) pi state
+        # dir. Written on the host so it survives container recreation on OOM.
+        if agent_type == "pi" and model_name and model_name.startswith("openrouter/"):
+            _write_pi_openrouter_models_json(work_dir, model_name)
         _start_cli_container(container_name)
         deadline = time.time() + eval_timeout
 
