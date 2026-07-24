@@ -449,6 +449,8 @@ def _run_cli_agent(
         ENV_KEYS = PI_ENV_KEYS
     else:
         raise ValueError(f"Unknown agent type: {agent_type}")
+    extra_env_keys = set(json.loads(env.get("EXTRA_ENV_KEYS") or "[]"))
+    ENV_KEYS = ENV_KEYS | extra_env_keys
     for key in ENV_KEYS:
         value = env.get(key)
         if value:
