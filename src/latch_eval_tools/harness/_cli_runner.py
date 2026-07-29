@@ -1,19 +1,21 @@
-from datetime import datetime
-from importlib.resources import files
 import json
+import math
 import os
+import random
 import subprocess
 import threading
 import time
 import uuid
+from dataclasses import dataclass
+from datetime import datetime
+from importlib.resources import files
 from pathlib import Path
 
-from latch_eval_tools.llm_refusal import detect_llm_refusal
 from latch_eval_tools.harness.utils import (
     DEFAULT_DOCKER_IMAGE,
     ensure_docker_image,
-    get_agent_workspace_mount_args,
     get_agent_workspace_dir,
+    get_agent_workspace_mount_args,
     get_memory_limit_bytes,
     is_docker_container_oom_killed,
     is_docker_container_running,
@@ -21,6 +23,7 @@ from latch_eval_tools.harness.utils import (
     prompt_with_suffix,
     render_packaged_prompt,
 )
+from latch_eval_tools.llm_refusal import detect_llm_refusal
 
 REFUSAL_VERDICT_FILENAME = "refusal_verdict.json"
 
@@ -108,6 +111,7 @@ def _write_pi_openrouter_models_json(work_dir: Path, model_name: str) -> None:
     models_path.parent.mkdir(parents=True, exist_ok=True)
     models_path.write_text(json.dumps(models_json, indent=2), encoding="utf-8")
 
+
 OOM_EXIT_CODE = 137
 MAX_OOM_RESTARTS = 10
 
@@ -142,6 +146,292 @@ PI_TOOL_TIMEOUT_EXTENSION_RELATIVE_PATH = Path(".latch_eval_tools", "tool_timeou
 PI_TOOL_TIMEOUT_EXTENSION_CONTAINER_PATH = (
     f"/workspace/{PI_TOOL_TIMEOUT_EXTENSION_RELATIVE_PATH}"
 )
+PROVIDER_RETRYABLE_STATUS_CODES = frozenset(
+    {408, 409, 425, 429, 500, 502, 503, 504, 520, 529}
+)
+PROVIDER_CAPACITY_STATUS_CODES = frozenset({429, 529})
+PROVIDER_MAX_RESUMES = 1
+PROVIDER_CAPACITY_FALLBACK_SECONDS = 60.0
+PROVIDER_CAPACITY_JITTER_SECONDS = 15.0
+PROVIDER_TRANSPORT_FALLBACK_SECONDS = 5.0
+PROVIDER_TRANSPORT_JITTER_SECONDS = 5.0
+PROVIDER_HINT_JITTER_SECONDS = 5.0
+PI_ASSISTANT_EVENT_TYPES = frozenset({"message", "message_end"})
+
+
+@dataclass(frozen=True)
+class ProviderFailure:
+    status_code: int
+    retry_after_seconds: float | None
+
+    @property
+    def retryable(self) -> bool:
+        return self.status_code in PROVIDER_RETRYABLE_STATUS_CODES
+
+    @property
+    def capacity_limited(self) -> bool:
+        return self.status_code in PROVIDER_CAPACITY_STATUS_CODES
+
+    @property
+    def error_code(self) -> str:
+        if self.status_code == 429:
+            return "rate_limit"
+        if self.status_code == 529:
+            return "overloaded"
+        if self.status_code >= 500:
+            return "server_error"
+        return f"http_{self.status_code}"
+
+
+def _optional_int(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _optional_nonnegative_float(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed < 0:
+        return None
+    return parsed
+
+
+def _optional_nonnegative_decimal(value: object) -> float | None:
+    if isinstance(value, str):
+        try:
+            return _optional_nonnegative_float(float(value))
+        except ValueError:
+            return None
+    return _optional_nonnegative_float(value)
+
+
+def _json_object(value: str) -> dict[str, object] | None:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return parsed
+
+
+def _provider_error_payload(
+    error_message: str,
+) -> tuple[int | None, dict[str, object]] | None:
+    json_start = error_message.find("{")
+    if json_start < 0:
+        return None
+    prefix = error_message[:json_start].strip().removesuffix(":").strip()
+    prefix_status = int(prefix) if prefix.isdigit() else None
+    payload = _json_object(error_message[json_start:])
+    if payload is None:
+        return None
+    return prefix_status, payload
+
+
+def _payload_error(payload: dict[str, object]) -> dict[str, object] | None:
+    value = payload.get("error")
+    if not isinstance(value, dict):
+        return None
+    return value
+
+
+def _nested_google_payload(
+    payload: dict[str, object],
+) -> dict[str, object] | None:
+    outer_error = _payload_error(payload)
+    if outer_error is None:
+        return None
+    message = outer_error.get("message")
+    if not isinstance(message, str):
+        return None
+    return _json_object(message)
+
+
+def _provider_status(
+    prefix_status: int | None,
+    payload: dict[str, object],
+) -> int | None:
+    if prefix_status is not None:
+        return prefix_status
+    status = _optional_int(payload.get("code"))
+    if status is not None:
+        return status
+    error_payload = _payload_error(payload)
+    if error_payload is None:
+        return None
+    return _optional_int(error_payload.get("code"))
+
+
+def _grpc_retry_delay_seconds(value: object) -> float | None:
+    if not isinstance(value, str) or not value.endswith("s"):
+        return None
+    try:
+        return _optional_nonnegative_float(float(value[:-1]))
+    except ValueError:
+        return None
+
+
+def _google_retry_hint_seconds(
+    nested_payload: dict[str, object] | None,
+) -> float | None:
+    if nested_payload is None:
+        return None
+    nested_error = _payload_error(nested_payload)
+    if nested_error is None:
+        return None
+    details = nested_error.get("details")
+    if not isinstance(details, list):
+        return None
+    for detail in details:
+        if not isinstance(detail, dict):
+            continue
+        if detail.get("@type") != "type.googleapis.com/google.rpc.RetryInfo":
+            continue
+        return _grpc_retry_delay_seconds(detail.get("retryDelay"))
+    return None
+
+
+def _openrouter_retry_hint_seconds(payload: dict[str, object]) -> float | None:
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+
+    retry_after = _optional_nonnegative_float(metadata.get("retry_after_seconds"))
+    headers = metadata.get("headers")
+    if not isinstance(headers, dict):
+        return retry_after
+
+    header_retry_after = _optional_nonnegative_decimal(headers.get("Retry-After"))
+    if header_retry_after is not None:
+        retry_after = max(retry_after or 0.0, header_retry_after)
+
+    reset_milliseconds = _optional_nonnegative_decimal(headers.get("X-RateLimit-Reset"))
+    if reset_milliseconds is not None:
+        reset_delay = max((reset_milliseconds / 1000.0) - time.time(), 0.0)
+        retry_after = max(retry_after or 0.0, reset_delay)
+    return retry_after
+
+
+def _pi_provider_failure(attempt_events: list[dict]) -> ProviderFailure | None:
+    for event in reversed(attempt_events):
+        if event.get("type") not in PI_ASSISTANT_EVENT_TYPES:
+            continue
+        message = event.get("message")
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        if message.get("stopReason") != "error":
+            return None
+        error_message = message.get("errorMessage")
+        if not isinstance(error_message, str):
+            return None
+        parsed = _provider_error_payload(error_message)
+        if parsed is None:
+            return None
+        prefix_status, payload = parsed
+        status_code = _provider_status(prefix_status, payload)
+        if status_code is None:
+            return None
+        nested_payload = _nested_google_payload(payload)
+        retry_hints = [
+            hint
+            for hint in (
+                _openrouter_retry_hint_seconds(payload),
+                _google_retry_hint_seconds(nested_payload),
+            )
+            if hint is not None
+        ]
+        return ProviderFailure(
+            status_code=status_code,
+            retry_after_seconds=max(retry_hints, default=None),
+        )
+    return None
+
+
+def _claudecode_provider_failure(
+    attempt_events: list[dict],
+    *,
+    include_inflight_retry: bool,
+) -> ProviderFailure | None:
+    for result_index in range(len(attempt_events) - 1, -1, -1):
+        result = attempt_events[result_index]
+        if result.get("type") != "result":
+            continue
+        if result.get("terminal_reason") != "api_error":
+            return None
+        status_code = _optional_int(result.get("api_error_status"))
+        if status_code is None:
+            return None
+
+        retry_after_seconds: float | None = None
+        for event in reversed(attempt_events[:result_index]):
+            if event.get("type") in {"assistant", "result"}:
+                break
+            if event.get("type") != "system" or event.get("subtype") != "api_retry":
+                continue
+            if _optional_int(event.get("error_status")) != status_code:
+                continue
+            retry_delay_ms = _optional_nonnegative_float(event.get("retry_delay_ms"))
+            if retry_delay_ms is not None:
+                retry_after_seconds = retry_delay_ms / 1000.0
+            break
+
+        return ProviderFailure(
+            status_code=status_code,
+            retry_after_seconds=retry_after_seconds,
+        )
+
+    if include_inflight_retry:
+        for event in reversed(attempt_events):
+            if event.get("type") == "assistant":
+                return None
+            if event.get("type") != "system" or event.get("subtype") != "api_retry":
+                continue
+            status_code = _optional_int(event.get("error_status"))
+            if status_code is None:
+                return None
+            retry_delay_ms = _optional_nonnegative_float(event.get("retry_delay_ms"))
+            return ProviderFailure(
+                status_code=status_code,
+                retry_after_seconds=(
+                    retry_delay_ms / 1000.0 if retry_delay_ms is not None else None
+                ),
+            )
+    return None
+
+
+def classify_terminal_provider_failure(
+    agent_type: str,
+    attempt_events: list[dict],
+    *,
+    include_inflight_retry: bool = False,
+) -> ProviderFailure | None:
+    if agent_type == "claudecode":
+        return _claudecode_provider_failure(
+            attempt_events,
+            include_inflight_retry=include_inflight_retry,
+        )
+    if agent_type == "pi":
+        return _pi_provider_failure(attempt_events)
+    return None
+
+
+def provider_retry_delay_seconds(failure: ProviderFailure) -> float:
+    if not failure.retryable:
+        raise ValueError("provider failure is not retryable")
+    if failure.retry_after_seconds is not None:
+        return failure.retry_after_seconds + random.uniform(
+            0.0, PROVIDER_HINT_JITTER_SECONDS
+        )
+    if failure.capacity_limited:
+        return PROVIDER_CAPACITY_FALLBACK_SECONDS + random.uniform(
+            0.0, PROVIDER_CAPACITY_JITTER_SECONDS
+        )
+    return PROVIDER_TRANSPORT_FALLBACK_SECONDS + random.uniform(
+        0.0, PROVIDER_TRANSPORT_JITTER_SECONDS
+    )
 
 
 def teardown_container(container_name: str) -> None:
@@ -229,7 +519,7 @@ def _build_agent_command(
         agent_cmd.extend(["--model", mapped_model])
     elif model_name:
         agent_cmd.extend(["--model", model_name])
-    if agent_type != "pi" and resume_identifier is not None:
+    if agent_type == "openaicodex" and resume_identifier is not None:
         agent_cmd.append(resume_identifier)
     return agent_cmd
 
@@ -488,13 +778,15 @@ def _run_cli_agent(
     agent_finished_at = agent_start_time
     timed_out = False
     agent_error: Exception | None = None
-    trajectory = []
+    trajectory: list[dict] = []
     trajectory_file = work_dir / "trajectory.json"
     trajectory_file.write_text(json.dumps(trajectory, indent=2))
     eval_answer_file = agent_dir / "eval_answer.json"
     finished_file = agent_dir / "finished.txt"
     oom_detected = False
     oom_restarts = 0
+    provider_resumes = 0
+    last_provider_failure: ProviderFailure | None = None
 
     trajectory_lock = threading.Lock()
 
@@ -536,6 +828,9 @@ def _run_cli_agent(
                     log_file.flush()
                     break
 
+                # Only carry provider evidence from the final failed attempt.
+                # A recovered rate limit must not relabel a later unrelated error.
+                last_provider_failure = None
                 attempt_start_index = len(trajectory)
                 agent_cmd = _build_agent_command(
                     agent_type=agent_type,
@@ -575,9 +870,11 @@ def _run_cli_agent(
                                 continue
                             try:
                                 event = json.loads(stripped)
+                                if not isinstance(event, dict):
+                                    continue
                                 if (
                                     agent_type == "pi"
-                                    and event["type"] in PI_IGNORED_EVENT_TYPES
+                                    and event.get("type") in PI_IGNORED_EVENT_TYPES
                                 ):
                                     continue
                                 with trajectory_lock:
@@ -655,12 +952,55 @@ def _run_cli_agent(
                     log_file.write("\n\nDetected eval_answer.json, stopping agent\n")
                     log_file.flush()
                     break
+                provider_failure = classify_terminal_provider_failure(
+                    agent_type,
+                    attempt_events,
+                    include_inflight_retry=timed_out_attempt,
+                )
                 if timed_out_attempt:
+                    last_provider_failure = provider_failure
                     log_file.write(
                         f"\n\nAgent timed out after {eval_timeout} seconds\n"
                     )
                     log_file.flush()
                     timed_out = True
+                    break
+
+                if last_return_code == 0 and (
+                    eval_answer_file.exists() or finished_file.exists()
+                ):
+                    break
+
+                if provider_failure is not None:
+                    last_provider_failure = provider_failure
+                    if provider_failure.retryable:
+                        persist_trajectory()
+                        candidate_resume_identifier = load_trajectory_identifier(
+                            trajectory_file,
+                            AGENT_IDENTIFIER_KEYS[agent_type],
+                        )
+                        delay = provider_retry_delay_seconds(provider_failure)
+                        retry_fits_deadline = delay < deadline - time.time()
+                        if (
+                            provider_resumes < PROVIDER_MAX_RESUMES
+                            and candidate_resume_identifier is not None
+                            and retry_fits_deadline
+                            and is_docker_container_running(container_name)
+                        ):
+                            provider_resumes += 1
+                            resume_identifier = candidate_resume_identifier
+                            log_file.write(
+                                "\n\n[Provider retry "
+                                f"{provider_resumes}/{PROVIDER_MAX_RESUMES}] "
+                                f"waiting {delay:.1f}s before resuming session "
+                                f"{resume_identifier}\n"
+                            )
+                            log_file.flush()
+                            time.sleep(delay)
+                            prompt_text = "Continue."
+                            continue
+                    # Do not bypass provider retry limits through the generic
+                    # clean-exit or OOM resume paths below.
                     break
 
                 if last_return_code == 0:
@@ -886,6 +1226,15 @@ def _run_cli_agent(
                 "file_contents": eval_answer_file.read_text()[:500],
             }
             print(f"\nWarning: Failed to parse eval_answer.json: {e}")
+
+    if error_details is not None and last_provider_failure is not None:
+        error_details["api_error_code"] = last_provider_failure.error_code
+        error_details["api_error_status"] = last_provider_failure.status_code
+        if last_provider_failure.retry_after_seconds is not None:
+            error_details["retry_after_seconds"] = (
+                last_provider_failure.retry_after_seconds
+            )
+        error_details["provider_retry_count"] = provider_resumes
 
     metadata = _extract_metadata(
         agent_type,
