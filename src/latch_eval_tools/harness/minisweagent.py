@@ -11,6 +11,7 @@ import time
 from typing import Any
 import yaml
 
+from latch_eval_tools.harness.run_summary import build_miniswe_run_summary
 from latch_eval_tools.harness.utils import (
     DEFAULT_DOCKER_IMAGE,
     ensure_docker_image,
@@ -100,14 +101,14 @@ def _timeout_handler(signum, frame):
     raise AgentTimeoutError("Agent exceeded time limit")
 
 
-class StreamingLogFile: 
+class StreamingLogFile:
     def __init__(self, file_path):
         self.file_path = file_path
         self.buffer = io.StringIO()
 
     def write(self, data):
         self.buffer.write(data)
-        with open(self.file_path, 'a') as f:
+        with open(self.file_path, "a") as f:
             f.write(data)
             f.flush()
 
@@ -170,7 +171,9 @@ def _patch_agent_for_progress(log_file, trajectory_file: Path, agent_class):
                 role = message.get("role")
                 content = _render_logged_message_content(message)
                 if role == "assistant":
-                    step_num = len([m for m in self.messages if m.get("role") == "assistant"])
+                    step_num = len(
+                        [m for m in self.messages if m.get("role") == "assistant"]
+                    )
                     f.write(f"\n[Step {step_num}]\n")
                     f.write(f"Assistant: {content}\n")
                 elif role in {"tool", "user"} and len(self.messages) > 2:
@@ -187,34 +190,67 @@ def _patch_agent_for_progress(log_file, trajectory_file: Path, agent_class):
 
 
 def get_model_kwargs(model_name: str) -> dict[str, Any]:
-    if model_name in {"openai/gpt-5.5", "openai/gpt-5.4", "openai/gpt-5.3-codex", "openai/gpt-5.3", "openai/gpt-5.2"}:
-        return {"model_kwargs": {"reasoning": {"effort": "xhigh"}},"model_class":"litellm_response"}
+    if model_name in {
+        "openai/gpt-5.5",
+        "openai/gpt-5.4",
+        "openai/gpt-5.3-codex",
+        "openai/gpt-5.3",
+        "openai/gpt-5.2",
+    }:
+        return {
+            "model_kwargs": {"reasoning": {"effort": "xhigh"}},
+            "model_class": "litellm_response",
+        }
     elif model_name in {"openai/gpt-5.1"}:
-        return {"model_kwargs": {"reasoning": {"effort": "high"}},"model_class":"litellm_response"}
-    elif model_name in {"anthropic/claude-opus-4-6","anthropic/claude-opus-4-7","anthropic/claude-sonnet-4-6","anthropic/claude-halva-eap"}:
-        return {"model_kwargs": {"thinking": {"type": "adaptive"},"output_config":{"effort":"max"}}}
+        return {
+            "model_kwargs": {"reasoning": {"effort": "high"}},
+            "model_class": "litellm_response",
+        }
+    elif model_name in {
+        "anthropic/claude-opus-4-6",
+        "anthropic/claude-opus-4-7",
+        "anthropic/claude-sonnet-4-6",
+        "anthropic/claude-halva-eap",
+    }:
+        return {
+            "model_kwargs": {
+                "thinking": {"type": "adaptive"},
+                "output_config": {"effort": "max"},
+            }
+        }
     elif model_name in {"anthropic/claude-opus-4-5"}:
-        return {"model_kwargs": {"thinking": {"type": "enabled", "budget_tokens": 32000},"output_config":{"effort":"high"}}}
+        return {
+            "model_kwargs": {
+                "thinking": {"type": "enabled", "budget_tokens": 32000},
+                "output_config": {"effort": "high"},
+            }
+        }
     elif model_name.startswith("anthropic/"):
-        return {"model_kwargs": {"thinking": {"type": "enabled", "budget_tokens": 32000}}}
+        return {
+            "model_kwargs": {"thinking": {"type": "enabled", "budget_tokens": 32000}}
+        }
     elif model_name.startswith("gemini/"):
-        return {"model_kwargs": {"generationConfig": {"thinkingConfig": {"thinkingLevel":"HIGH"}}}}
+        return {
+            "model_kwargs": {
+                "generationConfig": {"thinkingConfig": {"thinkingLevel": "HIGH"}}
+            }
+        }
     elif model_name == "xai/grok-4.3":
         return {"model_kwargs": {"reasoning_effort": "high"}}
     elif model_name.startswith("xai/") and model_name.endswith("-reasoning"):
-        return {"model_class":"litellm_response"}
+        return {"model_class": "litellm_response"}
     elif model_name == "openai/moonshotai/Kimi-K2.6":
         return {
             "cost_tracking": "ignore_errors",
             "model_kwargs": {
                 "api_base": "https://inference.baseten.co/v1",
                 "api_key": os.environ["BASETEN_API_KEY"],
-                "extra_body": {"thinking": {"type": "enabled","keep":"all"}},
+                "extra_body": {"thinking": {"type": "enabled", "keep": "all"}},
             },
         }
     else:
         return {}
-    
+
 
 def run_minisweagent_task(
     task_prompt: str,
@@ -256,24 +292,27 @@ def run_minisweagent_task(
     agent_dir = get_agent_workspace_dir(work_dir)
 
     class FlexibleAgent(DefaultAgent):
-
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             self._override_start_time = time.monotonic()
 
         def step(self) -> list[dict]:
             if time.monotonic() - self._override_start_time > eval_timeout:
-                raise LimitsExceeded({
-                    "role": "exit",
-                    "content": "LimitsExceeded",
-                    "extra": {"exit_status": "LimitsExceeded", "submission": ""},
-                })
+                raise LimitsExceeded(
+                    {
+                        "role": "exit",
+                        "content": "LimitsExceeded",
+                        "extra": {"exit_status": "LimitsExceeded", "submission": ""},
+                    }
+                )
             return super().step()
 
     class FlexibleDockerEnvironment(DockerEnvironment):
         completion_marker = "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
 
-        def execute(self, action: dict, cwd: str = "", *, timeout: int | None = None) -> dict[str, Any]:
+        def execute(
+            self, action: dict, cwd: str = "", *, timeout: int | None = None
+        ) -> dict[str, Any]:
             nonlocal oom_detected, oom_restarts, container_restarts
             output = super().execute(action, cwd=cwd, timeout=timeout)
 
@@ -284,7 +323,9 @@ def run_minisweagent_task(
                 self.container_id,
                 docker_executable=self.config.executable,
             )
-            container_oom_killed = bool(self.container_id) and is_docker_container_oom_killed(
+            container_oom_killed = bool(
+                self.container_id
+            ) and is_docker_container_oom_killed(
                 self.container_id,
                 docker_executable=self.config.executable,
             )
@@ -294,11 +335,16 @@ def run_minisweagent_task(
             if command_hit_oom:
                 oom_detected = True
                 if oom_restarts >= MAX_OOM_RESTARTS:
-                    raise LimitsExceeded({
-                        "role": "exit",
-                        "content": "LimitsExceeded",
-                        "extra": {"exit_status": "LimitsExceeded", "submission": ""},
-                    })
+                    raise LimitsExceeded(
+                        {
+                            "role": "exit",
+                            "content": "LimitsExceeded",
+                            "extra": {
+                                "exit_status": "LimitsExceeded",
+                                "submission": "",
+                            },
+                        }
+                    )
                 oom_restarts += 1
 
             if not container_running:
@@ -363,7 +409,11 @@ def run_minisweagent_task(
                 )
 
             lines = output.get("output", "").lstrip().splitlines(keepends=True)
-            if lines and lines[0].strip() == self.completion_marker and output["returncode"] == 0:
+            if (
+                lines
+                and lines[0].strip() == self.completion_marker
+                and output["returncode"] == 0
+            ):
                 submission = "".join(lines[1:])
                 if not (agent_dir / "eval_answer.json").exists():
                     return
@@ -374,7 +424,6 @@ def run_minisweagent_task(
                         "extra": {"exit_status": "Submitted", "submission": submission},
                     }
                 )
-
 
     original_dir = os.getcwd()
 
@@ -396,15 +445,16 @@ def run_minisweagent_task(
         def write(self, data):
             for stream in self.streams:
                 stream.write(data)
-                if hasattr(stream, 'flush'):
+                if hasattr(stream, "flush"):
                     stream.flush()
 
         def flush(self):
             for stream in self.streams:
-                if hasattr(stream, 'flush'):
+                if hasattr(stream, "flush"):
                     stream.flush()
 
     agent = None
+    agent_duration_seconds = 0.0
     timed_out = False
     agent_error: Exception | None = None
     oom_detected = False
@@ -413,16 +463,20 @@ def run_minisweagent_task(
     try:
         os.chdir(str(agent_dir))
 
-
-
         enhanced_prompt = prompt_with_suffix(task_prompt, prompt_suffix)
         config = yaml.safe_load(read_packaged_prompt("miniswe_config.yaml"))
-        effective_agent_config: dict[str, Any] = config["agent"] | (agent_config if isinstance(agent_config, dict) else {})
+        effective_agent_config: dict[str, Any] = config["agent"] | (
+            agent_config if isinstance(agent_config, dict) else {}
+        )
         if system_prompt not in (None, ""):
             effective_agent_config["system_template"] = "{{ latch_system_prompt }}"
-        effective_env_config: dict[str, Any] = config["environment"] | (env_config if isinstance(env_config, dict) else {})
+        effective_env_config: dict[str, Any] = config["environment"] | (
+            env_config if isinstance(env_config, dict) else {}
+        )
         effective_model_config: dict[str, Any] = (
-            config["model"] | get_model_kwargs(model_name) | (model_config if isinstance(model_config, dict) else {})
+            config["model"]
+            | get_model_kwargs(model_name)
+            | (model_config if isinstance(model_config, dict) else {})
         )
         if not docker_image:
             raise ValueError("docker_image is required for mini-swe Docker execution")
@@ -467,6 +521,7 @@ def run_minisweagent_task(
         old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
         signal.alarm(eval_timeout)
 
+        agent_started_at = time.monotonic()
         try:
             agent.run(
                 enhanced_prompt,
@@ -480,15 +535,19 @@ def run_minisweagent_task(
         except Exception as e:
             agent_error = e
             import traceback
+
             traceback.print_exc()
         finally:
+            agent_duration_seconds = time.monotonic() - agent_started_at
             signal.alarm(0)
             signal.signal(signal.SIGALRM, old_handler)
 
             sys.stdout = original_stdout
             sys.stderr = original_stderr
 
-            print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Agent output saved to: {agent_log_file}")
+            print(
+                f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Agent output saved to: {agent_log_file}"
+            )
 
             if hasattr(agent, "messages"):
                 _persist_agent_trajectory(agent, trajectory_file)
@@ -582,7 +641,7 @@ def run_minisweagent_task(
             except json.JSONDecodeError as e:
                 error_details = {
                     "error": f"Failed to parse eval_answer.json: {e}",
-                    "file_contents": eval_answer_file.read_text()[:500]
+                    "file_contents": eval_answer_file.read_text()[:500],
                 }
                 print(f"\nWarning: Failed to parse eval_answer.json: {e}")
 
@@ -601,6 +660,27 @@ def run_minisweagent_task(
             metadata["oom_detected"] = True
         if error_details:
             metadata["error_details"] = error_details
+
+        structured_agent_error = (
+            f"{type(agent_error).__name__}: {agent_error}"
+            if agent_error is not None
+            else None
+        )
+        if error_details is not None:
+            error_value = error_details.get("error")
+            if isinstance(error_value, str):
+                structured_agent_error = error_value
+        serialized_trajectory = (
+            agent.serialize() if agent is not None else {"messages": []}
+        )
+        run_summary = build_miniswe_run_summary(
+            serialized_trajectory=serialized_trajectory,
+            duration_seconds=agent_duration_seconds,
+            total_cost_usd=agent.cost if agent is not None else None,
+            step_count=agent.n_calls if agent is not None else None,
+            agent_error=structured_agent_error,
+        )
+        metadata["run_summary"] = run_summary.model_dump(mode="json")
 
         metadata["harness_config"] = {
             "agent_config": effective_agent_config,
