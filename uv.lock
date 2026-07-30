@@ -3067,7 +3067,7 @@ wheels = [
 
 [[package]]
 name = "latch-eval-tools"
-version = "0.4.15"
+version = "0.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
