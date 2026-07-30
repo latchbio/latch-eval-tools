@@ -1,6 +1,7 @@
 """Composite graders: all_of, list_match, dict_match. Recursive over
 predicate-leaves and nested composites."""
 
+import asyncio
 from typing import Any
 
 from .base import BinaryGrader, GraderResult
@@ -10,6 +11,10 @@ from .predicate import (
     evaluate_predicate,
     resolve_answer_field,
 )
+from .rubric import GraderError, GraderTransientError
+
+# A per-child verdict: (kind, passed, score, score_max, label, info).
+ChildVerdict = tuple[str, bool, float, float, str, dict]
 
 # shared helper functions vv
 
@@ -172,31 +177,36 @@ def _evaluate_leaf(leaf: dict, value: Any) -> tuple[str, bool, float, float, str
     )
 
 
-def _evaluate_all_of_child(
-    child: Any, agent_answer: Any
-) -> tuple[str, bool, float, float, str, dict]:
-    """Dispatch one ``all_of`` child: bare leaf vs composite envelope."""
-    if _is_leaf(child):
-        value = _bind_field(agent_answer, child.get("answer_field"))
-        return _evaluate_leaf(child, value)
+def _llm_grader_types() -> frozenset[str]:
+    """LLM grader type names, read lazily to avoid a circular import."""
+    from . import LLM_GRADER_REGISTRY  # noqa: PLC0415
 
-    from . import get_grader  # noqa: PLC0415 -- lazy to avoid circular import
+    return frozenset(LLM_GRADER_REGISTRY)
 
-    child_type = child.get("type") if isinstance(child, dict) else None
-    child_config = child.get("config", {}) if isinstance(child, dict) else {}
+
+def _llm_child_type(child: Any) -> str | None:
+    """The child's LLM grader type, or ``None`` if it needs no LLM call."""
+    if not isinstance(child, dict):
+        return None
+    child_type = child.get("type")
     if not isinstance(child_type, str):
-        return (
-            "scoring",
-            False,
-            0.0,
-            1.0,
-            "?",
-            {"error": "composite child missing 'type' and not a bare predicate-leaf"},
-        )
-    try:
-        sub = get_grader(child_type).evaluate_answer(agent_answer, child_config)
-    except (ValueError, TypeError) as exc:
-        return "scoring", False, 0.0, 1.0, child_type, {"error": str(exc)}
+        return None
+    return child_type if child_type in _llm_grader_types() else None
+
+
+def _child_error(label: str, message: str) -> ChildVerdict:
+    return "scoring", False, 0.0, 1.0, label, {"error": message}
+
+
+def _child_verdict(
+    child_type: str, sub: GraderResult, child_config: Any
+) -> ChildVerdict:
+    """Wrap a sub-grader's result as a scoring verdict.
+
+    ``score_max`` is 1.0 for every child except ``predicate_leaf``, whose
+    ``weighted_label`` table can carry a larger per-child maximum. A ``rubric``
+    child already reports a reward normalized to [0, 1].
+    """
     score_max = 1.0
     if child_type == "predicate_leaf" and isinstance(child_config, dict):
         score_max = _leaf_score_max(child_config)
@@ -211,6 +221,68 @@ def _evaluate_all_of_child(
             "sub_reasoning": sub.reasoning,
         },
     )
+
+
+def _evaluate_all_of_child(child: Any, agent_answer: Any) -> ChildVerdict:
+    """Dispatch one ``all_of`` child: bare leaf vs composite envelope."""
+    if _is_leaf(child):
+        value = _bind_field(agent_answer, child.get("answer_field"))
+        return _evaluate_leaf(child, value)
+
+    from . import get_grader  # noqa: PLC0415 -- lazy to avoid circular import
+
+    child_type = child.get("type") if isinstance(child, dict) else None
+    child_config = child.get("config", {}) if isinstance(child, dict) else {}
+    if not isinstance(child_type, str):
+        return _child_error(
+            "?", "composite child missing 'type' and not a bare predicate-leaf"
+        )
+    if child_type in _llm_grader_types():
+        return _child_error(
+            child_type,
+            f"child grader {child_type!r} requires an LLM call; grade this "
+            "composite with AllOfGrader.evaluate_answer_async()",
+        )
+    try:
+        sub = get_grader(child_type).evaluate_answer(agent_answer, child_config)
+    except (ValueError, TypeError) as exc:
+        return _child_error(child_type, str(exc))
+    return _child_verdict(child_type, sub, child_config)
+
+
+async def _evaluate_all_of_child_async(
+    child: Any,
+    agent_answer: Any,
+    *,
+    api_key: str | None,
+    base_url: str | None,
+) -> ChildVerdict:
+    """Async counterpart of :func:`_evaluate_all_of_child`.
+
+    A child needing no LLM call defers to the sync path unchanged.
+    ``GraderError`` / ``GraderTransientError`` propagate so a caller's retry
+    ladder can retry the whole composite; a bad rubric config or unparseable
+    judgment becomes a failing child, as on the sync path.
+    """
+    child_type = _llm_child_type(child)
+    if child_type is None:
+        return _evaluate_all_of_child(child, agent_answer)
+
+    from . import LLM_GRADER_REGISTRY  # noqa: PLC0415 -- lazy to avoid circular import
+
+    child_config = child.get("config", {})
+    try:
+        sub = await LLM_GRADER_REGISTRY[child_type]().evaluate_answer_llm(
+            agent_answer,
+            child_config,
+            api_key=api_key,
+            base_url=base_url,
+        )
+    except (GraderTransientError, GraderError):
+        raise
+    except (ValueError, TypeError) as exc:
+        return _child_error(child_type, str(exc))
+    return _child_verdict(child_type, sub, child_config)
 
 
 def _composite_fail(agent_answer: Any, reason: str) -> GraderResult:
@@ -228,54 +300,114 @@ def _composite_fail(agent_answer: Any, reason: str) -> GraderResult:
 
 
 class AllOfGrader(BinaryGrader):
-    """Conjunction over scoring children plus veto from hard_fail children."""
+    """Conjunction over scoring children plus veto from hard_fail children.
+
+    ``rubric`` (and any other :data:`LLM_GRADER_REGISTRY` type) is only gradable
+    through :meth:`evaluate_answer_async`; the sync path reports such a child as
+    a grader error rather than scoring it as a failure.
+    """
 
     def evaluate_answer(self, agent_answer: dict, config: dict) -> GraderResult:
-        scoring: list[tuple[bool, float, float, str, dict]] = []
-        hard_fails: list[tuple[bool, str, dict]] = []
+        verdicts = [
+            _evaluate_all_of_child(child, agent_answer)
+            for child in config.get("children", [])
+        ]
+        return _aggregate_all_of(verdicts, config, agent_answer)
 
-        for child in config.get("children", []):
-            kind, passed, score, score_max, label, info = _evaluate_all_of_child(
-                child, agent_answer
+    async def evaluate_answer_async(
+        self,
+        agent_answer: dict,
+        config: dict,
+        *,
+        api_key: str | None = None,
+        base_url: str | None = None,
+    ) -> GraderResult:
+        """Grade ``all_of`` with LLM children allowed, running children concurrently.
+
+        ``api_key`` / ``base_url`` are forwarded to every LLM child; when ``None``
+        the Anthropic client falls back to ``ANTHROPIC_API_KEY`` /
+        ``ANTHROPIC_BASE_URL`` from the environment.
+        """
+        verdicts = await asyncio.gather(
+            *(
+                _evaluate_all_of_child_async(
+                    child, agent_answer, api_key=api_key, base_url=base_url
+                )
+                for child in config.get("children", [])
             )
-            if kind == "hard_fail":
-                hard_fails.append((passed, label, info))
-            else:
-                scoring.append((passed, score, score_max, label, info))
-
-        scoring_total_score = sum(s for _, s, *_ in scoring)
-        score_denominator = sum(s_max for _, _, s_max, *_ in scoring)
-        scoring_count = len(scoring)
-        scoring_passed = sum(1 for p, *_ in scoring if p)
-        veto = any(not p for p, _, _ in hard_fails)
-        pass_rule = config.get("pass_rule", "all")
-        if pass_rule == "all":
-            scoring_ok = all(p for p, *_ in scoring) if scoring else True
-        elif pass_rule == "min_passing":
-            scoring_ok = scoring_passed >= config.get("min_passing_children", 0)
-        elif pass_rule == "score_threshold":
-            scoring_ok = scoring_total_score >= config.get("score_threshold", 0.0)
-        else:
-            scoring_ok = False
-
-        score = _normalize_score(scoring_total_score, score_denominator)
-
-        passed = scoring_ok and not veto
-        return GraderResult(
-            passed=passed,
-            score=score,
-            metrics={
-                "pass_rule": pass_rule,
-                "scoring_count": scoring_count,
-                "scoring_passed": scoring_passed,
-                "scoring_total_score": scoring_total_score,
-                "score_denominator": score_denominator,
-                "hard_fail_triggered": [name for p, name, _ in hard_fails if not p],
-            },
-            reasoning=_format_all_of(scoring, hard_fails, pass_rule, passed),
-            agent_answer=agent_answer,
-            field_scores={name: s for _, s, _, name, _ in scoring},
         )
+        return _aggregate_all_of(list(verdicts), config, agent_answer)
+
+
+def _aggregate_all_of(
+    verdicts: list[ChildVerdict], config: dict, agent_answer: dict
+) -> GraderResult:
+    """Fold per-child verdicts into one ``all_of`` result.
+
+    Sole owner of ``all_of`` semantics: hard_fail children veto instead of
+    scoring, and the score is normalized against the summed per-child maxima.
+    """
+    scoring: list[tuple[bool, float, float, str, dict]] = []
+    hard_fails: list[tuple[bool, str, dict]] = []
+    label_counts: dict[str, int] = {}
+
+    for kind, passed, score, score_max, label, info in verdicts:
+        seen = label_counts.get(label, 0)
+        label_counts[label] = seen + 1
+        if seen:
+            # Children are labelled by grader type, so two of a kind (e.g. two
+            # rubric children) would overwrite each other in field_scores and
+            # metrics without a suffix.
+            label = f"{label}#{seen + 1}"
+        if kind == "hard_fail":
+            hard_fails.append((passed, label, info))
+        else:
+            scoring.append((passed, score, score_max, label, info))
+
+    scoring_total_score = sum(s for _, s, *_ in scoring)
+    score_denominator = sum(s_max for _, _, s_max, *_ in scoring)
+    scoring_count = len(scoring)
+    scoring_passed = sum(1 for p, *_ in scoring if p)
+    veto = any(not p for p, _, _ in hard_fails)
+    pass_rule = config.get("pass_rule", "all")
+    if pass_rule == "all":
+        scoring_ok = all(p for p, *_ in scoring) if scoring else True
+    elif pass_rule == "min_passing":
+        scoring_ok = scoring_passed >= config.get("min_passing_children", 0)
+    elif pass_rule == "score_threshold":
+        scoring_ok = scoring_total_score >= config.get("score_threshold", 0.0)
+    else:
+        scoring_ok = False
+
+    score = _normalize_score(scoring_total_score, score_denominator)
+
+    metrics: dict = {
+        "pass_rule": pass_rule,
+        "scoring_count": scoring_count,
+        "scoring_passed": scoring_passed,
+        "scoring_total_score": scoring_total_score,
+        "score_denominator": score_denominator,
+        "hard_fail_triggered": [name for p, name, _ in hard_fails if not p],
+    }
+    # Sub-grader metrics carry the detail a composite score can't: a rubric
+    # child's per-criterion judgments, model id and reward. Dropping them leaves
+    # a failed LLM grade with no machine-readable explanation.
+    for _, _, _, label, info in scoring:
+        for key, value in (info.get("sub_metrics") or {}).items():
+            metrics[f"{label}.{key}"] = value
+        error = info.get("error")
+        if error is not None:
+            metrics[f"{label}.error"] = error
+
+    passed = scoring_ok and not veto
+    return GraderResult(
+        passed=passed,
+        score=score,
+        metrics=metrics,
+        reasoning=_format_all_of(scoring, hard_fails, pass_rule, passed),
+        agent_answer=agent_answer,
+        field_scores={name: s for _, s, _, name, _ in scoring},
+    )
 
 
 class ListMatchGrader(BinaryGrader):
@@ -551,10 +683,19 @@ def _format_all_of(
     lines = [f"all_of [pass_rule={pass_rule}]: {verdict}"]
     for p, score, _, label, info in scoring:
         marker = "+" if p else "x"
+        error = info.get("error")
         sub = info.get("sub_reasoning")
-        if sub:
-            first = sub.splitlines()[0] if sub else ""
-            lines.append(f"  {marker} {label}: {first}  (score={score})")
+        if error:
+            # Without this a misconfigured child reads as an ordinary failed
+            # child, e.g. a rubric child graded through the sync path.
+            lines.append(f"  {marker} {label}: GRADER ERROR — {error}")
+        elif sub:
+            # Keep the whole child report, indented: for a rubric child the
+            # per-criterion verdicts and rationales are the only explanation of
+            # the score, and a first-line-only summary drops all of them.
+            sub_lines = sub.splitlines()
+            lines.append(f"  {marker} {label}: {sub_lines[0]}  (score={score})")
+            lines.extend(f"    {line}" for line in sub_lines[1:] if line.strip())
         else:
             lines.append(f"  {marker} {label}: passed={p}, score={score}")
     for p, label, _ in hard_fails:
