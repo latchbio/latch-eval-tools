@@ -13,7 +13,8 @@ class MultipleChoiceGrader(BinaryGrader):
                 passed=False,
                 metrics={},
                 reasoning="Agent answer missing required field: answer",
-                agent_answer=agent_answer
+                agent_answer=agent_answer,
+                score=0.0,
             )
 
         agent_choice = str(agent_answer["answer"]).strip().upper()
