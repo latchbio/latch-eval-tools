@@ -259,10 +259,10 @@ async def _evaluate_all_of_child_async(
 ) -> ChildVerdict:
     """Async counterpart of :func:`_evaluate_all_of_child`.
 
-    A child needing no LLM call defers to the sync path unchanged.
-    ``GraderError`` / ``GraderTransientError`` propagate so a caller's retry
-    ladder can retry the whole composite; a bad rubric config or unparseable
-    judgment becomes a failing child, as on the sync path.
+    A child needing no LLM call defers to the sync path unchanged. Grader
+    infrastructure errors propagate per the :class:`GraderError` contract
+    (including ``RubricGraderOutputParseError``, which subclasses it); a
+    malformed rubric config is a ``ValueError`` and becomes a failing child.
     """
     child_type = _llm_child_type(child)
     if child_type is None:
@@ -304,7 +304,9 @@ class AllOfGrader(BinaryGrader):
 
     ``rubric`` (and any other :data:`LLM_GRADER_REGISTRY` type) is only gradable
     through :meth:`evaluate_answer_async`; the sync path reports such a child as
-    a grader error rather than scoring it as a failure.
+    a grader error rather than scoring it as a failure. Only *direct* children
+    are dispatched asynchronously, so a ``rubric`` nested inside a child
+    composite still reports that error; keep LLM children at the top level.
     """
 
     def evaluate_answer(self, agent_answer: dict, config: dict) -> GraderResult:
@@ -328,15 +330,25 @@ class AllOfGrader(BinaryGrader):
         the Anthropic client falls back to ``ANTHROPIC_API_KEY`` /
         ``ANTHROPIC_BASE_URL`` from the environment.
         """
-        verdicts = await asyncio.gather(
+        settled = await asyncio.gather(
             *(
                 _evaluate_all_of_child_async(
                     child, agent_answer, api_key=api_key, base_url=base_url
                 )
                 for child in config.get("children", [])
-            )
+            ),
+            # Bare gather() leaves sibling LLM calls running detached on the first
+            # failure; they are still billed and can outlive the event loop.
+            return_exceptions=True,
         )
-        return _aggregate_all_of(list(verdicts), config, agent_answer)
+        for error_type in (GraderTransientError, GraderError):
+            for item in settled:
+                if isinstance(item, error_type):
+                    raise item
+        for item in settled:
+            if isinstance(item, BaseException):
+                raise item
+        return _aggregate_all_of(list(settled), config, agent_answer)
 
 
 def _aggregate_all_of(
@@ -355,9 +367,7 @@ def _aggregate_all_of(
         seen = label_counts.get(label, 0)
         label_counts[label] = seen + 1
         if seen:
-            # Children are labelled by grader type, so two of a kind (e.g. two
-            # rubric children) would overwrite each other in field_scores and
-            # metrics without a suffix.
+            # Same-type siblings would otherwise share one field_scores key.
             label = f"{label}#{seen + 1}"
         if kind == "hard_fail":
             hard_fails.append((passed, label, info))
@@ -389,9 +399,7 @@ def _aggregate_all_of(
         "score_denominator": score_denominator,
         "hard_fail_triggered": [name for p, name, _ in hard_fails if not p],
     }
-    # Sub-grader metrics carry the detail a composite score can't: a rubric
-    # child's per-criterion judgments, model id and reward. Dropping them leaves
-    # a failed LLM grade with no machine-readable explanation.
+    # Carries a rubric child's per-criterion judgments through to the caller.
     for _, _, _, label, info in scoring:
         for key, value in (info.get("sub_metrics") or {}).items():
             metrics[f"{label}.{key}"] = value
@@ -686,13 +694,10 @@ def _format_all_of(
         error = info.get("error")
         sub = info.get("sub_reasoning")
         if error:
-            # Without this a misconfigured child reads as an ordinary failed
-            # child, e.g. a rubric child graded through the sync path.
+            # Distinguishes a misconfigured child from a failing one.
             lines.append(f"  {marker} {label}: GRADER ERROR — {error}")
         elif sub:
-            # Keep the whole child report, indented: for a rubric child the
-            # per-criterion verdicts and rationales are the only explanation of
-            # the score, and a first-line-only summary drops all of them.
+            # A rubric child's rationales are the only account of its score.
             sub_lines = sub.splitlines()
             lines.append(f"  {marker} {label}: {sub_lines[0]}  (score={score})")
             lines.extend(f"    {line}" for line in sub_lines[1:] if line.strip())
