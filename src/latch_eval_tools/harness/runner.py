@@ -138,7 +138,8 @@ class EvalRunner:
                         passed=False,
                         metrics={"grader_error": str(e)},
                         reasoning=f"Grader failed due to malformed agent output: {e}\n\n{traceback.format_exc()}",
-                        agent_answer=agent_answer
+                        agent_answer=agent_answer,
+                        score=0.0,
                     )
 
                 print(f"\n{'✓ EVAL PASSED' if grader_result.passed else '✗ EVAL FAILED'}")

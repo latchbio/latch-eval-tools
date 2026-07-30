@@ -13,7 +13,8 @@ class LabelSetJaccardGrader(BinaryGrader):
                 passed=False,
                 metrics={},
                 reasoning=f"Agent answer missing required field: {answer_field}",
-                agent_answer=agent_answer
+                agent_answer=agent_answer,
+                score=0.0,
             )
 
         predicted_labels = set(agent_answer[answer_field])
