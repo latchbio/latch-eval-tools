@@ -104,6 +104,33 @@ OPENROUTER_MODEL_CONFIGS: dict[str, dict] = {
             "supportsUsageInStreaming": True,
         },
     },
+    # DeepSeek-V4-Flash-0731: 1M context, reasoning_effort supports low/high/max
+    # (no medium/xhigh at the API), and DeepSeek recommends max output 384K tokens
+    # at the high/max effort levels. We pin every pi thinking level to "max" via
+    # thinkingLevelMap so the model always runs at its top reasoning effort.
+    # Cost is OpenRouter list price ($0.14 / $0.28 per 1M, $0.028 cache read;
+    # Cloudflare provider).
+    "openrouter/deepseek/deepseek-v4-flash-0731": {
+        "id": "deepseek/deepseek-v4-flash-0731",
+        "name": "DeepSeek V4 Flash",
+        "reasoning": True,
+        "input": ["text"],
+        "contextWindow": 1048576,
+        "maxTokens": 393216,
+        "cost": {"input": 0.14, "output": 0.28, "cacheRead": 0.028, "cacheWrite": 0},
+        "thinkingLevelMap": {
+            "low": "max",
+            "medium": "max",
+            "high": "max",
+            "xhigh": "max",
+            "max": "max",
+        },
+        "compat": {
+            "thinkingFormat": "reasoning_effort",
+            "supportsReasoningEffort": True,
+            "supportsUsageInStreaming": True,
+        },
+    },
 }
 
 
