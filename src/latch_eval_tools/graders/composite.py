@@ -240,8 +240,8 @@ def _evaluate_all_of_child(child: Any, agent_answer: Any) -> ChildVerdict:
     if child_type in _llm_grader_types():
         return _child_error(
             child_type,
-            f"child grader {child_type!r} requires an LLM call; grade this "
-            "composite with AllOfGrader.evaluate_answer_async()",
+            f"child grader {child_type!r} needs an LLM call; supported only as a "
+            "direct child of AllOfGrader.evaluate_answer_async()",
         )
     try:
         sub = get_grader(child_type).evaluate_answer(agent_answer, child_config)
