@@ -6,11 +6,17 @@ import subprocess
 import threading
 import time
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from importlib.resources import files
 from pathlib import Path
+from typing import Any
 
+from latch_eval_tools.harness.run_summary import (
+    CliHarnessAgentType,
+    build_cli_run_summary,
+)
 from latch_eval_tools.harness.utils import (
     DEFAULT_DOCKER_IMAGE,
     ensure_docker_image,
@@ -28,11 +34,21 @@ from latch_eval_tools.llm_refusal import detect_llm_refusal
 REFUSAL_VERDICT_FILENAME = "refusal_verdict.json"
 
 
-def _write_refusal_verdict(work_dir: Path, trajectory: list[dict]) -> None:
+def _write_refusal_verdict(
+    work_dir: Path,
+    trajectory: list[dict[str, Any]],
+    *,
+    refusal_events: list[dict[str, Any]] | None = None,
+    agent_error: str | None = None,
+) -> None:
     # Detect refusals against the in-memory trajectory here (the harness has it
     # local) and persist the verdict, so consumers never re-read the trajectory.
     try:
-        refusal = detect_llm_refusal(trajectory_data=trajectory)
+        refusal = detect_llm_refusal(
+            trajectory_data=trajectory,
+            refusal_events_data=refusal_events,
+            agent_error=agent_error,
+        )
         payload = refusal.model_dump(mode="json") if refusal is not None else None
         (work_dir / REFUSAL_VERDICT_FILENAME).write_text(json.dumps(payload))
     except Exception as exc:
@@ -75,6 +91,33 @@ OPENROUTER_MODEL_CONFIGS: dict[str, dict] = {
         "contextWindow": 1048576,
         "maxTokens": 131072,
         "cost": {"input": 3, "output": 15, "cacheRead": 0.3, "cacheWrite": 0},
+        "thinkingLevelMap": {
+            "low": "max",
+            "medium": "max",
+            "high": "max",
+            "xhigh": "max",
+            "max": "max",
+        },
+        "compat": {
+            "thinkingFormat": "reasoning_effort",
+            "supportsReasoningEffort": True,
+            "supportsUsageInStreaming": True,
+        },
+    },
+    # DeepSeek-V4-Flash-0731: 1M context, reasoning_effort supports low/high/max
+    # (no medium/xhigh at the API), and DeepSeek recommends max output 384K tokens
+    # at the high/max effort levels. We pin every pi thinking level to "max" via
+    # thinkingLevelMap so the model always runs at its top reasoning effort.
+    # Cost is OpenRouter list price ($0.14 / $0.28 per 1M, $0.028 cache read;
+    # Cloudflare provider).
+    "openrouter/deepseek/deepseek-v4-flash-0731": {
+        "id": "deepseek/deepseek-v4-flash-0731",
+        "name": "DeepSeek V4 Flash",
+        "reasoning": True,
+        "input": ["text"],
+        "contextWindow": 1048576,
+        "maxTokens": 393216,
+        "cost": {"input": 0.14, "output": 0.28, "cacheRead": 0.028, "cacheWrite": 0},
         "thinkingLevelMap": {
             "low": "max",
             "medium": "max",
@@ -629,18 +672,74 @@ def _pi_clean_exit_needs_resume(attempt_events: list[dict]) -> bool:
     return False
 
 
-def _append_codex_sidecar_reasoning(
+def _iter_jsonl_objects(source: Path) -> Iterator[dict[str, Any]]:
+    try:
+        with source.open(encoding="utf-8") as source_file:
+            for line in source_file:
+                stripped = line.strip()
+                if stripped == "":
+                    continue
+                try:
+                    event = json.loads(stripped)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(event, dict):
+                    yield event
+    except (OSError, UnicodeDecodeError) as exc:
+        print(f"Failed to read harness sidecar {source}: {exc}")
+
+
+def _read_codex_sidecar_events(
     work_dir: Path,
-    trajectory: list[dict],
-) -> int:
-    trajectory_file = work_dir / "trajectory.json"
-    thread_id = load_trajectory_identifier(trajectory_file, "thread_id")
+    trajectory: list[dict[str, Any]],
+) -> list[dict[str, Any]] | None:
+    thread_id = None
+    for event in trajectory:
+        value = event.get("thread_id")
+        if isinstance(value, str) and value:
+            thread_id = value
+            break
     if thread_id is None:
-        return 0
+        return None
 
     codex_dir = work_dir / AGENT_STATE_DIRS["openaicodex"]
     if not codex_dir.exists():
-        return 0
+        return None
+
+    matched_source = False
+    events: list[dict[str, Any]] = []
+    for source in sorted(codex_dir.rglob("*")):
+        if source.is_dir() or source.is_symlink() or thread_id not in source.name:
+            continue
+        matched_source = True
+        for event in _iter_jsonl_objects(source):
+            event_type = event.get("type")
+            payload = event.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            if event_type == "response_item" and payload.get("type") in {
+                "function_call",
+                "reasoning",
+            }:
+                events.append(event)
+            elif event_type == "event_msg" and payload.get("type") == "token_count":
+                events.append(event)
+    return events if matched_source else None
+
+
+def _read_pi_refusal_events(
+    work_dir: Path,
+) -> list[dict[str, Any]] | None:
+    source = work_dir / AGENT_STATE_DIRS["pi"] / "refusal_events.jsonl"
+    if not source.exists() or source.is_dir() or source.is_symlink():
+        return None
+    return list(_iter_jsonl_objects(source))
+
+
+def _append_codex_sidecar_reasoning(
+    trajectory: list[dict[str, Any]],
+    sidecar_events: list[dict[str, Any]],
+) -> int:
 
     existing_reasoning_ids = {
         event.get("payload", {}).get("id")
@@ -654,41 +753,31 @@ def _append_codex_sidecar_reasoning(
     }
 
     appended = 0
-    for source in sorted(codex_dir.rglob("*")):
-        if source.is_dir() or source.is_symlink() or thread_id not in source.name:
+    for event in sidecar_events:
+        if event.get("type") != "response_item":
             continue
-        for line in source.read_text().splitlines():
-            stripped = line.strip()
-            if stripped == "":
-                continue
-            try:
-                event = json.loads(stripped)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(event, dict) or event.get("type") != "response_item":
-                continue
-            payload = event.get("payload")
-            if not isinstance(payload, dict) or payload.get("type") != "reasoning":
-                continue
-            payload_id = payload.get("id")
-            if payload_id in existing_reasoning_ids:
-                continue
-            trajectory.append(
-                {
-                    "type": "response_item",
-                    "source": "codex_sidecar",
-                    "timestamp": event.get("timestamp"),
-                    "payload": payload,
-                }
-            )
-            existing_reasoning_ids.add(payload_id)
-            appended += 1
+        payload = event.get("payload")
+        if not isinstance(payload, dict) or payload.get("type") != "reasoning":
+            continue
+        payload_id = payload.get("id")
+        if payload_id in existing_reasoning_ids:
+            continue
+        trajectory.append(
+            {
+                "type": "response_item",
+                "source": "codex_sidecar",
+                "timestamp": event.get("timestamp"),
+                "payload": payload,
+            }
+        )
+        existing_reasoning_ids.add(payload_id)
+        appended += 1
 
     return appended
 
 
 def _run_cli_agent(
-    agent_type: str,
+    agent_type: CliHarnessAgentType,
     cli_command: list[str],
     task_prompt: str,
     work_dir: Path,
@@ -1151,13 +1240,22 @@ def _run_cli_agent(
         f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Agent output saved to: {agent_log_file}"
     )
 
+    codex_sidecar_events: list[dict[str, Any]] | None = None
+    pi_refusal_events: list[dict[str, Any]] | None = None
     if agent_type == "openaicodex" and trajectory:
-        appended_reasoning = _append_codex_sidecar_reasoning(work_dir, trajectory)
+        codex_sidecar_events = _read_codex_sidecar_events(work_dir, trajectory)
+        appended_reasoning = (
+            _append_codex_sidecar_reasoning(trajectory, codex_sidecar_events)
+            if codex_sidecar_events is not None
+            else 0
+        )
         if appended_reasoning > 0:
             print(
                 "Appended "
                 f"{appended_reasoning} Codex reasoning item(s) from sidecar to trajectory"
             )
+    elif agent_type == "pi":
+        pi_refusal_events = _read_pi_refusal_events(work_dir)
 
     if trajectory:
         persist_trajectory()
@@ -1236,6 +1334,12 @@ def _run_cli_agent(
             )
         error_details["provider_retry_count"] = provider_resumes
 
+    structured_agent_error = None
+    if error_details is not None:
+        error_value = error_details.get("error")
+        if isinstance(error_value, str):
+            structured_agent_error = error_value
+
     metadata = _extract_metadata(
         agent_type,
         trajectory,
@@ -1247,99 +1351,88 @@ def _run_cli_agent(
         oom_detected=oom_detected,
         oom_restarts=oom_restarts,
         memory_limit_bytes=memory_limit_bytes,
+        codex_sidecar_events=codex_sidecar_events,
+        refusal_events=pi_refusal_events,
+        agent_error=structured_agent_error,
     )
 
-    _write_refusal_verdict(work_dir, trajectory)
+    _write_refusal_verdict(
+        work_dir,
+        trajectory,
+        refusal_events=pi_refusal_events,
+        agent_error=structured_agent_error,
+    )
 
     return {"answer": agent_answer, "metadata": metadata}
 
 
 def _extract_metadata(
-    agent_type: str,
-    trajectory: list[dict],
+    agent_type: CliHarnessAgentType,
+    trajectory: list[dict[str, Any]],
     duration: float,
     model_name: str | None,
     timed_out: bool,
     eval_timeout: int,
-    error_details: dict | None,
+    error_details: dict[str, Any] | None,
     oom_detected: bool,
     oom_restarts: int,
     memory_limit_bytes: int,
-) -> dict:
+    codex_sidecar_events: list[dict[str, Any]] | None = None,
+    refusal_events: list[dict[str, Any]] | None = None,
+    agent_error: str | None = None,
+) -> dict[str, Any]:
+    run_summary = build_cli_run_summary(
+        agent_type=agent_type,
+        trajectory=trajectory,
+        duration_seconds=duration,
+        model_name=model_name,
+        codex_sidecar_events=codex_sidecar_events,
+        refusal_events=refusal_events,
+        agent_error=agent_error,
+    )
+    metrics = run_summary.metrics
     metadata = {
         "duration_s": round(duration, 2),
         "model": model_name,
         "memory_limit_bytes": memory_limit_bytes,
+        "run_summary": run_summary.model_dump(mode="json"),
     }
 
     if agent_type == "claudecode":
-        claude_result = None
-        for event in trajectory:
-            if event.get("type") == "result":
-                claude_result = event
-                break
-        if claude_result:
-            metadata["total_cost"] = claude_result.get("total_cost_usd")
-            metadata["n_turns"] = claude_result.get("num_turns")
+        claude_result = next(
+            (event for event in reversed(trajectory) if event.get("type") == "result"),
+            None,
+        )
+        if claude_result is not None:
             metadata["session_id"] = claude_result.get("session_id")
-            metadata["usage"] = claude_result.get("usage")
+            usage = claude_result.get("usage")
+            if isinstance(usage, dict):
+                metadata["usage"] = usage
     elif agent_type == "openaicodex":
         thread_id = None
-        n_turns = 0
-        total_usage = {"input_tokens": 0, "output_tokens": 0}
-
         for event in trajectory:
-            event_type = event.get("type", "")
-            if event_type == "thread.started":
+            if event.get("type") == "thread.started":
                 thread_id = event.get("thread_id")
-            elif event_type == "turn.completed":
-                n_turns += 1
-                if "usage" in event:
-                    usage = event["usage"]
-                    total_usage["input_tokens"] += usage.get("input_tokens", 0)
-                    total_usage["output_tokens"] += usage.get("output_tokens", 0)
-
         if thread_id:
             metadata["thread_id"] = thread_id
-        if n_turns > 0:
-            metadata["n_turns"] = n_turns
-        if total_usage["input_tokens"] > 0 or total_usage["output_tokens"] > 0:
-            metadata["usage"] = total_usage
     elif agent_type == "pi":
         session_id = None
-        n_turns = 0
-        total_cost = 0
-        total_usage = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cache_read_tokens": 0,
-            "cache_write_tokens": 0,
-        }
-
         for event in trajectory:
             if event.get("type") == "session":
                 session_id = event.get("id")
-            elif event.get("type") == "turn_end":
-                n_turns += 1
-            elif event.get("type") == "message_end":
-                message = event.get("message")
-                if not isinstance(message, dict) or message.get("role") != "assistant":
-                    continue
-                usage = message["usage"]
-                total_usage["input_tokens"] += usage["input"]
-                total_usage["output_tokens"] += usage["output"]
-                total_usage["cache_read_tokens"] += usage["cacheRead"]
-                total_usage["cache_write_tokens"] += usage["cacheWrite"]
-                total_cost += usage["cost"]["total"]
-
         if session_id:
             metadata["session_id"] = session_id
-        if n_turns > 0:
-            metadata["n_turns"] = n_turns
-        if any(total_usage.values()):
-            metadata["usage"] = total_usage
-        if total_cost > 0:
-            metadata["total_cost"] = total_cost
+
+    if metrics.total_cost_usd is not None:
+        metadata["total_cost"] = metrics.total_cost_usd
+    if metrics.turn_count is not None:
+        metadata["n_turns"] = metrics.turn_count
+    if metrics.step_count is not None:
+        metadata["n_steps"] = metrics.step_count
+    if "usage" not in metadata:
+        canonical_usage = metrics.usage.model_dump(exclude_none=True)
+        if canonical_usage:
+            metadata["usage"] = canonical_usage
 
     metadata["timed_out"] = timed_out
     metadata["eval_timeout_seconds"] = eval_timeout

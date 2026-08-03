@@ -389,7 +389,13 @@ def _aggregate_all_of(
     else:
         scoring_ok = False
 
-    score = _normalize_score(scoring_total_score, score_denominator)
+    # Reward is read from `score`, so a veto has to zero the score and not
+    # only flip `passed`.
+    no_scoring_children = scoring_count == 0
+    if no_scoring_children or veto:
+        score = 0.0
+    else:
+        score = _normalize_score(scoring_total_score, score_denominator)
 
     metrics: dict = {
         "pass_rule": pass_rule,
@@ -398,6 +404,11 @@ def _aggregate_all_of(
         "scoring_total_score": scoring_total_score,
         "score_denominator": score_denominator,
         "hard_fail_triggered": [name for p, name, _ in hard_fails if not p],
+        **(
+            {"composite_error": "all_of has no scoring children"}
+            if no_scoring_children
+            else {}
+        ),
     }
     # Carries a rubric child's per-criterion judgments through to the caller.
     for _, _, _, label, info in scoring:
@@ -407,7 +418,10 @@ def _aggregate_all_of(
         if error is not None:
             metrics[f"{label}.error"] = error
 
-    passed = scoring_ok and not veto
+    # A composite with only hard_fail children can express a veto but never a
+    # reward, so any answer -- including an empty one -- would otherwise earn
+    # full credit for work that was never graded. Fail closed and surface it.
+    passed = scoring_ok and not veto and not no_scoring_children
     return GraderResult(
         passed=passed,
         score=score,
@@ -468,6 +482,7 @@ class ListMatchGrader(BinaryGrader):
         additive_score = 0.0
         field_scores: dict = {}
         consumed_gt_keys: set[Any] = set()
+        hard_fail_triggered: list[str] = []
 
         for i, tup in enumerate(agent_list):
             if not isinstance(tup, dict):
@@ -505,10 +520,14 @@ class ListMatchGrader(BinaryGrader):
             gate_pass = True
             for fname, leaf in gt.get("fields", {}).items():
                 fvalue = tup.get(fname)
-                _, passed, score, _, _, _ = _evaluate_leaf(leaf, fvalue)
+                kind, passed, score, _, _, _ = _evaluate_leaf(leaf, fvalue)
                 role = leaf.get("role") if isinstance(leaf, dict) else None
                 per_field[fname] = {"passed": passed, "score": score, "role": role}
                 field_scores[f"{key_val}.{fname}"] = score
+                if kind == "hard_fail":
+                    if not passed:
+                        hard_fail_triggered.append(f"{key_val}.{fname}")
+                    continue
                 if role == "gate" and not passed:
                     gate_pass = False
                 if not passed:
@@ -528,13 +547,16 @@ class ListMatchGrader(BinaryGrader):
                 }
             )
 
-        passed = (tuple_pass_count >= tuple_pass_min) and (
-            additive_score >= additive_score_min
+        veto = len(hard_fail_triggered) > 0
+        passed = (
+            (tuple_pass_count >= tuple_pass_min)
+            and (additive_score >= additive_score_min)
+            and not veto
         )
         score_denominator = _list_match_additive_score_denominator(
             list(gt_by_key.values())
         )
-        score = _normalize_score(additive_score, score_denominator)
+        score = 0.0 if veto else _normalize_score(additive_score, score_denominator)
 
         return GraderResult(
             passed=passed,
@@ -547,6 +569,7 @@ class ListMatchGrader(BinaryGrader):
                 "additive_score_min": additive_score_min,
                 "additive_score_denominator": score_denominator,
                 "n_tuples_evaluated": len(agent_list),
+                "hard_fail_triggered": hard_fail_triggered,
             },
             reasoning=_format_list_match(
                 answer_field,
@@ -584,6 +607,7 @@ class DictMatchGrader(BinaryGrader):
         all_pass = True
         raw_score = 0.0
         score_denominator = 0.0
+        hard_fail_triggered: list[str] = []
 
         for gt_key, gt_entry in gt.items():
             entry_score_denominator = _dict_match_entry_score_denominator(gt_entry)
@@ -596,8 +620,10 @@ class DictMatchGrader(BinaryGrader):
                     field_scores[gt_key] = 0.0
                     all_pass = False
                 else:
-                    raw_score += entry_score_denominator
-                    score_denominator += entry_score_denominator
+                    # Excluded from both numerator and denominator so omitting an
+                    # optional key neither helps nor hurts. Previously this added
+                    # full credit, which made omitting a key strictly better than
+                    # answering it wrong.
                     entry_results.append(
                         {
                             "key": gt_key,
@@ -618,6 +644,8 @@ class DictMatchGrader(BinaryGrader):
                 field_scores[gt_key] = score
                 if kind != "hard_fail":
                     raw_score += score
+                elif not passed:
+                    hard_fail_triggered.append(gt_key)
                 if not passed:
                     all_pass = False
                 continue
@@ -636,6 +664,8 @@ class DictMatchGrader(BinaryGrader):
                     field_scores[f"{gt_key}.{fname}"] = score
                     if kind != "hard_fail":
                         raw_score += score
+                    elif not passed:
+                        hard_fail_triggered.append(f"{gt_key}.{fname}")
                     if not passed:
                         ok = False
                     if role == "gate" and not passed:
@@ -661,21 +691,36 @@ class DictMatchGrader(BinaryGrader):
 
         entries_total = len(entry_results)
         entries_passed = sum(1 for r in entry_results if r.get("passed"))
-        score = _normalize_score(raw_score, score_denominator)
+        veto = len(hard_fail_triggered) > 0
+        # score_denominator is 0 only when the answer supplied none of the graded
+        # keys (every entry was an omitted optional key). That is a non-answer, so
+        # fail closed rather than paying full credit for ungraded work.
+        nothing_graded = score_denominator <= 0.0
+        if veto or nothing_graded:
+            score = 0.0
+        else:
+            score = _normalize_score(raw_score, score_denominator)
+        passed = all_pass and not veto and not nothing_graded
 
         return GraderResult(
-            passed=all_pass,
+            passed=passed,
             score=score,
             metrics={
                 "entries_total": entries_total,
                 "entries_passed": entries_passed,
                 "raw_score": raw_score,
                 "score_denominator": score_denominator,
+                "hard_fail_triggered": hard_fail_triggered,
                 "failing_keys": [
                     r["key"] for r in entry_results if not r.get("passed")
                 ],
+                **(
+                    {"composite_error": "answer supplied none of the graded keys"}
+                    if nothing_graded
+                    else {}
+                ),
             },
-            reasoning=_format_dict_match(answer_field, entry_results, all_pass),
+            reasoning=_format_dict_match(answer_field, entry_results, passed),
             agent_answer=agent_answer,
             field_scores=field_scores,
         )

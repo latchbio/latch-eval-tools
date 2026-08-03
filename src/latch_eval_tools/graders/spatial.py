@@ -25,7 +25,8 @@ class SpatialAdjacencyGrader(BinaryGrader):
                 passed=False,
                 metrics={},
                 reasoning=f"Agent answer missing required fields: {missing}",
-                agent_answer=agent_answer
+                agent_answer=agent_answer,
+                score=0.0,
             )
 
         median_ic_to_pc = agent_answer["median_ic_to_pc_um"]

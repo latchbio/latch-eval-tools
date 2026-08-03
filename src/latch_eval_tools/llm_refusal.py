@@ -1,13 +1,21 @@
 import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 LLMRefusalProvider = Literal["openai", "anthropic", "google", "unknown"]
 LLMRefusalSource = Literal[
     "workflow_error", "trajectory", "agent_output", "refusal_sidecar"
 ]
+
+# Refusal diagnostics are included in the bounded V2 agent completion. Budget the
+# three free-form fields against their JSON representation so quotes, control
+# characters, and multibyte text cannot unexpectedly dominate the completion.
+_DIAGNOSTIC_CODE_JSON_BYTES = 512
+_DIAGNOSTIC_MESSAGE_JSON_BYTES = 4096
+_DIAGNOSTIC_RAW_EXCERPT_JSON_BYTES = 4096
+_TRUNCATION_MARKER = "…"
 
 
 _SIDECAR_PROVIDER_MAP: dict[str, LLMRefusalProvider] = {
@@ -19,6 +27,29 @@ _SIDECAR_PROVIDER_MAP: dict[str, LLMRefusalProvider] = {
 }
 
 
+def _json_string_size_bytes(value: str) -> int:
+    return len(json.dumps(value, ensure_ascii=False).encode("utf-8"))
+
+
+def _truncate_json_string(value: str, *, max_bytes: int) -> str:
+    value = value.replace("\x00", "\ufffd")
+    if _json_string_size_bytes(value) <= max_bytes:
+        return value
+
+    # Search by Unicode code point while measuring the encoded JSON string. This
+    # keeps the result valid UTF-8 and accounts for JSON escaping expansion.
+    low = 0
+    high = len(value)
+    while low < high:
+        midpoint = (low + high + 1) // 2
+        candidate = f"{value[:midpoint]}{_TRUNCATION_MARKER}"
+        if _json_string_size_bytes(candidate) <= max_bytes:
+            low = midpoint
+        else:
+            high = midpoint - 1
+    return f"{value[:low]}{_TRUNCATION_MARKER}"
+
+
 class LLMRefusalDiagnostic(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -28,6 +59,28 @@ class LLMRefusalDiagnostic(BaseModel):
     message: str
     source: LLMRefusalSource
     raw_excerpt: str | None = None
+
+    @field_validator("code")
+    @classmethod
+    def _bound_code(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _truncate_json_string(value, max_bytes=_DIAGNOSTIC_CODE_JSON_BYTES)
+
+    @field_validator("message")
+    @classmethod
+    def _bound_message(cls, value: str) -> str:
+        return _truncate_json_string(value, max_bytes=_DIAGNOSTIC_MESSAGE_JSON_BYTES)
+
+    @field_validator("raw_excerpt")
+    @classmethod
+    def _bound_raw_excerpt(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _truncate_json_string(
+            value,
+            max_bytes=_DIAGNOSTIC_RAW_EXCERPT_JSON_BYTES,
+        )
 
 
 def _parse_json_record(value: str | None) -> dict[str, Any] | None:

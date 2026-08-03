@@ -18,7 +18,8 @@ class DistributionComparisonGrader(BinaryGrader):
                 passed=False,
                 metrics={},
                 reasoning="Agent answer missing required field: cell_type_distribution",
-                agent_answer=agent_answer
+                agent_answer=agent_answer,
+                score=0.0,
             )
 
         agent_total_cells = agent_answer.get("total_cells")

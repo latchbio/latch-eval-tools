@@ -11,6 +11,7 @@ class FinishedFileGrader(BinaryGrader):
                 metrics={},
                 reasoning="agent_answer missing 'finished_file_contents'",
                 agent_answer=agent_answer,
+                score=0.0,
             )
         passed = contents.strip() == expected
         return GraderResult(
@@ -21,4 +22,5 @@ class FinishedFileGrader(BinaryGrader):
                 f"expected {expected!r}"
             ),
             agent_answer=agent_answer,
+            score=1.0 if passed else 0.0,
         )

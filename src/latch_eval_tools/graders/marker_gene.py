@@ -19,7 +19,8 @@ class MarkerGenePrecisionRecallGrader(BinaryGrader):
                 passed=False,
                 metrics={},
                 reasoning=f"Agent answer missing required field. Available keys: {list(agent_answer.keys())}",
-                agent_answer=agent_answer
+                agent_answer=agent_answer,
+                score=0.0,
             )
 
         predicted = agent_answer[answer_field]
@@ -35,7 +36,8 @@ class MarkerGenePrecisionRecallGrader(BinaryGrader):
                 passed=False,
                 metrics={},
                 reasoning=f"{answer_field} must be a list, got {type(predicted).__name__}",
-                agent_answer=agent_answer
+                agent_answer=agent_answer,
+                score=0.0,
             )
 
         if not isinstance(canonical_markers, list):
@@ -43,7 +45,8 @@ class MarkerGenePrecisionRecallGrader(BinaryGrader):
                 passed=False,
                 metrics={},
                 reasoning=f"canonical_markers must be a list for flat evaluation, got {type(canonical_markers).__name__}",
-                agent_answer=agent_answer
+                agent_answer=agent_answer,
+                score=0.0,
             )
 
         return self._evaluate_flat_list(predicted, canonical_markers, thresholds, answer_field, agent_answer)
@@ -227,7 +230,8 @@ class MarkerGeneSeparationGrader(BinaryGrader):
                 passed=False,
                 metrics={},
                 reasoning="Agent answer missing required field: per_gene_stats",
-                agent_answer=agent_answer
+                agent_answer=agent_answer,
+                score=0.0,
             )
 
         if "mean_auroc" not in agent_answer:
@@ -235,7 +239,8 @@ class MarkerGeneSeparationGrader(BinaryGrader):
                 passed=False,
                 metrics={},
                 reasoning="Agent answer missing required field: mean_auroc",
-                agent_answer=agent_answer
+                agent_answer=agent_answer,
+                score=0.0,
             )
 
         per_gene_stats = agent_answer["per_gene_stats"]
@@ -246,7 +251,8 @@ class MarkerGeneSeparationGrader(BinaryGrader):
                 passed=False,
                 metrics={},
                 reasoning="per_gene_stats must be a list",
-                agent_answer=agent_answer
+                agent_answer=agent_answer,
+                score=0.0,
             )
 
         num_genes = len(per_gene_stats)
@@ -255,7 +261,8 @@ class MarkerGeneSeparationGrader(BinaryGrader):
                 passed=False,
                 metrics={},
                 reasoning="per_gene_stats is empty",
-                agent_answer=agent_answer
+                agent_answer=agent_answer,
+                score=0.0,
             )
 
         gene_aurocs = {}
@@ -265,7 +272,8 @@ class MarkerGeneSeparationGrader(BinaryGrader):
                     passed=False,
                     metrics={},
                     reasoning="Each element in per_gene_stats must have 'gene' and 'auroc' fields",
-                    agent_answer=agent_answer
+                    agent_answer=agent_answer,
+                    score=0.0,
                 )
             gene_aurocs[stat["gene"]] = stat["auroc"]
 

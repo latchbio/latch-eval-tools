@@ -8,7 +8,10 @@ class GraderResult:
     metrics: dict
     reasoning: str
     agent_answer: dict | None
-    score: float = 1.0
+    # Defaults to 0.0 so any construction site that forgets to pass a score
+    # fails closed. Reward is computed from `score`, not `passed`, so a
+    # fail-open default here silently awards full credit for non-answers.
+    score: float = 0.0
     field_scores: dict = field(default_factory=dict)
 
 
