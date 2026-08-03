@@ -302,6 +302,62 @@ class TestHardFailVetoZeroesTheScore:
         assert clean.score == 1.0
 
 
+class TestAllOfPassRuleAllGatesScore:
+    """`pass_rule="all"` must pay no partial credit unless every child passes."""
+
+    CONFIG = {
+        "pass_rule": "all",
+        "children": [
+            {
+                "name": "c1",
+                "predicate": {"op": "equals", "arg": 1},
+                "role": "gate",
+                "answer_field": "a",
+            },
+            {
+                "name": "c2",
+                "predicate": {"op": "equals", "arg": 2},
+                "role": "gate",
+                "answer_field": "b",
+            },
+        ],
+    }
+
+    def test_partial_pass_scores_zero(self) -> None:
+        # One of two children passes: the mean-of-children would be 0.5, but a
+        # strict AND gate must pay nothing until the composite passes.
+        result = get_grader("all_of").evaluate_answer(
+            {"a": 1, "b": 999}, self.CONFIG
+        )
+        assert not result.passed
+        assert result.score == 0.0
+
+    def test_zero_pass_scores_zero(self) -> None:
+        result = get_grader("all_of").evaluate_answer(
+            {"a": 999, "b": 999}, self.CONFIG
+        )
+        assert not result.passed
+        assert result.score == 0.0
+
+    def test_all_pass_scores_full(self) -> None:
+        result = get_grader("all_of").evaluate_answer({"a": 1, "b": 2}, self.CONFIG)
+        assert result.passed
+        assert result.score == 1.0
+
+    def test_pass_rule_all_is_the_default(self) -> None:
+        config = {k: v for k, v in self.CONFIG.items() if k != "pass_rule"}
+        result = get_grader("all_of").evaluate_answer({"a": 1, "b": 999}, config)
+        assert not result.passed
+        assert result.score == 0.0
+
+    def test_score_threshold_still_pays_partial_credit(self) -> None:
+        # Other pass rules are unaffected: they keep their mean-of-children score.
+        config = {**self.CONFIG, "pass_rule": "score_threshold", "score_threshold": 5.0}
+        result = get_grader("all_of").evaluate_answer({"a": 1, "b": 999}, config)
+        assert not result.passed
+        assert result.score == 0.5
+
+
 class TestDictMatchOptionalKeys:
     CONFIG = {
         "answer_field": "obj",

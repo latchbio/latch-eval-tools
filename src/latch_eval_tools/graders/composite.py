@@ -260,8 +260,15 @@ class AllOfGrader(BinaryGrader):
 
         # Reward is read from `score`, so a veto has to zero the score and not
         # only flip `passed`.
+        #
+        # `pass_rule="all"` is a strict AND gate: unless every scoring child
+        # passes there is no partial credit. Paying the mean-of-children score
+        # here lets a partial (or zero-work) answer collect fractional reward
+        # even though the composite is failing, so gate the score on
+        # `scoring_ok` for this rule as well.
         no_scoring_children = scoring_count == 0
-        if no_scoring_children or veto:
+        strict_all_failing = pass_rule == "all" and not scoring_ok
+        if no_scoring_children or veto or strict_all_failing:
             score = 0.0
         else:
             score = _normalize_score(scoring_total_score, score_denominator)
