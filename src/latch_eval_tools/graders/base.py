@@ -2,6 +2,29 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+class _Missing:
+    """Sentinel for a graded field the agent never supplied.
+
+    Kept distinct from a supplied ``null``: an absent field is graded as a
+    failure without consulting the predicate, while an explicit ``null`` is a
+    real (wrong) answer and is still evaluated. Without the distinction a
+    missing field binds to ``None`` and silently satisfies predicates that are
+    vacuously true on it (``not``, ``every``, ``none``, a ``weighted_label``
+    with a positive default), paying full credit for a skipped answer.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "<missing>"
+
+    def __bool__(self) -> bool:
+        return False
+
+
+MISSING = _Missing()
+
+
 @dataclass
 class GraderResult:
     passed: bool

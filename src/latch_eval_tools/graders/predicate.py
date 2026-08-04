@@ -4,7 +4,7 @@ return bool; scalar ops (f1, jaccard, weighted_label) return float."""
 import re
 from typing import Any
 
-from .base import BinaryGrader, GraderResult
+from .base import MISSING, BinaryGrader, GraderResult
 
 BOOLEAN_OPS: set[str] = {
     "equals",
@@ -118,15 +118,18 @@ def evaluate_predicate(pred: Any, value: Any) -> bool | float:
             evaluate_predicate(pred["body"], v)
             for v in resolve_jsonpath(value, pred["path"])
         )
+    # `every` and `none` are vacuously true over an empty resolution, so an
+    # answer that supplies nothing to quantify over would otherwise satisfy them
+    # and collect full credit. Require something to have been graded.
     if op == "every":
-        return all(
-            evaluate_predicate(pred["body"], v)
-            for v in resolve_jsonpath(value, pred["path"])
+        matches = resolve_jsonpath(value, pred["path"])
+        return len(matches) > 0 and all(
+            evaluate_predicate(pred["body"], v) for v in matches
         )
     if op == "none":
-        return not any(
-            evaluate_predicate(pred["body"], v)
-            for v in resolve_jsonpath(value, pred["path"])
+        matches = resolve_jsonpath(value, pred["path"])
+        return len(matches) > 0 and not any(
+            evaluate_predicate(pred["body"], v) for v in matches
         )
 
     if op == "field":
@@ -201,18 +204,6 @@ class PredicateLeafGrader(BinaryGrader):
         if bind_error is not None:
             return _fail_grade(agent_answer, bind_error, name=name)
 
-        try:
-            raw_result = evaluate_predicate(predicate, value)
-        except (ValueError, KeyError, TypeError) as exc:
-            return _fail_grade(
-                agent_answer,
-                f"predicate evaluation failed: {exc}",
-                name=name,
-            )
-
-        op = predicate.get("op") if isinstance(predicate, dict) else None
-        is_scalar = op in SCALAR_OPS
-
         if role == "additive":
             return _fail_grade(
                 agent_answer,
@@ -226,6 +217,29 @@ class PredicateLeafGrader(BinaryGrader):
                 f"unknown role {role!r}; expected one of gate, hard_fail",
                 name=name,
             )
+
+        op = predicate.get("op") if isinstance(predicate, dict) else None
+        is_scalar = op in SCALAR_OPS
+
+        # A field the agent never supplied is a failure, not something to hand
+        # to the predicate. This applies to `hard_fail` too: at the root the
+        # leaf's own score is the reward, and an untriggered veto pays 1.0, so
+        # omitting the field would otherwise be worth exactly as much as
+        # genuinely avoiding the vetoed behaviour.
+        if value is MISSING:
+            return _missing_field_grade(
+                agent_answer, field_label, op=op, role=role, name=name
+            )
+
+        try:
+            raw_result = evaluate_predicate(predicate, value)
+        except (ValueError, KeyError, TypeError) as exc:
+            return _fail_grade(
+                agent_answer,
+                f"predicate evaluation failed: {exc}",
+                name=name,
+            )
+
         _, passed, score = _apply_role(role, raw_result, is_scalar, threshold)
 
         return GraderResult(
@@ -271,8 +285,8 @@ def _resolve_field(agent_answer: Any, answer_field: Any) -> tuple[Any, str, str 
         except ValueError as exc:
             return None, answer_field, f"invalid jsonpath in answer_field: {exc}"
     if not isinstance(agent_answer, dict):
-        return None, answer_field, None
-    return agent_answer.get(answer_field), answer_field, None
+        return MISSING, answer_field, None
+    return agent_answer.get(answer_field, MISSING), answer_field, None
 
 
 def _format_reasoning(
@@ -301,6 +315,33 @@ def _format_reasoning(
     return "\n".join(lines)
 
 
+def _missing_field_grade(
+    agent_answer: Any,
+    field_label: str,
+    *,
+    op: str | None,
+    role: str,
+    name: str | None = None,
+) -> GraderResult:
+    """Agent failure (not a grader error): the graded field was never supplied."""
+    label = f"'{name}'" if name else "(unnamed)"
+    return GraderResult(
+        passed=False,
+        metrics={
+            "op": op,
+            "role": role,
+            "answer_field": field_label,
+            "name": name,
+            "missing_answer_field": True,
+        },
+        reasoning=f"""Predicate-leaf {label} [op={op}, role={role}]: FAIL
+  x answer is missing the graded field: {field_label}""",
+        agent_answer=agent_answer if isinstance(agent_answer, dict) else None,
+        score=0.0,
+        field_scores={field_label: 0.0},
+    )
+
+
 def _fail_grade(
     agent_answer: Any, reason: str, *, name: str | None = None
 ) -> GraderResult:
@@ -319,4 +360,4 @@ def resolve_answer_field(value: Any, path: str) -> Any:
     matches = resolve_jsonpath(value, path)
     if "[*]" in path:
         return matches
-    return matches[0] if matches else None
+    return matches[0] if matches else MISSING
