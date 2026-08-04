@@ -2,6 +2,20 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+class _Missing:
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "<missing>"
+
+    def __bool__(self) -> bool:
+        return False
+
+
+MISSING = _Missing()
+
+
 @dataclass
 class GraderResult:
     passed: bool
