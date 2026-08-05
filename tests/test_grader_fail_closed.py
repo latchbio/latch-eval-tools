@@ -276,6 +276,13 @@ class TestHardFailVetoZeroesTheScore:
         assert clean.passed
         assert clean.score == 1.0
 
+        missing = get_grader("list_match").evaluate_answer(
+            {"rows": [{"id": "a", "good": 1}]}, config
+        )
+        assert not missing.passed
+        assert missing.score == 0.0
+        assert missing.metrics["hard_fail_triggered"] == ["a.bad"]
+
     def test_dict_match_hard_fail_vetoes(self) -> None:
         config = {
             "answer_field": "obj",
@@ -305,6 +312,13 @@ class TestHardFailVetoZeroesTheScore:
         )
         assert clean.passed
         assert clean.score == 1.0
+
+        missing = get_grader("dict_match").evaluate_answer(
+            {"obj": {"e": {"good": 1}}}, config
+        )
+        assert not missing.passed
+        assert missing.score == 0.0
+        assert missing.metrics["hard_fail_triggered"] == ["e.bad"]
 
 
 class TestAllOfPassRuleAllGatesScore:
@@ -552,9 +566,7 @@ class TestRootHardFailCannotBeCollectedByAbstaining:
         assert not result.passed
         assert result.score == 0.0
 
-    def test_a_composite_veto_is_not_tripped_by_absence(self) -> None:
-        """Inside a composite the scoring children already require an answer, so
-        absence must not fire the veto and zero an otherwise honest result."""
+    def test_a_composite_bound_hard_fail_field_is_required(self) -> None:
         config = {
             "children": [
                 {
@@ -572,9 +584,42 @@ class TestRootHardFailCannotBeCollectedByAbstaining:
             ]
         }
         result = get_grader("all_of").evaluate_answer({"x": 1}, config)
-        assert result.passed
-        assert result.score == 1.0
-        assert result.metrics["hard_fail_triggered"] == []
+        assert not result.passed
+        assert result.score == 0.0
+        assert result.metrics["hard_fail_triggered"] == ["veto"]
+
+    def test_a_composite_whole_answer_veto_can_be_optional(self) -> None:
+        config = {
+            "children": [
+                {
+                    "name": "scoring",
+                    "predicate": {"op": "equals", "arg": 1},
+                    "role": "gate",
+                    "answer_field": "x",
+                },
+                {
+                    "name": "optional-cheating-veto",
+                    "predicate": {
+                        "op": "field",
+                        "name": "cheated",
+                        "body": {"op": "equals", "arg": True},
+                    },
+                    "role": "hard_fail",
+                },
+            ]
+        }
+
+        clean = get_grader("all_of").evaluate_answer({"x": 1}, config)
+        assert clean.passed
+        assert clean.score == 1.0
+        assert clean.metrics["hard_fail_triggered"] == []
+
+        tripped = get_grader("all_of").evaluate_answer(
+            {"x": 1, "cheated": True}, config
+        )
+        assert not tripped.passed
+        assert tripped.score == 0.0
+        assert tripped.metrics["hard_fail_triggered"] == ["optional-cheating-veto"]
 
 
 class TestListMatchEmptyAnswerDoesNotPass:
