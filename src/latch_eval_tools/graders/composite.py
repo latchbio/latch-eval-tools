@@ -145,18 +145,15 @@ def _evaluate_leaf(leaf: dict, value: Any) -> tuple[str, bool, float, float, str
     score_max = _leaf_score_max(leaf)
 
     if value is MISSING:
-        # Skipping a graded field is scored exactly like getting it wrong. The
-        # predicate never sees the absence, so shapes that are vacuously true on
-        # a missing value cannot pay out for work that was never done.
+        # An explicitly bound answer field is part of the grading contract, so
+        # skipping it is scored exactly like getting it wrong. For a hard-fail
+        # leaf, ``passed=False`` triggers the veto and fails closed.
         #
-        # `hard_fail` is deliberately exempt: absence is not evidence of the
-        # vetoed behaviour, and a veto's own score is inert inside a composite
-        # (only scoring children feed the numerator), so it stays untriggered.
+        # A genuinely optional behavioural veto can instead omit
+        # ``answer_field`` and inspect the whole answer with a ``field``
+        # predicate. In that shape, an absent optional field evaluates to false
+        # and leaves the veto untriggered.
         info = {"op": op, "role": role, "missing_answer_field": True}
-        if kind == "hard_fail":
-            # 1.0 mirrors `_apply_role`'s untriggered verdict; the value is inert
-            # because only scoring leaves feed a composite's numerator.
-            return kind, True, 1.0, score_max, label, info
         return kind, False, 0.0, score_max, label, info
 
     try:
