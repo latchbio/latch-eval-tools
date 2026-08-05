@@ -708,3 +708,91 @@ class TestPartialAnswersScoreTheSameSkippedOrWrong:
         skipped = grader.evaluate_answer({"seq": [["a"]]}, config)
         wrong = grader.evaluate_answer({"seq": [["a"], ["x"], ["y"]]}, config)
         assert skipped.score == wrong.score == pytest.approx(1 / 3)
+
+
+class TestGateVoidsSiblingRewardInSameEntry:
+    """A failed ``gate`` (gates_all_pass) must zero the whole entry's/tuple's
+    score, not just flip ``passed``. Otherwise a sibling ``additive`` (or
+    even another ``gate``) leaf in the same entry keeps paying reward for an
+    entry the grader itself reports as failed -- the gate config never
+    actually reaches the reward.
+    """
+
+    def test_dict_match_object_entry(self) -> None:
+        config = {
+            "answer_field": "obj",
+            "ground_truth": {
+                "k1": {
+                    "fields": {
+                        "label": {
+                            "predicate": {"op": "equals", "arg": "yes"},
+                            "role": "gate",
+                        },
+                        "markers": {
+                            "predicate": {"op": "equals", "arg": "x"},
+                            "role": "additive",
+                        },
+                    },
+                    "per_entry_rule": "gates_all_pass",
+                }
+            },
+        }
+        grader = get_grader("dict_match")
+        result = grader.evaluate_answer(
+            {"obj": {"k1": {"label": "no", "markers": "x"}}}, config
+        )
+        assert not result.passed
+        assert result.score == 0.0
+
+    def test_dict_match_two_gates_in_one_entry(self) -> None:
+        config = {
+            "answer_field": "obj",
+            "ground_truth": {
+                "k1": {
+                    "fields": {
+                        "f1": {
+                            "predicate": {"op": "equals", "arg": "yes"},
+                            "role": "gate",
+                        },
+                        "f2": {
+                            "predicate": {"op": "equals", "arg": "yes"},
+                            "role": "gate",
+                        },
+                    },
+                    "per_entry_rule": "gates_all_pass",
+                }
+            },
+        }
+        grader = get_grader("dict_match")
+        result = grader.evaluate_answer(
+            {"obj": {"k1": {"f1": "yes", "f2": "no"}}}, config
+        )
+        assert not result.passed
+        assert result.score == 0.0
+
+    def test_list_match_tuple(self) -> None:
+        config = {
+            "answer_field": "items",
+            "match_key": "id",
+            "ground_truth": [
+                {
+                    "id": "a",
+                    "fields": {
+                        "label": {
+                            "predicate": {"op": "equals", "arg": "yes"},
+                            "role": "gate",
+                        },
+                        "markers": {
+                            "predicate": {"op": "equals", "arg": "x"},
+                            "role": "additive",
+                        },
+                    },
+                }
+            ],
+            "per_tuple_rule": "gates_all_pass",
+        }
+        grader = get_grader("list_match")
+        result = grader.evaluate_answer(
+            {"items": [{"id": "a", "label": "no", "markers": "x"}]}, config
+        )
+        assert result.score == 0.0

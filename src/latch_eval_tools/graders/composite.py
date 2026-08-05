@@ -404,12 +404,14 @@ class ListMatchGrader(BinaryGrader):
             per_field: dict = {}
             all_pass = True
             gate_pass = True
+            tuple_additive_score = 0.0
+            tuple_field_scores: dict = {}
             for fname, leaf in gt.get("fields", {}).items():
                 fvalue = tup.get(fname, MISSING)
                 kind, passed, score, _, _, _ = _evaluate_leaf(leaf, fvalue)
                 role = leaf.get("role") if isinstance(leaf, dict) else None
                 per_field[fname] = {"passed": passed, "score": score, "role": role}
-                field_scores[f"{key_val}.{fname}"] = score
+                tuple_field_scores[fname] = score
                 if kind == "hard_fail":
                     if not passed:
                         hard_fail_triggered.append(f"{key_val}.{fname}")
@@ -419,9 +421,22 @@ class ListMatchGrader(BinaryGrader):
                 if not passed:
                     all_pass = False
                 if role == "additive":
-                    additive_score += score
+                    tuple_additive_score += score
 
             tuple_passed = gate_pass if per_tuple_rule == "gates_all_pass" else all_pass
+            # A failed gate must void the tuple's additive reward too, not just
+            # flip `tuple_passed`: additive fields describe how well the gated
+            # condition was met, so they cannot pay out once the gate itself
+            # has failed (mirrors the veto-zeroes-score rule used elsewhere).
+            if per_tuple_rule == "gates_all_pass" and not gate_pass:
+                tuple_additive_score = 0.0
+                for fname, info in per_field.items():
+                    if info["role"] == "additive":
+                        tuple_field_scores[fname] = 0.0
+            additive_score += tuple_additive_score
+            field_scores.update(
+                {f"{key_val}.{fname}": s for fname, s in tuple_field_scores.items()}
+            )
             if tuple_passed:
                 tuple_pass_count += 1
             tuple_summaries.append(
@@ -546,6 +561,8 @@ class DictMatchGrader(BinaryGrader):
                 per_field: dict = {}
                 ok = True
                 gate_ok = True
+                entry_raw_score = 0.0
+                entry_field_scores: dict = {}
                 for fname, leaf in gt_entry["fields"].items():
                     fvalue = (
                         agent_val.get(fname, MISSING)
@@ -555,9 +572,9 @@ class DictMatchGrader(BinaryGrader):
                     kind, passed, score, _, _, _ = _evaluate_leaf(leaf, fvalue)
                     role = leaf.get("role") if isinstance(leaf, dict) else None
                     per_field[fname] = {"passed": passed, "score": score, "role": role}
-                    field_scores[f"{gt_key}.{fname}"] = score
+                    entry_field_scores[fname] = score
                     if kind != "hard_fail":
-                        raw_score += score
+                        entry_raw_score += score
                     elif not passed:
                         hard_fail_triggered.append(f"{gt_key}.{fname}")
                     if not passed:
@@ -565,6 +582,21 @@ class DictMatchGrader(BinaryGrader):
                     if role == "gate" and not passed:
                         gate_ok = False
                 entry_passed = gate_ok if per_entry_rule == "gates_all_pass" else ok
+                # A failed gate must void the entry's reward too, not just flip
+                # `entry_passed`: the other (e.g. additive) leaves describe how
+                # well the gated condition was met, so they cannot pay out once
+                # the gate itself has failed (mirrors the veto-zeroes-score rule
+                # used elsewhere -- a gate config must reach the reward).
+                if per_entry_rule == "gates_all_pass" and not gate_ok:
+                    entry_raw_score = 0.0
+                    entry_field_scores = {
+                        fname: (0.0 if per_field[fname]["role"] != "hard_fail" else s)
+                        for fname, s in entry_field_scores.items()
+                    }
+                raw_score += entry_raw_score
+                field_scores.update(
+                    {f"{gt_key}.{fname}": s for fname, s in entry_field_scores.items()}
+                )
                 entry_results.append(
                     {
                         "key": gt_key,
