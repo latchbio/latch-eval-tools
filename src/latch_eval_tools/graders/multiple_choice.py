@@ -4,9 +4,9 @@ from .base import BinaryGrader, GraderResult
 class MultipleChoiceGrader(BinaryGrader):
     def evaluate_answer(self, agent_answer: dict, config: dict) -> GraderResult:
         if "correct_answers" in config:
-            correct_answers = [a.strip().upper() for a in config["correct_answers"]]
+            correct_answers = [str(a).strip().upper() for a in config["correct_answers"]]
         else:
-            correct_answers = [config.get("correct_answer", "").strip().upper()]
+            correct_answers = [str(config.get("correct_answer", "")).strip().upper()]
 
         if "answer" not in agent_answer:
             return GraderResult(
