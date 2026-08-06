@@ -1,6 +1,6 @@
 import math
 
-from .base import BinaryGrader, GraderResult
+from .base import BinaryGrader, GraderResult, configuration_error_result
 
 
 def _normalize_choice(value: object) -> str | None:
@@ -53,6 +53,10 @@ def _normalize_correct_answers(config: dict) -> tuple[list[str] | None, str | No
 
 class MultipleChoiceGrader(BinaryGrader):
     def evaluate_answer(self, agent_answer: dict, config: dict) -> GraderResult:
+        if not isinstance(config, dict):
+            return configuration_error_result(
+                agent_answer, "Multiple Choice", "config must be an object"
+            )
         correct_answers, config_error = _normalize_correct_answers(config)
         if correct_answers is None:
             return GraderResult(
@@ -60,6 +64,15 @@ class MultipleChoiceGrader(BinaryGrader):
                 metrics={"configuration_error": config_error},
                 reasoning=f"Multiple Choice: CONFIGURATION ERROR\n\n  x {config_error}",
                 agent_answer=agent_answer,
+                score=0.0,
+            )
+
+        if not isinstance(agent_answer, dict):
+            return GraderResult(
+                passed=False,
+                metrics={},
+                reasoning="Multiple Choice: FAIL\n\n  x Agent answer must be an object",
+                agent_answer=None,
                 score=0.0,
             )
 

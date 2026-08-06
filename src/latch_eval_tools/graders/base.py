@@ -56,6 +56,28 @@ class GraderResult:
         return normalize_score(float(self.score), float(self.score_max))
 
 
+def configuration_error_result(
+    agent_answer: object,
+    grader_name: str,
+    reason: str,
+) -> GraderResult:
+    """Return a fail-closed result for an invalid static grader specification.
+
+    Configuration failures are distinct from malformed or missing agent output:
+    callers use the ``configuration_error`` metric to avoid treating a broken
+    grader as evidence that an agent answered incorrectly.
+    """
+
+    return GraderResult(
+        passed=False,
+        metrics={"configuration_error": reason},
+        reasoning=f"{grader_name}: CONFIGURATION ERROR\n\n  x {reason}",
+        agent_answer=agent_answer if isinstance(agent_answer, dict) else None,
+        score=0.0,
+        field_scores={},
+    )
+
+
 def get_nested_value(obj: dict, key: str) -> tuple[Any, bool]:
     if "." not in key:
         return obj.get(key), key in obj

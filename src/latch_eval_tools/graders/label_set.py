@@ -1,3 +1,5 @@
+import math
+
 from .base import BinaryGrader, GraderResult
 from .list_contract import check_list_cardinality
 
@@ -15,25 +17,31 @@ def _normalize_labels(
                 f"{label}[{index}] must be a string or number, "
                 f"got {type(item).__name__}"
             )
+        if isinstance(item, float) and not math.isfinite(item):
+            return None, f"{label}[{index}] must be finite, got {item!r}"
         normalized.append(str(item))
     return normalized, None
 
 
 def _failed_result(
-    agent_answer: dict, reasoning: str, *, configuration_error: bool = False
+    agent_answer: object, reasoning: str, *, configuration_error: bool = False
 ) -> GraderResult:
     metrics = {"configuration_error": reasoning} if configuration_error else {}
     return GraderResult(
         passed=False,
         metrics=metrics,
         reasoning=reasoning,
-        agent_answer=agent_answer,
+        agent_answer=agent_answer if isinstance(agent_answer, dict) else None,
         score=0.0,
     )
 
 
 class LabelSetJaccardGrader(BinaryGrader):
     def evaluate_answer(self, agent_answer: dict, config: dict) -> GraderResult:
+        if not isinstance(config, dict):
+            return _failed_result(
+                agent_answer, "config must be an object", configuration_error=True
+            )
         ground_truth_labels, ground_truth_error = _normalize_labels(
             config.get("ground_truth_labels"), label="ground_truth_labels"
         )
@@ -41,6 +49,12 @@ class LabelSetJaccardGrader(BinaryGrader):
             return _failed_result(
                 agent_answer,
                 ground_truth_error or "Invalid ground_truth_labels",
+                configuration_error=True,
+            )
+        if len(ground_truth_labels) == 0:
+            return _failed_result(
+                agent_answer,
+                "ground_truth_labels must be a non-empty list",
                 configuration_error=True,
             )
 
@@ -71,6 +85,19 @@ class LabelSetJaccardGrader(BinaryGrader):
                 configuration_error=True,
             )
 
+        configured_cardinality = check_list_cardinality(
+            [], config.get("expected_count")
+        )
+        if configured_cardinality.configuration_error is not None:
+            return _failed_result(
+                agent_answer,
+                configured_cardinality.configuration_error,
+                configuration_error=True,
+            )
+
+        if not isinstance(agent_answer, dict):
+            return _failed_result(agent_answer, "agent answer must be an object")
+
         if answer_field not in agent_answer:
             return _failed_result(
                 agent_answer, f"Agent answer missing required field: {answer_field}"
@@ -85,14 +112,8 @@ class LabelSetJaccardGrader(BinaryGrader):
             )
 
         cardinality = check_list_cardinality(
-            predicted_labels, config.get("expected_count")
+            predicted_labels, configured_cardinality.expected_count
         )
-        if cardinality.configuration_error is not None:
-            return _failed_result(
-                agent_answer,
-                cardinality.configuration_error,
-                configuration_error=True,
-            )
 
         ground_truth_set = set(ground_truth_labels)
         predicted_set = set(predicted_labels)

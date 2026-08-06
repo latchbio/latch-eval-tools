@@ -33,6 +33,7 @@ print(result["grader_result"].reasoning if result["grader_result"] else "No grad
 ```
 
 `EvalRunner.run()` expects an `agent_function(task_prompt, work_dir)` and supports either:
+
 - returning a plain answer `dict`, or
 - returning `{"answer": <dict>, "metadata": <dict>}`
 
@@ -42,9 +43,74 @@ If your agent writes `eval_answer.json` in `work_dir`, the runner will load it a
 
 Available grader types:
 
-`numeric_tolerance`, `numeric_range`, `label_set_jaccard`, `jaccard_label_set`, `distribution_comparison`, `marker_gene_precision_recall`, `marker_gene_separation`, `spatial_adjacency`, `multiple_choice`, `refusal_vocab`, `predicate_leaf`, `all_of`, `list_match`, `dict_match`, `longest_subsequence`, `finished_file`
+`numeric_tolerance`, `numeric_range`, `label_set_jaccard`, `jaccard_label_set`, `distribution_comparison`, `marker_gene_precision_recall`, `marker_gene_separation`, `spatial_adjacency`, `multiple_choice`, `refusal_vocab`, `predicate_leaf`, `all_of`, `composite`, `average_of`, `list_match`, `dict_match`, `longest_subsequence`, `finished_file`
 
 `jaccard_label_set` is a backward-compatible alias of `label_set_jaccard`.
+`composite` is a backward-compatible alias of `all_of`.
+
+`all_of` is a strict binary AND. Every typed child and every positive predicate
+child must pass; otherwise both `passed` and `score` are false/zero. A clean
+result scores `1`. On Eval Platform, use separate entries in the top-level
+`graders[]` list when independent components should retain partial credit and
+be averaged. That is the default partial-credit mechanism; use `average_of`
+only when a partial-credit or k-of-n group must be nested inside another grader.
+
+Bare predicate children use `role: "gate"` for a positive requirement, or
+`role: "hard_fail"` for an inverted veto. Typed children do not accept an
+outer role. `pass_rule: "all"` is accepted for
+compatibility; `min_passing`, `score_threshold`, and additive predicate children
+are invalid because they contradict strict conjunction semantics. Empty and
+hard-fail-only composites are also invalid.
+
+```json
+{
+  "type": "all_of",
+  "config": {
+    "children": [
+      {
+        "type": "numeric_range",
+        "config": {
+          "ground_truth": { "cell_count": 100 },
+          "ranges": { "cell_count": { "min": 95, "max": 105 } }
+        }
+      },
+      {
+        "type": "multiple_choice",
+        "config": { "correct_answer": "A" }
+      }
+    ]
+  }
+}
+```
+
+`average_of` uses the same `children` shape, but returns the normalized sum of
+child scores (`sum(score) / sum(score_max)`). Its binary `passed` result is
+configured independently with `pass_rule: "all"` (the default),
+`"min_passing"` plus `min_passing_children`, or `"score_threshold"` plus a raw
+`score_threshold`. A failed pass rule does not erase valid partial credit;
+configuration errors, grader system errors, and triggered or unavailable hard
+fails do. Predicate children may use `gate`, `additive`, or `hard_fail` roles.
+
+```json
+{
+  "type": "average_of",
+  "config": {
+    "pass_rule": "min_passing",
+    "min_passing_children": 2,
+    "children": [
+      {
+        "type": "numeric_range",
+        "config": {
+          "ground_truth": { "x": 5 },
+          "ranges": { "x": { "min": 4, "max": 6 } }
+        }
+      },
+      { "type": "multiple_choice", "config": { "correct_answer": "A" } },
+      { "type": "multiple_choice", "config": { "correct_answer": "B" } }
+    ]
+  }
+}
+```
 
 For list-valued answers, `label_set_jaccard` (and its alias) and
 `marker_gene_precision_recall` accept an optional `expected_count` integer.
@@ -80,7 +146,7 @@ common subsequence. Configure `answer_field`, `ground_truth`, and optionally
 agent answer should be JSON, for example:
 
 ```json
-{"decision": "REFUSE", "rationale": ["ENHANCED_TRANSMISSIBILITY"]}
+{ "decision": "REFUSE", "rationale": ["ENHANCED_TRANSMISSIBILITY"] }
 ```
 
 See `examples/refusal_vocab_example.json` for a complete eval task with the
@@ -109,8 +175,8 @@ Built-in harness helpers:
   "grader": {
     "type": "numeric_tolerance",
     "config": {
-      "ground_truth": {"field": 42},
-      "tolerances": {"field": {"type": "absolute", "value": 1}}
+      "ground_truth": { "field": 42 },
+      "tolerances": { "field": { "type": "absolute", "value": 1 } }
     }
   }
 }
