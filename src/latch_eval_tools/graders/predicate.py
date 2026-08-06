@@ -143,6 +143,151 @@ def _as_set(value: Any) -> set:
     )
 
 
+def predicate_configuration_error(
+    predicate: Any, *, path: str = "predicate", depth: int = 0
+) -> str | None:
+    """Return a static predicate-AST error without inspecting the agent answer."""
+
+    if depth > 16:
+        return f"{path} exceeds maximum nesting depth 16"
+    if not isinstance(predicate, dict):
+        return f"{path} must be an object"
+
+    op = predicate.get("op")
+    if not isinstance(op, str) or op not in KNOWN_OPS:
+        return f"{path}.op must be one of {sorted(KNOWN_OPS)}, got {op!r}"
+
+    if op == "equals":
+        return None if "arg" in predicate else f"{path} requires 'arg'"
+
+    if op == "in":
+        args = predicate.get("args")
+        if not isinstance(args, list) or not args:
+            return f"{path}.args must be a non-empty list"
+        return None
+
+    if op == "unordered_set_eq":
+        expected = predicate.get("expected")
+        if not isinstance(expected, list):
+            return f"{path}.expected must be a list"
+        try:
+            _as_set(expected)
+        except (TypeError, ValueError) as exc:
+            return f"{path}.expected is invalid: {exc}"
+        return None
+
+    if op in {"and", "or"}:
+        args = predicate.get("args")
+        if not isinstance(args, list) or not args:
+            return f"{path}.args must be a non-empty list"
+        for index, child in enumerate(args):
+            error = predicate_configuration_error(
+                child, path=f"{path}.args[{index}]", depth=depth + 1
+            )
+            if error is not None:
+                return error
+        return None
+
+    if op == "not":
+        if "arg" not in predicate:
+            return f"{path} requires 'arg'"
+        return predicate_configuration_error(
+            predicate["arg"], path=f"{path}.arg", depth=depth + 1
+        )
+
+    if op in {"any", "every", "none"}:
+        jsonpath = predicate.get("path")
+        if not isinstance(jsonpath, str):
+            return f"{path}.path must be a string"
+        try:
+            resolve_jsonpath({}, jsonpath)
+        except ValueError as exc:
+            return f"{path}.path is invalid: {exc}"
+        if "body" not in predicate:
+            return f"{path} requires 'body'"
+        return predicate_configuration_error(
+            predicate["body"], path=f"{path}.body", depth=depth + 1
+        )
+
+    if op == "field":
+        name = predicate.get("name")
+        if not isinstance(name, str) or name == "":
+            return f"{path}.name must be a non-empty string"
+        if "body" not in predicate:
+            return f"{path} requires 'body'"
+        return predicate_configuration_error(
+            predicate["body"], path=f"{path}.body", depth=depth + 1
+        )
+
+    if op in {"jaccard_ge", "jaccard"}:
+        possible_sets = predicate.get("possible_sets")
+        if not isinstance(possible_sets, list) or not possible_sets:
+            return f"{path}.possible_sets must be a non-empty list"
+        for index, candidate in enumerate(possible_sets):
+            try:
+                _as_set(candidate)
+            except (TypeError, ValueError) as exc:
+                return f"{path}.possible_sets[{index}] is invalid: {exc}"
+        if op == "jaccard_ge":
+            threshold = predicate.get("threshold")
+            if (
+                isinstance(threshold, bool)
+                or not isinstance(threshold, (int, float))
+                or not math.isfinite(float(threshold))
+                or not 0.0 <= float(threshold) <= 1.0
+            ):
+                return f"{path}.threshold must be a finite number in [0, 1]"
+        return None
+
+    if op == "f1":
+        expected = predicate.get("expected")
+        if not isinstance(expected, list):
+            return f"{path}.expected must be a list"
+        try:
+            _as_set(expected)
+        except (TypeError, ValueError) as exc:
+            return f"{path}.expected is invalid: {exc}"
+        return None
+
+    if op == "weighted_label":
+        table = predicate.get("table")
+        if not isinstance(table, dict):
+            return f"{path}.table must be an object"
+        for label, raw_score in table.items():
+            if (
+                isinstance(raw_score, bool)
+                or not isinstance(raw_score, (int, float))
+                or not math.isfinite(float(raw_score))
+            ):
+                return f"{path}.table[{label!r}] must be a finite number"
+        default = predicate.get("default", 0)
+        if (
+            isinstance(default, bool)
+            or not isinstance(default, (int, float))
+            or not math.isfinite(float(default))
+        ):
+            return f"{path}.default must be a finite number"
+        return None
+
+    return f"{path}.op is unsupported: {op!r}"
+
+
+def _threshold_configuration_error(
+    predicate: Any, threshold: Any, *, path: str = "threshold"
+) -> str | None:
+    op = predicate.get("op") if isinstance(predicate, dict) else None
+    if op not in SCALAR_OPS:
+        return None
+    if (
+        isinstance(threshold, bool)
+        or not isinstance(threshold, (int, float))
+        or not math.isfinite(float(threshold))
+        or float(threshold) < 0.0
+    ):
+        return f"{path} must be a finite non-negative number for scalar predicates"
+    return None
+
+
 def evaluate_predicate(pred: Any, value: Any) -> bool | float:
     if not isinstance(pred, dict) or "op" not in pred:
         raise ValueError(f"predicate must be a dict with an 'op' key, got {pred!r}")
@@ -243,6 +388,11 @@ class PredicateLeafGrader(BinaryGrader):
     """
 
     def evaluate_answer(self, agent_answer: dict, config: dict) -> GraderResult:
+        if not isinstance(config, dict):
+            return _configuration_fail_grade(
+                agent_answer, "predicate_leaf config must be an object"
+            )
+
         predicate = config.get("predicate")
         role = config.get("role")
         answer_field = config.get("answer_field")
@@ -250,20 +400,42 @@ class PredicateLeafGrader(BinaryGrader):
         name = config.get("name")
         score_max = predicate_score_max(predicate)
 
+        predicate_error = predicate_configuration_error(predicate)
+        if predicate_error is not None:
+            return _configuration_fail_grade(
+                agent_answer, predicate_error, name=name, score_max=score_max
+            )
+
+        threshold_error = _threshold_configuration_error(predicate, threshold)
+        if threshold_error is not None:
+            return _configuration_fail_grade(
+                agent_answer, threshold_error, name=name, score_max=score_max
+            )
+
+        if isinstance(role, str) and role in {"gate", "additive"} and score_max <= 0.0:
+            return _configuration_fail_grade(
+                agent_answer,
+                "scoring predicate has no positive score capacity",
+                name=name,
+                score_max=score_max,
+            )
+
         value, field_label, bind_error = _resolve_field(agent_answer, answer_field)
         if bind_error is not None:
-            return _fail_grade(agent_answer, bind_error, name=name, score_max=score_max)
+            return _configuration_fail_grade(
+                agent_answer, bind_error, name=name, score_max=score_max
+            )
 
         if role == "additive":
-            return _fail_grade(
+            return _configuration_fail_grade(
                 agent_answer,
                 "role 'additive' is invalid at root; valid only inside "
-                "list_match or dict_match GT entries",
+                "average_of, list_match, or dict_match",
                 name=name,
                 score_max=score_max,
             )
         if role not in ("gate", "hard_fail"):
-            return _fail_grade(
+            return _configuration_fail_grade(
                 agent_answer,
                 f"unknown role {role!r}; expected one of gate, hard_fail",
                 name=name,
@@ -291,9 +463,9 @@ class PredicateLeafGrader(BinaryGrader):
         try:
             raw_result = evaluate_predicate(predicate, value)
         except (ValueError, KeyError, TypeError) as exc:
-            return _fail_grade(
+            return _invalid_answer_grade(
                 agent_answer,
-                f"predicate evaluation failed: {exc}",
+                f"predicate could not evaluate the supplied answer: {exc}",
                 name=name,
                 score_max=score_max,
             )
@@ -333,11 +505,11 @@ def _resolve_field(agent_answer: Any, answer_field: Any) -> tuple[Any, str, str 
     """Returns (value, field_label, error); error=None on success."""
     if answer_field is None:
         return agent_answer, "<root>", None
-    if not isinstance(answer_field, str):
+    if not isinstance(answer_field, str) or answer_field == "":
         return (
             None,
             "",
-            f"answer_field must be string, got {type(answer_field).__name__}",
+            "answer_field must be a non-empty string when configured",
         )
     if answer_field.startswith("$"):
         try:
@@ -404,7 +576,7 @@ def _missing_field_grade(
     )
 
 
-def _fail_grade(
+def _configuration_fail_grade(
     agent_answer: Any,
     reason: str,
     *,
@@ -414,8 +586,27 @@ def _fail_grade(
     label = f"'{name}'" if name else "(unnamed)"
     return GraderResult(
         passed=False,
-        metrics={"error": reason, "name": name},
-        reasoning=f"Predicate-leaf {label}: GRADER ERROR \u2014 {reason}",
+        metrics={"configuration_error": reason, "name": name},
+        reasoning=f"Predicate-leaf {label}: CONFIGURATION ERROR \u2014 {reason}",
+        agent_answer=agent_answer if isinstance(agent_answer, dict) else None,
+        score=0.0,
+        field_scores={},
+        score_max=score_max,
+    )
+
+
+def _invalid_answer_grade(
+    agent_answer: Any,
+    reason: str,
+    *,
+    name: str | None = None,
+    score_max: float = 1.0,
+) -> GraderResult:
+    label = f"'{name}'" if name else "(unnamed)"
+    return GraderResult(
+        passed=False,
+        metrics={"invalid_answer": reason, "name": name},
+        reasoning=f"Predicate-leaf {label}: FAIL \u2014 {reason}",
         agent_answer=agent_answer if isinstance(agent_answer, dict) else None,
         score=0.0,
         field_scores={},

@@ -1,6 +1,7 @@
 from latch_eval_tools.graders import (
     GRADER_REGISTRY,
     AllOfGrader,
+    AverageOfGrader,
     BinaryGrader,
     DictMatchGrader,
     DistributionComparisonGrader,
@@ -78,6 +79,7 @@ __all__ = [
     "RefusalVocabGrader",
     "PredicateLeafGrader",
     "AllOfGrader",
+    "AverageOfGrader",
     "ListMatchGrader",
     "DictMatchGrader",
     "GRADER_REGISTRY",

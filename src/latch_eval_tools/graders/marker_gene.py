@@ -1,33 +1,131 @@
-from .base import BinaryGrader, GraderResult
+import math
+
+from .base import BinaryGrader, GraderResult, configuration_error_result
 from .list_contract import ListCardinality, check_list_cardinality
+
+
+def _is_finite_number(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    )
+
+
+def _validate_fraction(value: object, location: str) -> str | None:
+    if not _is_finite_number(value) or not 0.0 <= float(value) <= 1.0:
+        return f"{location} must be a finite number in [0, 1]"
+    return None
+
+
+def _validate_gene_list(value: object, location: str) -> str | None:
+    if not isinstance(value, list) or len(value) == 0:
+        return f"{location} must be a non-empty list"
+    if any(not isinstance(gene, str) or gene.strip() == "" for gene in value):
+        return f"{location} must contain only non-empty strings"
+    return None
+
+
+def _answer_failure(agent_answer: object, reason: str) -> GraderResult:
+    return GraderResult(
+        passed=False,
+        metrics={},
+        reasoning=reason,
+        agent_answer=agent_answer if isinstance(agent_answer, dict) else None,
+        score=0.0,
+    )
 
 
 class MarkerGenePrecisionRecallGrader(BinaryGrader):
     def evaluate_answer(self, agent_answer: dict, config: dict) -> GraderResult:
+        if not isinstance(config, dict):
+            return configuration_error_result(
+                agent_answer,
+                "Marker Gene Precision/Recall",
+                "config must be an object",
+            )
         canonical_markers = config.get(
-            "canonical_markers", config.get("ground_truth_labels", [])
+            "canonical_markers", config.get("ground_truth_labels")
         )
+        if isinstance(canonical_markers, list):
+            canonical_error = _validate_gene_list(
+                canonical_markers, "canonical_markers"
+            )
+            if canonical_error is not None:
+                return configuration_error_result(
+                    agent_answer, "Marker Gene Precision/Recall", canonical_error
+                )
+        elif isinstance(canonical_markers, dict):
+            if len(canonical_markers) == 0:
+                return configuration_error_result(
+                    agent_answer,
+                    "Marker Gene Precision/Recall",
+                    "canonical_markers must be a non-empty object",
+                )
+            for celltype, canonical_genes in canonical_markers.items():
+                if not isinstance(celltype, str) or celltype.strip() == "":
+                    return configuration_error_result(
+                        agent_answer,
+                        "Marker Gene Precision/Recall",
+                        "canonical_markers cell-type names must be non-empty strings",
+                    )
+                canonical_error = _validate_gene_list(
+                    canonical_genes, f"canonical_markers[{celltype!r}]"
+                )
+                if canonical_error is not None:
+                    return configuration_error_result(
+                        agent_answer,
+                        "Marker Gene Precision/Recall",
+                        canonical_error,
+                    )
+        else:
+            return configuration_error_result(
+                agent_answer,
+                "Marker Gene Precision/Recall",
+                "canonical_markers must be a non-empty list or object",
+            )
+
         scoring = config.get("scoring", {})
         if not isinstance(scoring, dict):
-            return GraderResult(
-                passed=False,
-                metrics={"configuration_error": "scoring must be an object"},
-                reasoning=f"scoring must be an object, got {type(scoring).__name__}",
-                agent_answer=agent_answer,
-                score=0.0,
+            return configuration_error_result(
+                agent_answer,
+                "Marker Gene Precision/Recall",
+                f"scoring must be an object, got {type(scoring).__name__}",
             )
         thresholds = scoring.get("pass_thresholds", {})
         if not isinstance(thresholds, dict):
-            return GraderResult(
-                passed=False,
-                metrics={"configuration_error": "pass_thresholds must be an object"},
-                reasoning=(
-                    "pass_thresholds must be an object, got "
-                    f"{type(thresholds).__name__}"
-                ),
-                agent_answer=agent_answer,
-                score=0.0,
+            return configuration_error_result(
+                agent_answer,
+                "Marker Gene Precision/Recall",
+                f"pass_thresholds must be an object, got {type(thresholds).__name__}",
             )
+        for key in ("precision_at_k", "recall_at_k", "min_recall_per_celltype"):
+            if key not in thresholds:
+                continue
+            threshold_error = _validate_fraction(
+                thresholds[key], f"scoring.pass_thresholds.{key}"
+            )
+            if threshold_error is not None:
+                return configuration_error_result(
+                    agent_answer,
+                    "Marker Gene Precision/Recall",
+                    threshold_error,
+                )
+        if "min_celltypes_passing" in thresholds:
+            minimum = thresholds["min_celltypes_passing"]
+            if (
+                not isinstance(minimum, int)
+                or isinstance(minimum, bool)
+                or minimum < 1
+                or not isinstance(canonical_markers, dict)
+                or minimum > len(canonical_markers)
+            ):
+                return configuration_error_result(
+                    agent_answer,
+                    "Marker Gene Precision/Recall",
+                    "scoring.pass_thresholds.min_celltypes_passing must be an "
+                    "integer between 1 and the configured cell-type count",
+                )
 
         configured_cardinality = check_list_cardinality(
             [], config.get("expected_count")
@@ -46,15 +144,14 @@ class MarkerGenePrecisionRecallGrader(BinaryGrader):
         answer_field = config.get("answer_field", "top_marker_genes")
 
         if not isinstance(answer_field, str) or answer_field.strip() == "":
-            return GraderResult(
-                passed=False,
-                metrics={
-                    "configuration_error": "answer_field must be a non-empty string"
-                },
-                reasoning=f"answer_field must be a non-empty string, got {answer_field!r}",
-                agent_answer=agent_answer,
-                score=0.0,
+            return configuration_error_result(
+                agent_answer,
+                "Marker Gene Precision/Recall",
+                f"answer_field must be a non-empty string, got {answer_field!r}",
             )
+
+        if not isinstance(agent_answer, dict):
+            return _answer_failure(agent_answer, "agent answer must be an object")
 
         if answer_field not in agent_answer:
             return GraderResult(
@@ -81,21 +178,22 @@ class MarkerGenePrecisionRecallGrader(BinaryGrader):
             canonical_markers = canonical_markers[answer_field]
 
         if not isinstance(predicted, list):
-            return GraderResult(
-                passed=False,
-                metrics={},
-                reasoning=f"{answer_field} must be a list, got {type(predicted).__name__}",
-                agent_answer=agent_answer,
-                score=0.0,
+            expected_shape = "object" if isinstance(canonical_markers, dict) else "list"
+            return _answer_failure(
+                agent_answer,
+                f"{answer_field} must be a {expected_shape}, got "
+                f"{type(predicted).__name__}",
             )
 
         if not isinstance(canonical_markers, list):
-            return GraderResult(
-                passed=False,
-                metrics={},
-                reasoning=f"canonical_markers must be a list for flat evaluation, got {type(canonical_markers).__name__}",
-                agent_answer=agent_answer,
-                score=0.0,
+            return _answer_failure(
+                agent_answer,
+                f"{answer_field} must be an object for per-cell-type evaluation",
+            )
+
+        if any(not isinstance(gene, str) or gene.strip() == "" for gene in predicted):
+            return _answer_failure(
+                agent_answer, f"{answer_field} must contain only non-empty strings"
             )
 
         return self._evaluate_flat_list(
@@ -116,44 +214,6 @@ class MarkerGenePrecisionRecallGrader(BinaryGrader):
         agent_answer: dict,
         expected_count: int | None,
     ) -> GraderResult:
-        if len(canonical_markers) == 0:
-            configuration_error = (
-                "canonical_markers must contain at least one cell type for "
-                "per-cell-type evaluation"
-            )
-            return GraderResult(
-                passed=False,
-                metrics={"configuration_error": configuration_error},
-                reasoning=configuration_error,
-                agent_answer=agent_answer,
-                score=0.0,
-            )
-
-        for celltype, canonical_genes in canonical_markers.items():
-            if not isinstance(canonical_genes, list):
-                configuration_error = (
-                    f"canonical_markers[{celltype!r}] must be a non-empty list, "
-                    f"got {type(canonical_genes).__name__}"
-                )
-                return GraderResult(
-                    passed=False,
-                    metrics={"configuration_error": configuration_error},
-                    reasoning=configuration_error,
-                    agent_answer=agent_answer,
-                    score=0.0,
-                )
-            if len(canonical_genes) == 0:
-                configuration_error = (
-                    f"canonical_markers[{celltype!r}] must be a non-empty list"
-                )
-                return GraderResult(
-                    passed=False,
-                    metrics={"configuration_error": configuration_error},
-                    reasoning=configuration_error,
-                    agent_answer=agent_answer,
-                    score=0.0,
-                )
-
         min_recall = thresholds.get(
             "min_recall_per_celltype", thresholds.get("recall_at_k", 0.50)
         )
@@ -172,6 +232,17 @@ class MarkerGenePrecisionRecallGrader(BinaryGrader):
                     "pass": False,
                     "recall": 0.0,
                     "error": f"Expected list, got {type(predicted_genes).__name__}",
+                }
+                continue
+
+            if any(
+                not isinstance(gene, str) or gene.strip() == ""
+                for gene in predicted_genes
+            ):
+                celltype_results[celltype] = {
+                    "pass": False,
+                    "recall": 0.0,
+                    "error": "Expected only non-empty string genes",
                 }
                 continue
 
@@ -425,11 +496,43 @@ class MarkerGenePrecisionRecallGrader(BinaryGrader):
 
 class MarkerGeneSeparationGrader(BinaryGrader):
     def evaluate_answer(self, agent_answer: dict, config: dict) -> GraderResult:
+        if not isinstance(config, dict):
+            return configuration_error_result(
+                agent_answer,
+                "Marker Gene Separation",
+                "config must be an object",
+            )
         scoring = config.get("scoring", {})
+        if not isinstance(scoring, dict):
+            return configuration_error_result(
+                agent_answer,
+                "Marker Gene Separation",
+                "scoring must be an object",
+            )
         thresholds = scoring.get("pass_thresholds", {})
+        if not isinstance(thresholds, dict):
+            return configuration_error_result(
+                agent_answer,
+                "Marker Gene Separation",
+                "scoring.pass_thresholds must be an object",
+            )
+        for key in ("mean_auroc", "fraction_high", "per_gene_cutoff"):
+            if key not in thresholds:
+                continue
+            threshold_error = _validate_fraction(
+                thresholds[key], f"scoring.pass_thresholds.{key}"
+            )
+            if threshold_error is not None:
+                return configuration_error_result(
+                    agent_answer, "Marker Gene Separation", threshold_error
+                )
+
         mean_auroc_threshold = thresholds.get("mean_auroc", 0.85)
         fraction_high_threshold = thresholds.get("fraction_high", 0.70)
         per_gene_cutoff = thresholds.get("per_gene_cutoff", 0.80)
+
+        if not isinstance(agent_answer, dict):
+            return _answer_failure(agent_answer, "agent answer must be an object")
 
         if "per_gene_stats" not in agent_answer:
             return GraderResult(
@@ -471,6 +574,14 @@ class MarkerGeneSeparationGrader(BinaryGrader):
                 score=0.0,
             )
 
+        if (
+            not _is_finite_number(agent_mean_auroc)
+            or not 0.0 <= float(agent_mean_auroc) <= 1.0
+        ):
+            return _answer_failure(
+                agent_answer, "mean_auroc must be a finite number in [0, 1]"
+            )
+
         gene_aurocs = {}
         for stat in per_gene_stats:
             if not isinstance(stat, dict) or "gene" not in stat or "auroc" not in stat:
@@ -481,7 +592,22 @@ class MarkerGeneSeparationGrader(BinaryGrader):
                     agent_answer=agent_answer,
                     score=0.0,
                 )
-            gene_aurocs[stat["gene"]] = stat["auroc"]
+            gene = stat["gene"]
+            auroc = stat["auroc"]
+            if not isinstance(gene, str) or gene.strip() == "":
+                return _answer_failure(
+                    agent_answer, "Each per_gene_stats gene must be a non-empty string"
+                )
+            if gene in gene_aurocs:
+                return _answer_failure(
+                    agent_answer, f"per_gene_stats contains duplicate gene {gene!r}"
+                )
+            if not _is_finite_number(auroc) or not 0.0 <= float(auroc) <= 1.0:
+                return _answer_failure(
+                    agent_answer,
+                    "Each per_gene_stats auroc must be a finite number in [0, 1]",
+                )
+            gene_aurocs[gene] = float(auroc)
 
         computed_mean_auroc = sum(gene_aurocs.values()) / len(gene_aurocs)
 

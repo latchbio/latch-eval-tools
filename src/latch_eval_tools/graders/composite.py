@@ -1,14 +1,17 @@
-"""Composite graders: all_of, list_match, dict_match. Recursive over
+"""Composite graders: all_of, average_of, list_match, dict_match. Recursive over
 predicate-leaves and nested composites."""
 
+import math
 from typing import Any
 
 from .base import MISSING, BinaryGrader, GraderResult, normalize_score
 from .predicate import (
     SCALAR_OPS,
     _apply_role,
+    _threshold_configuration_error,
     evaluate_predicate,
     predicate_score_max,
+    predicate_configuration_error,
     resolve_answer_field,
 )
 
@@ -20,19 +23,207 @@ def _is_leaf(node: Any) -> bool:
     return isinstance(node, dict) and "predicate" in node and "type" not in node
 
 
+def _all_of_child_kind(child: Any) -> tuple[str, str | None]:
+    """Classify one strict-AND child and return any configuration error.
+
+    Every positive child of ``all_of`` is required. Predicate leaves retain a
+    role only to distinguish a positive condition from an inverted
+    ``hard_fail`` veto. Partial-credit ``additive`` leaves and outer roles on
+    typed children are deliberately unsupported: independent scoring belongs
+    in the eval's top-level ``graders`` list.
+    """
+
+    if not isinstance(child, dict):
+        return "invalid", "all_of child must be an object"
+
+    if _is_leaf(child):
+        role = child.get("role")
+        if role == "gate":
+            return "required", None
+        if role == "hard_fail":
+            return "hard_fail", None
+        if role == "additive":
+            return (
+                "invalid",
+                "role 'additive' is invalid inside strict all_of; use a "
+                "top-level graders[] entry or average_of for partial credit",
+            )
+        return (
+            "invalid",
+            f"bare predicate child role must be one of gate/hard_fail, got {role!r}",
+        )
+
+    if "role" in child:
+        return (
+            "invalid",
+            "typed all_of children do not accept an outer role; every typed "
+            "child is required",
+        )
+
+    child_type = child.get("type")
+    child_config = child.get("config")
+    if child_type is not None and not isinstance(child_config, dict):
+        return "invalid", "typed all_of child config must be an object"
+
+    if child_type != "predicate_leaf":
+        return "required", None
+
+    role = child_config.get("role") if isinstance(child_config, dict) else None
+    if role == "gate":
+        return "required", None
+    if role == "hard_fail":
+        return "hard_fail", None
+    if role == "additive":
+        return (
+            "invalid",
+            "role 'additive' is invalid inside strict all_of; use a "
+            "top-level graders[] entry or average_of for partial credit",
+        )
+    return (
+        "invalid",
+        f"predicate_leaf config role must be one of gate/hard_fail, got {role!r}",
+    )
+
+
+def _all_of_child_label(child: Any, index: int) -> str:
+    if not isinstance(child, dict):
+        return f"children[{index}]"
+    if _is_leaf(child):
+        return str(child.get("name") or f"children[{index}]")
+    child_type = child.get("type")
+    child_config = child.get("config")
+    if child_type == "predicate_leaf" and isinstance(child_config, dict):
+        return str(child_config.get("name") or f"children[{index}].predicate_leaf")
+    return str(child.get("name") or f"children[{index}].{child_type or 'unknown'}")
+
+
+def _duplicate_child_labels(children: list[Any]) -> list[str]:
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for index, child in enumerate(children):
+        label = _all_of_child_label(child, index)
+        if label in seen and label not in duplicates:
+            duplicates.append(label)
+        seen.add(label)
+    return duplicates
+
+
+def _child_payload_configuration_error(
+    passed: object,
+    metrics: object,
+    score: object,
+    score_max: object,
+    *,
+    require_positive_score_max: bool,
+) -> str | None:
+    if not isinstance(passed, bool):
+        return "child grader passed value must be boolean"
+    if not isinstance(metrics, dict):
+        return "child grader metrics must be an object"
+    if (
+        isinstance(score, bool)
+        or not isinstance(score, (int, float))
+        or not math.isfinite(float(score))
+    ):
+        return "child grader score must be a finite number"
+    if (
+        isinstance(score_max, bool)
+        or not isinstance(score_max, (int, float))
+        or not math.isfinite(float(score_max))
+        or float(score_max) < 0.0
+    ):
+        return "child grader score_max must be a finite non-negative number"
+    if require_positive_score_max and float(score_max) <= 0.0:
+        return "average_of scoring child must have positive score capacity"
+    return None
+
+
+def _child_info_has_configuration_error(info: dict[str, Any]) -> bool:
+    if info.get("configuration_error") is not None:
+        return True
+    sub_metrics = info.get("sub_metrics")
+    return isinstance(sub_metrics, dict) and (
+        sub_metrics.get("configuration_error") is not None
+    )
+
+
+def _child_info_has_system_error(info: dict[str, Any]) -> bool:
+    if info.get("grader_system_error") is True or info.get("grader_error") is not None:
+        return True
+    sub_metrics = info.get("sub_metrics")
+    return isinstance(sub_metrics, dict) and (
+        sub_metrics.get("grader_system_error") is True
+        or sub_metrics.get("grader_error") is not None
+    )
+
+
+def _average_of_child_kind(child: Any) -> tuple[str, str | None]:
+    """Classify one partial-credit child and return any configuration error."""
+
+    if not isinstance(child, dict):
+        return "invalid", "average_of child must be an object"
+
+    if _is_leaf(child):
+        role = child.get("role")
+        if isinstance(role, str) and role in {"gate", "additive"}:
+            return "scoring", None
+        if role == "hard_fail":
+            return "hard_fail", None
+        return (
+            "invalid",
+            "bare predicate child role must be one of gate/additive/hard_fail, "
+            f"got {role!r}",
+        )
+
+    if "role" in child:
+        return (
+            "invalid",
+            "typed average_of children do not accept an outer role; every typed "
+            "child is a scoring component",
+        )
+
+    child_type = child.get("type")
+    child_config = child.get("config")
+    if not isinstance(child_type, str):
+        return "invalid", "average_of child missing string 'type'"
+    if not isinstance(child_config, dict):
+        return "invalid", "typed average_of child config must be an object"
+
+    if child_type != "predicate_leaf":
+        return "scoring", None
+
+    role = child_config.get("role")
+    if isinstance(role, str) and role in {"gate", "additive"}:
+        return "scoring", None
+    if role == "hard_fail":
+        return "hard_fail", None
+    return (
+        "invalid",
+        "predicate_leaf config role must be one of gate/additive/hard_fail, "
+        f"got {role!r}",
+    )
+
+
 def _hashable(value: Any) -> Any:
     """Recursively convert lists/dicts into hashable tuples."""
     if isinstance(value, list):
         return tuple(_hashable(v) for v in value)
+    if isinstance(value, tuple):
+        return tuple(_hashable(v) for v in value)
+    if isinstance(value, (set, frozenset)):
+        return tuple(sorted((_hashable(v) for v in value), key=repr))
     if isinstance(value, dict):
-        return tuple(sorted((k, _hashable(v)) for k, v in value.items()))
-    return value
+        items = [(_hashable(k), _hashable(v)) for k, v in value.items()]
+        return tuple(sorted(items, key=repr))
+    if isinstance(value, (str, int, float, bool, bytes, type(None))):
+        return value
+    return repr(value)
 
 
 def _normalize_match_key(value: Any, mode: str) -> Any:
     """``match_key_normalize: sort`` sorts a list-valued key before lookup."""
     if mode == "sort" and isinstance(value, list):
-        return tuple(sorted(_hashable(v) for v in value))
+        return tuple(sorted((_hashable(v) for v in value), key=repr))
     return _hashable(value)
 
 
@@ -95,10 +286,90 @@ def _evaluate_leaf(leaf: dict, value: Any) -> tuple[str, bool, float, float, str
     predicate = leaf.get("predicate")
     threshold = leaf.get("threshold", 1.0)
     op = predicate.get("op") if isinstance(predicate, dict) else None
-    is_scalar = op in SCALAR_OPS
+    is_scalar = isinstance(op, str) and op in SCALAR_OPS
     label = leaf.get("name") or (f"{op}-leaf" if op else "(unnamed)")
     kind = "hard_fail" if role == "hard_fail" else "scoring"
     score_max = _leaf_score_max(leaf)
+
+    answer_field = leaf.get("answer_field")
+    if answer_field is not None:
+        if not isinstance(answer_field, str) or answer_field == "":
+            return (
+                kind,
+                False,
+                0.0,
+                score_max,
+                label,
+                {
+                    "configuration_error": (
+                        "answer_field must be a non-empty string when configured"
+                    )
+                },
+            )
+        if answer_field.startswith("$"):
+            try:
+                resolve_answer_field({}, answer_field)
+            except ValueError as exc:
+                return (
+                    kind,
+                    False,
+                    0.0,
+                    score_max,
+                    label,
+                    {"configuration_error": f"invalid answer_field JSONPath: {exc}"},
+                )
+
+    if not isinstance(role, str) or role not in {
+        "gate",
+        "additive",
+        "hard_fail",
+    }:
+        return (
+            kind,
+            False,
+            0.0,
+            score_max,
+            label,
+            {"configuration_error": f"unknown predicate role {role!r}"},
+        )
+
+    predicate_error = predicate_configuration_error(predicate)
+    if predicate_error is not None:
+        return (
+            kind,
+            False,
+            0.0,
+            score_max,
+            label,
+            {"configuration_error": predicate_error, "role": role, "op": op},
+        )
+
+    threshold_error = _threshold_configuration_error(predicate, threshold)
+    if threshold_error is not None:
+        return (
+            kind,
+            False,
+            0.0,
+            score_max,
+            label,
+            {"configuration_error": threshold_error, "role": role, "op": op},
+        )
+
+    if role in {"gate", "additive"} and score_max <= 0.0:
+        return (
+            kind,
+            False,
+            0.0,
+            score_max,
+            label,
+            {
+                "configuration_error": (
+                    "scoring predicate has no positive score capacity"
+                ),
+                "role": role,
+                "op": op,
+            },
+        )
 
     if value is MISSING:
         # An explicitly bound answer field is part of the grading contract, so
@@ -122,7 +393,7 @@ def _evaluate_leaf(leaf: dict, value: Any) -> tuple[str, bool, float, float, str
             score_max,
             label,
             {
-                "error": str(exc),
+                "invalid_answer": str(exc),
                 "role": role,
                 "op": op,
             },
@@ -161,17 +432,29 @@ def evaluate_composite_predicate_leaf(agent_answer: dict, config: dict) -> Grade
 
 
 def _evaluate_all_of_child(
-    child: Any, agent_answer: Any
+    child: Any, agent_answer: Any, index: int
 ) -> tuple[str, bool, float, float, str, dict]:
     """Dispatch one ``all_of`` child: bare leaf vs composite envelope."""
+    child_kind, role_error = _all_of_child_kind(child)
+    label = _all_of_child_label(child, index)
+    if role_error is not None:
+        return (
+            "invalid",
+            False,
+            0.0,
+            1.0,
+            label,
+            {"configuration_error": role_error},
+        )
+
     if _is_leaf(child):
         result = evaluate_composite_predicate_leaf(agent_answer, child)
         return (
-            "hard_fail" if child.get("role") == "hard_fail" else "scoring",
+            child_kind,
             result.passed,
             result.score,
             result.score_max,
-            str(result.metrics["name"]),
+            label,
             result.metrics,
         )
 
@@ -181,19 +464,21 @@ def _evaluate_all_of_child(
     child_config = child.get("config", {}) if isinstance(child, dict) else {}
     if not isinstance(child_type, str):
         return (
-            "scoring",
+            "invalid",
             False,
             0.0,
             1.0,
-            "?",
-            {"error": "composite child missing 'type' and not a bare predicate-leaf"},
+            label,
+            {
+                "configuration_error": (
+                    "composite child missing 'type' and is not a bare predicate leaf"
+                )
+            },
         )
     if child_type == "predicate_leaf" and isinstance(child_config, dict):
         sub = evaluate_composite_predicate_leaf(agent_answer, child_config)
-        label = str(sub.metrics["name"])
-        kind = "hard_fail" if child_config.get("role") == "hard_fail" else "scoring"
         return (
-            kind,
+            child_kind,
             sub.passed,
             sub.score,
             sub.score_max,
@@ -202,15 +487,111 @@ def _evaluate_all_of_child(
         )
 
     try:
-        sub = get_grader(child_type).evaluate_answer(agent_answer, child_config)
-    except (ValueError, TypeError) as exc:
-        return "scoring", False, 0.0, 1.0, child_type, {"error": str(exc)}
+        grader = get_grader(child_type)
+    except ValueError as exc:
+        return (
+            "invalid",
+            False,
+            0.0,
+            1.0,
+            label,
+            {"configuration_error": str(exc)},
+        )
+    try:
+        sub = grader.evaluate_answer(agent_answer, child_config)
+    except Exception as exc:  # noqa: BLE001 -- isolate a broken child grader
+        return (
+            child_kind,
+            False,
+            0.0,
+            1.0,
+            label,
+            {"grader_error": str(exc), "grader_system_error": True},
+        )
     return (
-        "scoring",
+        child_kind,
         sub.passed,
         sub.score,
         sub.score_max,
-        child_type,
+        label,
+        {
+            "sub_metrics": sub.metrics,
+            "sub_reasoning": sub.reasoning,
+        },
+    )
+
+
+def _evaluate_average_of_child(
+    child: Any, agent_answer: Any, index: int
+) -> tuple[str, bool, float, float, str, dict]:
+    """Dispatch one ``average_of`` scoring component or hard-fail veto."""
+
+    child_kind, role_error = _average_of_child_kind(child)
+    label = _all_of_child_label(child, index)
+    if role_error is not None:
+        return (
+            "invalid",
+            False,
+            0.0,
+            1.0,
+            label,
+            {"configuration_error": role_error},
+        )
+
+    if _is_leaf(child):
+        result = evaluate_composite_predicate_leaf(agent_answer, child)
+        return (
+            child_kind,
+            result.passed,
+            result.score,
+            result.score_max,
+            label,
+            result.metrics,
+        )
+
+    from . import get_grader  # Lazy import is required to avoid a cycle.
+
+    child_type = child["type"]
+    child_config = child["config"]
+    if child_type == "predicate_leaf":
+        sub = evaluate_composite_predicate_leaf(agent_answer, child_config)
+        return (
+            child_kind,
+            sub.passed,
+            sub.score,
+            sub.score_max,
+            label,
+            sub.metrics,
+        )
+
+    try:
+        grader = get_grader(child_type)
+    except ValueError as exc:
+        return (
+            "invalid",
+            False,
+            0.0,
+            1.0,
+            label,
+            {"configuration_error": str(exc)},
+        )
+    try:
+        sub = grader.evaluate_answer(agent_answer, child_config)
+    except Exception as exc:  # noqa: BLE001 -- isolate a broken child grader
+        return (
+            child_kind,
+            False,
+            0.0,
+            1.0,
+            label,
+            {"grader_error": str(exc), "grader_system_error": True},
+        )
+    return (
+        child_kind,
+        sub.passed,
+        sub.score,
+        sub.score_max,
+        label,
         {
             "sub_metrics": sub.metrics,
             "sub_reasoning": sub.reasoning,
@@ -229,73 +610,593 @@ def _composite_fail(agent_answer: Any, reason: str) -> GraderResult:
     )
 
 
+def _composite_configuration_fail(agent_answer: Any, reason: str) -> GraderResult:
+    return GraderResult(
+        passed=False,
+        metrics={"configuration_error": reason},
+        reasoning=f"composite grader configuration error: {reason}",
+        agent_answer=agent_answer if isinstance(agent_answer, dict) else None,
+        score=0.0,
+        field_scores={},
+    )
+
+
+def _evaluate_average_of_pass_rule(
+    config: dict, scoring_count: int, scoring_passed: int, scoring_total_score: float
+) -> tuple[str, bool, str | None]:
+    pass_rule = config.get("pass_rule", "all")
+    if pass_rule == "all":
+        if "min_passing_children" in config or "score_threshold" in config:
+            return (
+                pass_rule,
+                False,
+                "min_passing_children and score_threshold are only valid with "
+                "their matching average_of pass_rule",
+            )
+        return pass_rule, scoring_passed == scoring_count, None
+
+    if pass_rule == "min_passing":
+        if "score_threshold" in config:
+            return (
+                pass_rule,
+                False,
+                "score_threshold is invalid with pass_rule='min_passing'",
+            )
+        minimum = config.get("min_passing_children")
+        if (
+            isinstance(minimum, bool)
+            or not isinstance(minimum, int)
+            or minimum < 0
+            or minimum > scoring_count
+        ):
+            return (
+                pass_rule,
+                False,
+                "min_passing_children must be an integer between 0 and the "
+                "number of scoring children",
+            )
+        return pass_rule, scoring_passed >= minimum, None
+
+    if pass_rule == "score_threshold":
+        if "min_passing_children" in config:
+            return (
+                pass_rule,
+                False,
+                "min_passing_children is invalid with pass_rule='score_threshold'",
+            )
+        threshold = config.get("score_threshold")
+        if (
+            isinstance(threshold, bool)
+            or not isinstance(threshold, (int, float))
+            or not math.isfinite(float(threshold))
+            or threshold < 0
+        ):
+            return (
+                pass_rule,
+                False,
+                "score_threshold must be a finite non-negative number",
+            )
+        return pass_rule, scoring_total_score >= float(threshold), None
+
+    return (
+        str(pass_rule),
+        False,
+        "average_of pass_rule must be one of all/min_passing/score_threshold",
+    )
+
+
+def _leaf_configuration_error(leaf: object) -> str | None:
+    if not isinstance(leaf, dict):
+        return "predicate leaf must be an object"
+    _, _, _, _, _, info = _evaluate_leaf(leaf, MISSING)
+    error = info.get("configuration_error")
+    return str(error) if error is not None else None
+
+
+def _list_match_configuration_error(config: object) -> str | None:
+    if not isinstance(config, dict):
+        return "list_match config must be an object"
+
+    answer_field = config.get("answer_field")
+    if not isinstance(answer_field, str) or answer_field == "":
+        return "list_match answer_field must be a non-empty string"
+    match_key = config.get("match_key")
+    if not isinstance(match_key, str) or match_key == "":
+        return "list_match match_key must be a non-empty string"
+
+    normalize_mode = config.get("match_key_normalize", "none")
+    if not isinstance(normalize_mode, str):
+        return "list_match match_key_normalize must be a string"
+    deduplicate_by = config.get("deduplicate_by")
+    if deduplicate_by is not None and (
+        not isinstance(deduplicate_by, str) or deduplicate_by == ""
+    ):
+        return "list_match deduplicate_by must be a non-empty string when configured"
+    per_tuple_rule = config.get("per_tuple_rule", "gates_all_pass")
+    if not isinstance(per_tuple_rule, str) or per_tuple_rule == "":
+        return "list_match per_tuple_rule must be a non-empty string"
+
+    k = config.get("k")
+    if k is not None and (isinstance(k, bool) or not isinstance(k, int) or k <= 0):
+        return "list_match k must be a positive integer when configured"
+    tuple_pass_min = config.get("tuple_pass_min", 0)
+    if (
+        isinstance(tuple_pass_min, bool)
+        or not isinstance(tuple_pass_min, int)
+        or tuple_pass_min < 0
+    ):
+        return "list_match tuple_pass_min must be a non-negative integer"
+    if isinstance(k, int) and tuple_pass_min > k:
+        return "list_match tuple_pass_min cannot exceed k"
+    additive_score_min = config.get("additive_score_min", 0)
+    if (
+        isinstance(additive_score_min, bool)
+        or not isinstance(additive_score_min, (int, float))
+        or not math.isfinite(float(additive_score_min))
+        or float(additive_score_min) < 0.0
+    ):
+        return "list_match additive_score_min must be a finite non-negative number"
+
+    ground_truth = config.get("ground_truth")
+    if not isinstance(ground_truth, list) or not ground_truth:
+        return "list_match ground_truth must be a non-empty list"
+    if tuple_pass_min > len(ground_truth):
+        return "list_match tuple_pass_min cannot exceed ground_truth size"
+
+    seen_match_keys: set[Any] = set()
+    positive_leaf_count = 0
+    for index, entry in enumerate(ground_truth):
+        if not isinstance(entry, dict):
+            return f"list_match ground_truth[{index}] must be an object"
+        if match_key not in entry:
+            return (
+                f"list_match ground_truth[{index}] is missing match_key {match_key!r}"
+            )
+        try:
+            normalized_key = _normalize_match_key(entry[match_key], normalize_mode)
+        except (TypeError, ValueError) as exc:
+            return f"list_match ground_truth[{index}] has invalid match key: {exc}"
+        if normalized_key in seen_match_keys:
+            return f"list_match ground_truth contains duplicate match key {entry[match_key]!r}"
+        seen_match_keys.add(normalized_key)
+
+        fields = entry.get("fields")
+        if not isinstance(fields, dict) or not fields:
+            return f"list_match ground_truth[{index}].fields must be a non-empty object"
+        for field_name, leaf in fields.items():
+            error = _leaf_configuration_error(leaf)
+            if error is not None:
+                return (
+                    f"list_match ground_truth[{index}].fields[{field_name!r}]: {error}"
+                )
+            if isinstance(leaf, dict) and leaf.get("role") != "hard_fail":
+                positive_leaf_count += 1
+
+    if positive_leaf_count == 0:
+        return "list_match must contain at least one positive predicate leaf"
+    return None
+
+
+def _dict_match_configuration_error(config: object) -> str | None:
+    if not isinstance(config, dict):
+        return "dict_match config must be an object"
+
+    answer_field = config.get("answer_field")
+    if not isinstance(answer_field, str) or answer_field == "":
+        return "dict_match answer_field must be a non-empty string"
+    per_entry_rule = config.get("per_entry_rule", "gates_all_pass")
+    if not isinstance(per_entry_rule, str) or per_entry_rule == "":
+        return "dict_match per_entry_rule must be a non-empty string"
+    all_keys_required = config.get("all_keys_required", True)
+    if not isinstance(all_keys_required, bool):
+        return "dict_match all_keys_required must be a boolean"
+
+    ground_truth = config.get("ground_truth")
+    if not isinstance(ground_truth, dict) or not ground_truth:
+        return "dict_match ground_truth must be a non-empty object"
+
+    positive_leaf_count = 0
+    for key, entry in ground_truth.items():
+        if not isinstance(entry, dict):
+            return f"dict_match ground_truth[{key!r}] must be an object"
+        if "predicate" in entry:
+            error = _leaf_configuration_error(entry)
+            if error is not None:
+                return f"dict_match ground_truth[{key!r}]: {error}"
+            if entry.get("role") != "hard_fail":
+                positive_leaf_count += 1
+            continue
+
+        fields = entry.get("fields")
+        if not isinstance(fields, dict) or not fields:
+            return f"dict_match ground_truth[{key!r}].fields must be a non-empty object"
+        for field_name, leaf in fields.items():
+            error = _leaf_configuration_error(leaf)
+            if error is not None:
+                return (
+                    f"dict_match ground_truth[{key!r}].fields[{field_name!r}]: {error}"
+                )
+            if isinstance(leaf, dict) and leaf.get("role") != "hard_fail":
+                positive_leaf_count += 1
+
+    if positive_leaf_count == 0:
+        return "dict_match must contain at least one positive predicate leaf"
+    return None
+
+
 # composites vv
 
 
 class AllOfGrader(BinaryGrader):
-    """Conjunction over scoring children plus veto from hard_fail children."""
+    """Strict conjunction: every positive child must pass for binary credit."""
 
     def evaluate_answer(self, agent_answer: dict, config: dict) -> GraderResult:
-        scoring: list[tuple[bool, float, float, str, dict]] = []
-        hard_fails: list[tuple[bool, str, dict]] = []
-
-        for child in config.get("children", []):
-            kind, passed, score, score_max, label, info = _evaluate_all_of_child(
-                child, agent_answer
+        if not isinstance(config, dict):
+            return _composite_configuration_fail(
+                agent_answer, "all_of/composite config must be an object"
             )
+        children = config.get("children")
+        if not isinstance(children, list):
+            return _composite_configuration_fail(
+                agent_answer, "all_of/composite config must contain a children list"
+            )
+        duplicate_labels = _duplicate_child_labels(children)
+        if duplicate_labels:
+            return _composite_configuration_fail(
+                agent_answer,
+                f"all_of/composite child labels must be unique: {duplicate_labels}",
+            )
+
+        required: list[tuple[bool, float, float, str, dict]] = []
+        hard_fails: list[tuple[bool, str, dict]] = []
+        misconfigured_children: list[str] = []
+        system_error_children: list[str] = []
+
+        for index, child in enumerate(children):
+            kind, passed, score, score_max, label, info = _evaluate_all_of_child(
+                child, agent_answer, index
+            )
+            payload_error = _child_payload_configuration_error(
+                passed,
+                info.get("sub_metrics", info),
+                score,
+                score_max,
+                require_positive_score_max=False,
+            )
+            if payload_error is not None:
+                passed = False
+                score = 0.0
+                score_max = 0.0
+                info = {**info, "configuration_error": payload_error}
+            has_configuration_error = _child_info_has_configuration_error(info)
+            has_system_error = _child_info_has_system_error(info)
+            if (kind == "invalid" or has_configuration_error) and (
+                label not in misconfigured_children
+            ):
+                misconfigured_children.append(label)
+            if has_system_error and label not in system_error_children:
+                system_error_children.append(label)
             if kind == "hard_fail":
                 hard_fails.append((passed, label, info))
+            elif kind != "invalid" and not has_configuration_error:
+                required.append((passed, score, score_max, label, info))
+
+        scoring_total_score = sum(
+            score
+            for _, score, _, _, info in required
+            if not _child_info_has_system_error(info)
+        )
+        score_denominator = sum(s_max for _, _, s_max, *_ in required)
+        scoring_count = len(required)
+        scoring_passed = sum(
+            1
+            for passed, _, _, _, info in required
+            if passed and not _child_info_has_system_error(info)
+        )
+        failed_children = [
+            label
+            for passed, _, _, label, info in required
+            if not passed and not _child_info_has_system_error(info)
+        ]
+
+        hard_fail_triggered: list[Any] = []
+        hard_fail_unavailable: list[Any] = []
+        for passed, label, info in hard_fails:
+            if passed:
+                continue
+            sub_metrics = info.get("sub_metrics")
+            if (
+                info.get("error") is not None
+                or info.get("configuration_error") is not None
+                or _child_info_has_system_error(info)
+                or (
+                    isinstance(sub_metrics, dict)
+                    and (sub_metrics.get("configuration_error") is not None)
+                )
+            ):
+                hard_fail_unavailable.append(label)
             else:
-                scoring.append((passed, score, score_max, label, info))
+                hard_fail_triggered.append(label)
 
-        scoring_total_score = sum(s for _, s, *_ in scoring)
-        score_denominator = sum(s_max for _, _, s_max, *_ in scoring)
-        scoring_count = len(scoring)
-        scoring_passed = sum(1 for p, *_ in scoring if p)
-        veto = any(not p for p, _, _ in hard_fails)
+        for _, _, _, label, info in required:
+            sub_metrics = info.get("sub_metrics")
+            if not isinstance(sub_metrics, dict):
+                continue
+            nested_triggered = sub_metrics.get("hard_fail_triggered")
+            if isinstance(nested_triggered, list) and nested_triggered:
+                hard_fail_triggered.append(
+                    {"child": label, "children": nested_triggered}
+                )
+            nested_unavailable = sub_metrics.get("hard_fail_unavailable")
+            if isinstance(nested_unavailable, list) and nested_unavailable:
+                hard_fail_unavailable.append(
+                    {"child": label, "children": nested_unavailable}
+                )
+
         pass_rule = config.get("pass_rule", "all")
-        if pass_rule == "all":
-            scoring_ok = all(p for p, *_ in scoring) if scoring else True
-        elif pass_rule == "min_passing":
-            scoring_ok = scoring_passed >= config.get("min_passing_children", 0)
-        elif pass_rule == "score_threshold":
-            scoring_ok = scoring_total_score >= config.get("score_threshold", 0.0)
-        else:
-            scoring_ok = False
+        unsupported_pass_config: str | None = None
+        if pass_rule != "all":
+            unsupported_pass_config = (
+                "strict all_of only supports pass_rule='all'; use top-level "
+                "graders[] or average_of for partial credit"
+            )
+        elif "min_passing_children" in config or "score_threshold" in config:
+            unsupported_pass_config = (
+                "min_passing_children and score_threshold are invalid for strict all_of"
+            )
 
-        # `pass_rule` controls the binary `passed` result, independently of the
-        # partial reward carried by `score`. A hard-fail veto must zero both,
-        # while an ordinary failed scoring child still contributes its partial
-        # result to the normalized aggregate.
-        no_scoring_children = scoring_count == 0
-        if no_scoring_children or veto:
-            score = 0.0
-        else:
-            score = normalize_score(scoring_total_score, score_denominator)
+        # A hard-fail-only composite can veto an answer but cannot establish
+        # that any requested work was completed. Keep at least one positive
+        # required child so a clean veto does not earn ungrounded full credit.
+        no_positive_children = scoring_count == 0
+        blocked = (
+            bool(failed_children)
+            or bool(hard_fail_triggered)
+            or bool(hard_fail_unavailable)
+            or bool(misconfigured_children)
+            or bool(system_error_children)
+            or unsupported_pass_config is not None
+            or no_positive_children
+        )
+        passed = not blocked
+        score = 1.0 if passed else 0.0
+        configuration_error: str | None = None
+        if misconfigured_children:
+            configuration_error = (
+                "all_of contains child graders that could not be configured"
+            )
+        elif no_positive_children:
+            configuration_error = "all_of has no positive required children"
+        elif unsupported_pass_config is not None:
+            configuration_error = unsupported_pass_config
 
-        # A composite with only hard_fail children can express a veto but never a
-        # reward, so any answer -- including an empty one -- would otherwise earn
-        # full credit for work that was never graded. Fail closed and surface it.
-        passed = scoring_ok and not veto and not no_scoring_children
         return GraderResult(
             passed=passed,
             score=score,
             metrics={
+                "type": "all_of",
                 "pass_rule": pass_rule,
                 "scoring_count": scoring_count,
                 "scoring_passed": scoring_passed,
                 "scoring_total_score": scoring_total_score,
                 "score_denominator": score_denominator,
-                "hard_fail_triggered": [name for p, name, _ in hard_fails if not p],
+                "failed_children": failed_children,
+                "hard_fail_triggered": hard_fail_triggered,
                 **(
-                    {"configuration_error": "all_of has no scoring children"}
-                    if no_scoring_children
+                    {"hard_fail_unavailable": hard_fail_unavailable}
+                    if hard_fail_unavailable
+                    else {}
+                ),
+                **(
+                    {"configuration_error": configuration_error}
+                    if configuration_error is not None
+                    else {}
+                ),
+                **(
+                    {"misconfigured_children": misconfigured_children}
+                    if misconfigured_children
+                    else {}
+                ),
+                **(
+                    {
+                        "grader_system_error": True,
+                        "system_error_children": system_error_children,
+                    }
+                    if system_error_children
                     else {}
                 ),
             },
-            reasoning=_format_all_of(scoring, hard_fails, pass_rule, passed),
+            reasoning=_format_all_of(required, hard_fails, passed),
             agent_answer=agent_answer,
-            field_scores={name: s for _, s, _, name, _ in scoring},
+            field_scores={name: s for _, s, _, name, _ in required},
+        )
+
+
+class AverageOfGrader(BinaryGrader):
+    """Normalized partial credit with an explicit binary passing policy."""
+
+    def evaluate_answer(self, agent_answer: dict, config: dict) -> GraderResult:
+        if not isinstance(config, dict):
+            return _composite_configuration_fail(
+                agent_answer, "average_of config must be an object"
+            )
+        children = config.get("children")
+        if not isinstance(children, list):
+            return _composite_configuration_fail(
+                agent_answer, "average_of config must contain a children list"
+            )
+        duplicate_labels = _duplicate_child_labels(children)
+        if duplicate_labels:
+            return _composite_configuration_fail(
+                agent_answer,
+                f"average_of child labels must be unique: {duplicate_labels}",
+            )
+
+        scoring: list[tuple[bool, float, float, str, dict]] = []
+        hard_fails: list[tuple[bool, str, dict]] = []
+        misconfigured_children: list[str] = []
+        system_error_children: list[str] = []
+
+        for index, child in enumerate(children):
+            kind, passed, score, score_max, label, info = _evaluate_average_of_child(
+                child, agent_answer, index
+            )
+            payload_error = _child_payload_configuration_error(
+                passed,
+                info.get("sub_metrics", info),
+                score,
+                score_max,
+                require_positive_score_max=kind == "scoring",
+            )
+            if payload_error is not None:
+                passed = False
+                score = 0.0
+                score_max = 0.0
+                info = {**info, "configuration_error": payload_error}
+            has_configuration_error = _child_info_has_configuration_error(info)
+            has_system_error = _child_info_has_system_error(info)
+            if (kind == "invalid" or has_configuration_error) and (
+                label not in misconfigured_children
+            ):
+                misconfigured_children.append(label)
+            if has_system_error and label not in system_error_children:
+                system_error_children.append(label)
+            if kind == "hard_fail":
+                hard_fails.append((passed, label, info))
+            elif kind != "invalid" and not has_configuration_error:
+                scoring.append((passed, score, score_max, label, info))
+
+        scoring_total_score = sum(
+            score
+            for _, score, _, _, info in scoring
+            if not _child_info_has_system_error(info)
+        )
+        score_denominator = sum(score_max for _, _, score_max, *_ in scoring)
+        scoring_count = len(scoring)
+        scoring_passed = sum(
+            1
+            for passed, _, _, _, info in scoring
+            if passed and not _child_info_has_system_error(info)
+        )
+        failed_children = [
+            label
+            for passed, _, _, label, info in scoring
+            if not passed and not _child_info_has_system_error(info)
+        ]
+        pass_rule, scoring_ok, pass_rule_error = _evaluate_average_of_pass_rule(
+            config, scoring_count, scoring_passed, scoring_total_score
+        )
+
+        hard_fail_triggered: list[Any] = []
+        hard_fail_unavailable: list[Any] = []
+        for passed, label, info in hard_fails:
+            if passed:
+                continue
+            sub_metrics = info.get("sub_metrics")
+            if (
+                info.get("error") is not None
+                or info.get("configuration_error") is not None
+                or _child_info_has_system_error(info)
+                or (
+                    isinstance(sub_metrics, dict)
+                    and (sub_metrics.get("configuration_error") is not None)
+                )
+            ):
+                hard_fail_unavailable.append(label)
+            else:
+                hard_fail_triggered.append(label)
+
+        for _, _, _, label, info in scoring:
+            sub_metrics = info.get("sub_metrics")
+            if not isinstance(sub_metrics, dict):
+                continue
+            nested_triggered = sub_metrics.get("hard_fail_triggered")
+            if isinstance(nested_triggered, list) and nested_triggered:
+                hard_fail_triggered.append(
+                    {"child": label, "children": nested_triggered}
+                )
+            nested_unavailable = sub_metrics.get("hard_fail_unavailable")
+            if isinstance(nested_unavailable, list) and nested_unavailable:
+                hard_fail_unavailable.append(
+                    {"child": label, "children": nested_unavailable}
+                )
+
+        no_scoring_children = scoring_count == 0
+        invalid_score_values = (
+            not math.isfinite(scoring_total_score)
+            or not math.isfinite(score_denominator)
+            or score_denominator <= 0.0
+        )
+        blocked = (
+            bool(hard_fail_triggered)
+            or bool(hard_fail_unavailable)
+            or bool(misconfigured_children)
+            or bool(system_error_children)
+            or pass_rule_error is not None
+            or no_scoring_children
+            or invalid_score_values
+        )
+        score = (
+            0.0 if blocked else normalize_score(scoring_total_score, score_denominator)
+        )
+        passed = scoring_ok and not blocked
+
+        configuration_error: str | None = None
+        if misconfigured_children:
+            configuration_error = (
+                "average_of contains child graders that could not be configured"
+            )
+        elif no_scoring_children:
+            configuration_error = "average_of has no scoring children"
+        elif invalid_score_values:
+            configuration_error = (
+                "average_of scoring children must provide a positive finite "
+                "score denominator and finite total score"
+            )
+        elif pass_rule_error is not None:
+            configuration_error = pass_rule_error
+
+        return GraderResult(
+            passed=passed,
+            score=score,
+            metrics={
+                "type": "average_of",
+                "pass_rule": pass_rule,
+                "scoring_count": scoring_count,
+                "scoring_passed": scoring_passed,
+                "scoring_total_score": scoring_total_score,
+                "score_denominator": score_denominator,
+                "failed_children": failed_children,
+                "hard_fail_triggered": hard_fail_triggered,
+                **(
+                    {"hard_fail_unavailable": hard_fail_unavailable}
+                    if hard_fail_unavailable
+                    else {}
+                ),
+                **(
+                    {"configuration_error": configuration_error}
+                    if configuration_error is not None
+                    else {}
+                ),
+                **(
+                    {"misconfigured_children": misconfigured_children}
+                    if misconfigured_children
+                    else {}
+                ),
+                **(
+                    {
+                        "grader_system_error": True,
+                        "system_error_children": system_error_children,
+                    }
+                    if system_error_children
+                    else {}
+                ),
+            },
+            reasoning=_format_average_of(scoring, hard_fails, pass_rule, passed, score),
+            agent_answer=agent_answer,
+            field_scores={
+                label: child_score for _, child_score, _, label, _ in scoring
+            },
         )
 
 
@@ -303,6 +1204,10 @@ class ListMatchGrader(BinaryGrader):
     """Pair tuples against GT by ``match_key``; per-tuple gate + additive scoring."""
 
     def evaluate_answer(self, agent_answer: dict, config: dict) -> GraderResult:
+        configuration_error = _list_match_configuration_error(config)
+        if configuration_error is not None:
+            return _composite_configuration_fail(agent_answer, configuration_error)
+
         answer_field = config.get("answer_field")
         match_key = config.get("match_key")
         normalize_mode = config.get("match_key_normalize", "none")
@@ -462,6 +1367,7 @@ class ListMatchGrader(BinaryGrader):
             ),
             agent_answer=agent_answer,
             field_scores=field_scores,
+            score_max=1.0 if score_denominator > 0.0 else 0.0,
         )
 
 
@@ -469,6 +1375,10 @@ class DictMatchGrader(BinaryGrader):
     """Key-by-key dispatch: scalar predicate-leaf or object-form per-field leaves."""
 
     def evaluate_answer(self, agent_answer: dict, config: dict) -> GraderResult:
+        configuration_error = _dict_match_configuration_error(config)
+        if configuration_error is not None:
+            return _composite_configuration_fail(agent_answer, configuration_error)
+
         answer_field = config.get("answer_field")
         gt = config.get("ground_truth", {})
         per_entry_rule = config.get("per_entry_rule", "gates_all_pass")
@@ -611,12 +1521,10 @@ class DictMatchGrader(BinaryGrader):
 # ----- reasoning formatters --------------------------------------------------
 
 
-def _format_all_of(
-    scoring: list, hard_fails: list, pass_rule: str, passed: bool
-) -> str:
+def _format_all_of(required: list, hard_fails: list, passed: bool) -> str:
     verdict = "PASS" if passed else "FAIL"
-    lines = [f"all_of [pass_rule={pass_rule}]: {verdict}"]
-    for p, score, _, label, info in scoring:
+    lines = [f"all_of [strict AND]: {verdict}"]
+    for p, score, _, label, info in required:
         marker = "+" if p else "x"
         sub = info.get("sub_reasoning")
         if sub:
@@ -627,6 +1535,37 @@ def _format_all_of(
     for p, label, _ in hard_fails:
         marker = "+" if p else "x"
         state = "not triggered" if p else "TRIGGERED"
+        lines.append(f"  {marker} hard_fail {label!r}: {state}")
+    return "\n".join(lines)
+
+
+def _format_average_of(
+    scoring: list,
+    hard_fails: list,
+    pass_rule: str,
+    passed: bool,
+    score: float,
+) -> str:
+    verdict = "PASS" if passed else "FAIL"
+    lines = [
+        f"average_of [pass_rule={pass_rule}]: {verdict} (normalized score={score})"
+    ]
+    for child_passed, child_score, score_max, label, info in scoring:
+        marker = "+" if child_passed else "x"
+        sub = info.get("sub_reasoning")
+        if sub:
+            first = sub.splitlines()[0]
+            lines.append(
+                f"  {marker} {label}: {first}  (score={child_score}/{score_max})"
+            )
+        else:
+            lines.append(
+                f"  {marker} {label}: passed={child_passed}, "
+                f"score={child_score}/{score_max}"
+            )
+    for child_passed, label, _ in hard_fails:
+        marker = "+" if child_passed else "x"
+        state = "not triggered" if child_passed else "TRIGGERED/UNAVAILABLE"
         lines.append(f"  {marker} hard_fail {label!r}: {state}")
     return "\n".join(lines)
 

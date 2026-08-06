@@ -1,4 +1,6 @@
+import math
 from typing import Any
+
 from .base import BinaryGrader, GraderResult
 
 
@@ -27,12 +29,23 @@ def _lcs_length(a: list, b: list) -> int:
 
 
 def _longest_subsequence_fail(
-    agent_answer: Any, answer_field: Any, reason: str
+    agent_answer: Any,
+    answer_field: Any,
+    reason: str,
+    *,
+    configuration_error: bool = False,
 ) -> GraderResult:
+    metrics = (
+        {"configuration_error": reason} if configuration_error else {"error": reason}
+    )
+    verdict = "CONFIGURATION ERROR" if configuration_error else "FAIL"
     return GraderResult(
         passed=False,
-        metrics={"error": reason},
-        reasoning=f"longest_subsequence (answer_field={answer_field!r}): FAIL\n  - {reason}",
+        metrics=metrics,
+        reasoning=(
+            f"longest_subsequence (answer_field={answer_field!r}): {verdict}\n"
+            f"  - {reason}"
+        ),
         agent_answer=agent_answer if isinstance(agent_answer, dict) else None,
         score=0.0,
         field_scores={},
@@ -45,7 +58,10 @@ def _parse_pass_threshold(
     scoring = config.get("scoring", {})
     if not isinstance(scoring, dict):
         return _longest_subsequence_fail(
-            agent_answer, answer_field, "'scoring' must be an object"
+            agent_answer,
+            answer_field,
+            "'scoring' must be an object",
+            configuration_error=True,
         )
 
     raw_threshold = scoring.get("pass_threshold", 1.0)
@@ -54,14 +70,20 @@ def _parse_pass_threshold(
             agent_answer,
             answer_field,
             "'scoring.pass_threshold' must be a number in [0, 1]",
+            configuration_error=True,
         )
 
     pass_threshold = float(raw_threshold)
-    if pass_threshold < 0.0 or pass_threshold > 1.0:
+    if (
+        not math.isfinite(pass_threshold)
+        or pass_threshold < 0.0
+        or pass_threshold > 1.0
+    ):
         return _longest_subsequence_fail(
             agent_answer,
             answer_field,
             "'scoring.pass_threshold' must be a number in [0, 1]",
+            configuration_error=True,
         )
 
     return pass_threshold
@@ -69,17 +91,44 @@ def _parse_pass_threshold(
 
 class LongestSubsequenceGrader(BinaryGrader):
     def evaluate_answer(self, agent_answer: dict, config: dict) -> GraderResult:
+        if not isinstance(config, dict):
+            return _longest_subsequence_fail(
+                agent_answer,
+                None,
+                "config must be an object",
+                configuration_error=True,
+            )
         answer_field = config.get("answer_field")
         ground_truth = config.get("ground_truth", [])
 
-        if not isinstance(answer_field, str) or not answer_field:
+        if not isinstance(answer_field, str) or answer_field.strip() == "":
             return _longest_subsequence_fail(
-                agent_answer, answer_field, "'answer_field' must be a non-empty string"
+                agent_answer,
+                answer_field,
+                "'answer_field' must be a non-empty string",
+                configuration_error=True,
             )
 
-        if not isinstance(ground_truth, list):
+        if not isinstance(ground_truth, list) or len(ground_truth) == 0:
             return _longest_subsequence_fail(
-                agent_answer, answer_field, "'ground_truth' must be a list of tuples"
+                agent_answer,
+                answer_field,
+                "'ground_truth' must be a non-empty list of tuples/lists",
+                configuration_error=True,
+            )
+        if any(not isinstance(item, (list, tuple)) for item in ground_truth):
+            return _longest_subsequence_fail(
+                agent_answer,
+                answer_field,
+                "'ground_truth' elements must be tuples/lists",
+                configuration_error=True,
+            )
+        if any(len(item) == 0 for item in ground_truth):
+            return _longest_subsequence_fail(
+                agent_answer,
+                answer_field,
+                "'ground_truth' elements must not be empty",
+                configuration_error=True,
             )
 
         pass_threshold = _parse_pass_threshold(agent_answer, answer_field, config)
@@ -94,6 +143,12 @@ class LongestSubsequenceGrader(BinaryGrader):
                 agent_answer,
                 answer_field,
                 f"agent_answer.{answer_field!r} must be a list",
+            )
+        if any(not isinstance(item, (list, tuple)) for item in agent_list):
+            return _longest_subsequence_fail(
+                agent_answer,
+                answer_field,
+                f"agent_answer.{answer_field!r} elements must be tuples/lists",
             )
 
         try:

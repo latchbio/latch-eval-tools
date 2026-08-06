@@ -18,7 +18,12 @@ import pathlib
 
 import pytest
 
-from latch_eval_tools.graders import GRADER_REGISTRY, GraderResult, get_grader
+from latch_eval_tools.graders import (
+    GRADER_REGISTRY,
+    BinaryGrader,
+    GraderResult,
+    get_grader,
+)
 
 # Minimal-but-valid config per grader so each one reaches its own logic rather
 # than bailing out on a config error.
@@ -50,6 +55,26 @@ CONFIGS: dict[str, dict] = {
         "answer_field": "x",
     },
     "all_of": {
+        "children": [
+            {
+                "name": "c1",
+                "predicate": {"op": "equals", "arg": 1},
+                "role": "gate",
+                "answer_field": "x",
+            }
+        ]
+    },
+    "composite": {
+        "children": [
+            {
+                "name": "c1",
+                "predicate": {"op": "equals", "arg": 1},
+                "role": "gate",
+                "answer_field": "x",
+            }
+        ]
+    },
+    "average_of": {
         "children": [
             {
                 "name": "c1",
@@ -106,6 +131,8 @@ CORRECT_ANSWERS: dict[str, dict] = {
     "refusal_vocab": {"decision": "REFUSE"},
     "predicate_leaf": {"x": 1},
     "all_of": {"x": 1},
+    "composite": {"x": 1},
+    "average_of": {"x": 1},
     "list_match": {"rows": [{"id": "a", "v": 1}]},
     "dict_match": {"obj": {"k": 1}},
     "longest_subsequence": {"seq": [["a"]]},
@@ -116,6 +143,94 @@ CORRECT_ANSWERS: dict[str, dict] = {
 def test_every_registered_grader_is_covered() -> None:
     """A new grader must be added here, so it cannot skip these guarantees."""
     assert set(GRADER_REGISTRY) == set(CONFIGS) == set(CORRECT_ANSWERS)
+
+
+@pytest.mark.parametrize(
+    ("grader_type", "config"),
+    [
+        (
+            "predicate_leaf",
+            {
+                "role": [],
+                "answer_field": "x",
+                "predicate": {"op": "equals", "arg": 1},
+            },
+        ),
+        (
+            "average_of",
+            {
+                "children": [
+                    {
+                        "role": [],
+                        "answer_field": "x",
+                        "predicate": {"op": "equals", "arg": 1},
+                    }
+                ]
+            },
+        ),
+        (
+            "list_match",
+            {
+                "answer_field": "rows",
+                "match_key": "id",
+                "ground_truth": [
+                    {
+                        "id": "a",
+                        "fields": {
+                            "v": {
+                                "role": [],
+                                "predicate": {"op": "equals", "arg": 1},
+                            }
+                        },
+                    }
+                ],
+            },
+        ),
+        (
+            "dict_match",
+            {
+                "answer_field": "obj",
+                "ground_truth": {
+                    "k": {
+                        "role": [],
+                        "predicate": {"op": "equals", "arg": 1},
+                    }
+                },
+            },
+        ),
+        (
+            "dict_match",
+            {
+                "answer_field": "obj",
+                "ground_truth": {
+                    "k": {
+                        "role": "gate",
+                        "predicate": {"op": []},
+                    }
+                },
+            },
+        ),
+    ],
+)
+def test_unhashable_enum_configuration_fails_cleanly(
+    grader_type: str, config: dict
+) -> None:
+    result = get_grader(grader_type).evaluate_answer({}, config)
+
+    assert result.passed is False
+    assert result.score == 0.0
+    assert result.metrics.get("configuration_error")
+
+
+def test_list_match_malformed_nested_match_key_is_an_ordinary_miss() -> None:
+    result = get_grader("list_match").evaluate_answer(
+        {"rows": [{"id": {"a": 1, 2: [3]}, "v": 1}]},
+        CONFIGS["list_match"],
+    )
+
+    assert result.passed is False
+    assert result.score == 0.0
+    assert "configuration_error" not in result.metrics
 
 
 @pytest.mark.parametrize("grader_type", sorted(GRADER_REGISTRY))
@@ -252,7 +367,7 @@ class TestHardFailVetoZeroesTheScore:
         assert result.score == 0.0
         assert result.metrics["hard_fail_triggered"] == ["forbidden flag"]
 
-    def test_typed_predicate_leaf_additive_matches_bare_leaf_semantics(self) -> None:
+    def test_typed_predicate_leaf_additive_is_invalid(self) -> None:
         result = get_grader("all_of").evaluate_answer(
             {"quality": "best"},
             {
@@ -274,10 +389,9 @@ class TestHardFailVetoZeroesTheScore:
             },
         )
 
-        assert result.passed is True
-        assert result.metrics["scoring_total_score"] == 2.0
-        assert result.metrics["score_denominator"] == 2.0
-        assert result.score == 1.0
+        assert result.passed is False
+        assert result.score == 0.0
+        assert result.metrics["configuration_error"]
 
     def test_all_of_with_only_hard_fail_children_fails_closed(self) -> None:
         config = {
@@ -376,79 +490,819 @@ class TestHardFailVetoZeroesTheScore:
         assert missing.metrics["hard_fail_triggered"] == ["e.bad"]
 
 
-class TestAllOfPassRuleAllKeepsPartialScore:
-    """`pass_rule="all"` controls passing without discarding partial reward."""
+class TestAllOfStrictBinary:
+    REQUIRED_CHILDREN = [
+        {
+            "name": "c1",
+            "predicate": {"op": "equals", "arg": 1},
+            "role": "gate",
+            "answer_field": "a",
+        },
+        {
+            "name": "c2",
+            "predicate": {"op": "equals", "arg": 2},
+            "role": "gate",
+            "answer_field": "b",
+        },
+    ]
 
-    CONFIG = {
-        "pass_rule": "all",
-        "children": [
+    def test_one_failed_child_zeroes_composite(self) -> None:
+        result = get_grader("all_of").evaluate_answer(
+            {"a": 1, "b": 999}, {"children": self.REQUIRED_CHILDREN}
+        )
+
+        assert result.passed is False
+        assert result.score == 0.0
+        assert result.metrics["scoring_passed"] == 1
+        assert result.metrics["failed_children"] == ["c2"]
+
+    def test_all_children_pass_for_full_binary_credit(self) -> None:
+        result = get_grader("all_of").evaluate_answer(
+            {"a": 1, "b": 2},
+            {"pass_rule": "all", "children": self.REQUIRED_CHILDREN},
+        )
+
+        assert result.passed is True
+        assert result.score == 1.0
+        assert result.metrics["type"] == "all_of"
+
+    @pytest.mark.parametrize("grader_type", ["all_of", "average_of"])
+    def test_duplicate_child_names_are_configuration_errors(
+        self, grader_type: str
+    ) -> None:
+        children = [
             {
-                "name": "c1",
+                "name": "same",
+                "role": "gate",
+                "answer_field": field,
                 "predicate": {"op": "equals", "arg": 1},
-                "role": "gate",
-                "answer_field": "a",
-            },
+            }
+            for field in ("a", "b")
+        ]
+        result = get_grader(grader_type).evaluate_answer(
+            {"a": 1, "b": 1}, {"children": children}
+        )
+
+        assert result.passed is False
+        assert result.score == 0.0
+        assert result.metrics["configuration_error"]
+
+    def test_partial_inner_score_is_diagnostic_only(self) -> None:
+        result = get_grader("all_of").evaluate_answer(
+            {"a": 1.0, "b": 99.0},
             {
-                "name": "c2",
-                "predicate": {"op": "equals", "arg": 2},
-                "role": "gate",
-                "answer_field": "b",
+                "children": [
+                    {
+                        "type": "numeric_range",
+                        "config": {
+                            "ground_truth": {"a": 1.0, "b": 2.0},
+                            "ranges": {
+                                "a": {"min": 0.5, "max": 1.5},
+                                "b": {"min": 1.5, "max": 2.5},
+                            },
+                        },
+                    }
+                ]
             },
-        ],
-    }
+        )
 
-    def test_partial_pass_keeps_partial_score(self) -> None:
-        result = get_grader("all_of").evaluate_answer({"a": 1, "b": 999}, self.CONFIG)
-        assert not result.passed
-        assert result.score == 0.5
+        assert result.passed is False
+        assert result.score == 0.0
+        assert result.metrics["scoring_total_score"] == 0.5
+        assert result.field_scores == {"children[0].numeric_range": 0.5}
 
-    def test_failed_scalar_child_keeps_its_normalized_partial_score(self) -> None:
+    def test_child_pass_controls_binary_result_not_child_score(self) -> None:
         result = get_grader("all_of").evaluate_answer(
             {"quality": "partial"},
             {
-                "pass_rule": "all",
                 "children": [
                     {
                         "name": "quality",
                         "role": "gate",
                         "answer_field": "quality",
-                        "threshold": 2.0,
+                        "threshold": 1.0,
                         "predicate": {
                             "op": "weighted_label",
                             "table": {"partial": 1.0, "best": 2.0},
                             "default": 0.0,
                         },
                     }
+                ]
+            },
+        )
+
+        assert result.passed is True
+        assert result.score == 1.0
+        assert result.metrics["scoring_total_score"] == 1.0
+        assert result.metrics["score_denominator"] == 2.0
+
+    @pytest.mark.parametrize(
+        "extra_config",
+        [
+            {"pass_rule": "min_passing", "min_passing_children": 1},
+            {"pass_rule": "score_threshold", "score_threshold": 1.0},
+            {"min_passing_children": 1},
+        ],
+    )
+    def test_partial_pass_rules_are_configuration_errors(
+        self, extra_config: dict
+    ) -> None:
+        result = get_grader("all_of").evaluate_answer(
+            {"a": 1, "b": 2},
+            {**extra_config, "children": self.REQUIRED_CHILDREN},
+        )
+
+        assert result.passed is False
+        assert result.score == 0.0
+        assert result.metrics["configuration_error"]
+
+    def test_additive_predicate_child_is_invalid(self) -> None:
+        child = {**self.REQUIRED_CHILDREN[0], "role": "additive"}
+        result = get_grader("all_of").evaluate_answer({"a": 1}, {"children": [child]})
+
+        assert result.passed is False
+        assert result.score == 0.0
+        assert result.metrics["configuration_error"]
+
+    def test_typed_child_outer_role_is_invalid(self) -> None:
+        result = get_grader("all_of").evaluate_answer(
+            {"answer": "A"},
+            {
+                "children": [
+                    {
+                        "type": "multiple_choice",
+                        "role": "gate",
+                        "config": {"correct_answer": "A"},
+                    }
+                ]
+            },
+        )
+
+        assert result.passed is False
+        assert result.score == 0.0
+        assert result.metrics["configuration_error"]
+
+    def test_nested_failure_zeroes_outer_composite(self) -> None:
+        nested = {"type": "all_of", "config": {"children": self.REQUIRED_CHILDREN}}
+        result = get_grader("all_of").evaluate_answer(
+            {"a": 1, "b": 999, "outer": True},
+            {
+                "children": [
+                    nested,
+                    {
+                        "name": "outer",
+                        "role": "gate",
+                        "answer_field": "outer",
+                        "predicate": {"op": "equals", "arg": True},
+                    },
+                ]
+            },
+        )
+
+        assert result.passed is False
+        assert result.score == 0.0
+
+    def test_composite_alias_is_also_strict_binary(self) -> None:
+        result = get_grader("composite").evaluate_answer(
+            {"a": 1, "b": 999}, {"children": self.REQUIRED_CHILDREN}
+        )
+
+        assert result.passed is False
+        assert result.score == 0.0
+
+    def test_unnamed_typed_children_keep_distinct_diagnostics(self) -> None:
+        result = get_grader("all_of").evaluate_answer(
+            {"a": 1, "b": 2},
+            {
+                "children": [
+                    {
+                        "type": "numeric_range",
+                        "config": {
+                            "ground_truth": {"a": 1},
+                            "ranges": {"a": {"min": 0, "max": 2}},
+                        },
+                    },
+                    {
+                        "type": "numeric_range",
+                        "config": {
+                            "ground_truth": {"b": 2},
+                            "ranges": {"b": {"min": 1, "max": 3}},
+                        },
+                    },
+                ]
+            },
+        )
+
+        assert result.field_scores == {
+            "children[0].numeric_range": 1.0,
+            "children[1].numeric_range": 1.0,
+        }
+
+
+class TestAverageOfPartialCredit:
+    TYPED_CHILDREN = [
+        {
+            "type": "numeric_range",
+            "config": {
+                "ground_truth": {field: expected},
+                "ranges": {field: {"min": expected - 0.5, "max": expected + 0.5}},
+            },
+        }
+        for field, expected in (("a", 1), ("b", 2), ("c", 3), ("d", 4))
+    ]
+    THREE_OF_FOUR = {"a": 1, "b": 2, "c": 3, "d": 999}
+
+    def test_min_passing_three_of_four_keeps_partial_credit(self) -> None:
+        result = get_grader("average_of").evaluate_answer(
+            self.THREE_OF_FOUR,
+            {
+                "pass_rule": "min_passing",
+                "min_passing_children": 3,
+                "children": self.TYPED_CHILDREN,
+            },
+        )
+
+        assert result.passed is True
+        assert result.score == pytest.approx(0.75)
+        assert result.metrics["type"] == "average_of"
+        assert result.metrics["scoring_passed"] == 3
+        assert result.metrics["failed_children"] == ["children[3].numeric_range"]
+        assert result.field_scores == {
+            "children[0].numeric_range": 1.0,
+            "children[1].numeric_range": 1.0,
+            "children[2].numeric_range": 1.0,
+            "children[3].numeric_range": 0.0,
+        }
+
+    def test_failed_score_threshold_keeps_normalized_score(self) -> None:
+        result = get_grader("average_of").evaluate_answer(
+            self.THREE_OF_FOUR,
+            {
+                "pass_rule": "score_threshold",
+                "score_threshold": 3.5,
+                "children": self.TYPED_CHILDREN,
+            },
+        )
+
+        assert result.passed is False
+        assert result.metrics["scoring_total_score"] == 3.0
+        assert result.metrics["score_denominator"] == 4.0
+        assert result.score == pytest.approx(0.75)
+
+    def test_default_all_rule_keeps_score_when_binary_pass_is_false(self) -> None:
+        result = get_grader("average_of").evaluate_answer(
+            self.THREE_OF_FOUR, {"children": self.TYPED_CHILDREN}
+        )
+
+        assert result.passed is False
+        assert result.score == pytest.approx(0.75)
+
+    def test_hard_fail_veto_zeroes_partial_credit(self) -> None:
+        result = get_grader("average_of").evaluate_answer(
+            {**self.THREE_OF_FOUR, "cheated": True},
+            {
+                "pass_rule": "min_passing",
+                "min_passing_children": 3,
+                "children": [
+                    *self.TYPED_CHILDREN,
+                    {
+                        "name": "forbidden shortcut",
+                        "role": "hard_fail",
+                        "answer_field": "cheated",
+                        "predicate": {"op": "equals", "arg": True},
+                    },
                 ],
             },
         )
 
-        assert not result.passed
-        assert result.metrics["scoring_total_score"] == 1.0
-        assert result.metrics["score_denominator"] == 2.0
-        assert result.score == 0.5
-
-    def test_zero_pass_scores_zero(self) -> None:
-        result = get_grader("all_of").evaluate_answer({"a": 999, "b": 999}, self.CONFIG)
-        assert not result.passed
+        assert result.passed is False
         assert result.score == 0.0
+        assert result.metrics["hard_fail_triggered"] == ["forbidden shortcut"]
 
-    def test_all_pass_scores_full(self) -> None:
-        result = get_grader("all_of").evaluate_answer({"a": 1, "b": 2}, self.CONFIG)
-        assert result.passed
+    def test_unavailable_hard_fail_zeroes_partial_credit(self) -> None:
+        result = get_grader("average_of").evaluate_answer(
+            {"a": 1, "flag": True},
+            {
+                "children": [
+                    self.TYPED_CHILDREN[0],
+                    {
+                        "name": "broken veto",
+                        "role": "hard_fail",
+                        "answer_field": "flag",
+                        "predicate": {"op": "not_a_real_op"},
+                    },
+                ]
+            },
+        )
+
+        assert result.passed is False
+        assert result.score == 0.0
+        assert result.metrics["hard_fail_unavailable"] == ["broken veto"]
+
+    def test_nested_average_can_satisfy_strict_all_of(self) -> None:
+        result = get_grader("all_of").evaluate_answer(
+            {**self.THREE_OF_FOUR, "reported": True},
+            {
+                "children": [
+                    {
+                        "type": "average_of",
+                        "config": {
+                            "pass_rule": "min_passing",
+                            "min_passing_children": 3,
+                            "children": self.TYPED_CHILDREN,
+                        },
+                    },
+                    {
+                        "name": "reported",
+                        "role": "gate",
+                        "answer_field": "reported",
+                        "predicate": {"op": "equals", "arg": True},
+                    },
+                ]
+            },
+        )
+
+        assert result.passed is True
         assert result.score == 1.0
+        assert result.metrics["scoring_total_score"] == pytest.approx(1.75)
 
-    def test_pass_rule_all_is_the_default(self) -> None:
-        config = {k: v for k, v in self.CONFIG.items() if k != "pass_rule"}
-        result = get_grader("all_of").evaluate_answer({"a": 1, "b": 999}, config)
-        assert not result.passed
-        assert result.score == 0.5
+    def test_nested_hard_fail_bubbles_into_strict_all_of(self) -> None:
+        result = get_grader("all_of").evaluate_answer(
+            {"a": 1, "cheated": True},
+            {
+                "children": [
+                    {
+                        "type": "average_of",
+                        "config": {
+                            "children": [
+                                self.TYPED_CHILDREN[0],
+                                {
+                                    "name": "forbidden shortcut",
+                                    "role": "hard_fail",
+                                    "answer_field": "cheated",
+                                    "predicate": {"op": "equals", "arg": True},
+                                },
+                            ]
+                        },
+                    }
+                ]
+            },
+        )
 
-    def test_score_threshold_still_pays_partial_credit(self) -> None:
-        config = {**self.CONFIG, "pass_rule": "score_threshold", "score_threshold": 5.0}
-        result = get_grader("all_of").evaluate_answer({"a": 1, "b": 999}, config)
-        assert not result.passed
-        assert result.score == 0.5
+        assert result.passed is False
+        assert result.score == 0.0
+        assert result.metrics["hard_fail_triggered"] == [
+            {
+                "child": "children[0].average_of",
+                "children": ["forbidden shortcut"],
+            }
+        ]
+
+    def test_additive_predicate_leaf_uses_its_declared_score_max(self) -> None:
+        result = get_grader("average_of").evaluate_answer(
+            {"quality": "partial"},
+            {
+                "children": [
+                    {
+                        "type": "predicate_leaf",
+                        "config": {
+                            "name": "quality",
+                            "role": "additive",
+                            "answer_field": "quality",
+                            "predicate": {
+                                "op": "weighted_label",
+                                "table": {"partial": 1.0, "best": 2.0},
+                                "default": 0.0,
+                            },
+                        },
+                    }
+                ]
+            },
+        )
+
+        assert result.passed is True
+        assert result.score == pytest.approx(0.5)
+        assert result.metrics["score_denominator"] == 2.0
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            {"children": []},
+            {
+                "children": [
+                    {
+                        "role": "hard_fail",
+                        "predicate": {"op": "equals", "arg": True},
+                    }
+                ]
+            },
+            {
+                "pass_rule": "min_passing",
+                "children": TYPED_CHILDREN,
+            },
+            {
+                "pass_rule": "all",
+                "min_passing_children": 1,
+                "children": TYPED_CHILDREN,
+            },
+            {
+                "pass_rule": "min_passing",
+                "min_passing_children": 1,
+                "score_threshold": 1.0,
+                "children": TYPED_CHILDREN,
+            },
+            {
+                "pass_rule": "score_threshold",
+                "score_threshold": float("nan"),
+                "children": TYPED_CHILDREN,
+            },
+            {
+                "pass_rule": "score_threshold",
+                "score_threshold": -1.0,
+                "children": TYPED_CHILDREN,
+            },
+            {
+                "children": [
+                    {
+                        "type": "numeric_range",
+                        "role": "gate",
+                        "config": TYPED_CHILDREN[0]["config"],
+                    }
+                ]
+            },
+            {
+                "children": [
+                    {
+                        "role": "score",
+                        "predicate": {"op": "equals", "arg": 1},
+                        "answer_field": "a",
+                    }
+                ]
+            },
+        ],
+    )
+    def test_invalid_configurations_fail_closed(self, config: dict) -> None:
+        result = get_grader("average_of").evaluate_answer({"a": 1}, config)
+
+        assert result.passed is False
+        assert result.score == 0.0
+        assert result.metrics["configuration_error"]
+
+    def test_child_configuration_error_zeroes_other_credit(self) -> None:
+        result = get_grader("average_of").evaluate_answer(
+            {"a": 1, "answer": "A"},
+            {
+                "children": [
+                    self.TYPED_CHILDREN[0],
+                    {"type": "multiple_choice", "config": {}},
+                ]
+            },
+        )
+
+        assert result.passed is False
+        assert result.score == 0.0
+        assert result.metrics["misconfigured_children"] == [
+            "children[1].multiple_choice"
+        ]
+
+    def test_invalid_predicate_zeroes_other_credit(self) -> None:
+        result = get_grader("average_of").evaluate_answer(
+            {"a": 1, "quality": "good"},
+            {
+                "pass_rule": "min_passing",
+                "min_passing_children": 1,
+                "children": [
+                    self.TYPED_CHILDREN[0],
+                    {
+                        "name": "broken predicate",
+                        "role": "gate",
+                        "answer_field": "quality",
+                        "predicate": {"op": "not_a_real_op"},
+                    },
+                ],
+            },
+        )
+
+        assert result.passed is False
+        assert result.score == 0.0
+        assert result.metrics["configuration_error"]
+        assert result.metrics["misconfigured_children"] == ["broken predicate"]
+
+    def test_child_system_error_zeroes_other_credit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class RaisingGrader(BinaryGrader):
+            def evaluate_answer(self, agent_answer: dict, config: dict) -> GraderResult:
+                raise ValueError("synthetic grader failure")
+
+        monkeypatch.setitem(GRADER_REGISTRY, "raising_for_test", RaisingGrader)
+        result = get_grader("average_of").evaluate_answer(
+            {"a": 1},
+            {
+                "children": [
+                    self.TYPED_CHILDREN[0],
+                    {"type": "raising_for_test", "config": {}},
+                ]
+            },
+        )
+
+        assert result.passed is False
+        assert result.score == 0.0
+        assert result.metrics["grader_system_error"] is True
+        assert result.metrics["system_error_children"] == [
+            "children[1].raising_for_test"
+        ]
+
+    @pytest.mark.parametrize("grader_type", ["all_of", "average_of"])
+    def test_malformed_child_metrics_are_a_configuration_error(
+        self, monkeypatch: pytest.MonkeyPatch, grader_type: str
+    ) -> None:
+        class MalformedMetricsGrader(BinaryGrader):
+            def evaluate_answer(self, agent_answer: dict, config: dict) -> GraderResult:
+                return GraderResult(
+                    passed=True,
+                    metrics=None,  # type: ignore[arg-type]
+                    reasoning="synthetic malformed result",
+                    agent_answer=agent_answer,
+                    score=1.0,
+                )
+
+        monkeypatch.setitem(
+            GRADER_REGISTRY, "malformed_metrics_for_test", MalformedMetricsGrader
+        )
+        result = get_grader(grader_type).evaluate_answer(
+            {"answer": "A"},
+            {"children": [{"type": "malformed_metrics_for_test", "config": {}}]},
+        )
+
+        assert result.passed is False
+        assert result.score == 0.0
+        assert result.metrics["configuration_error"]
+        assert result.metrics["misconfigured_children"] == [
+            "children[0].malformed_metrics_for_test"
+        ]
+
+    @pytest.mark.parametrize("grader_type", ["all_of", "average_of"])
+    def test_child_grader_error_metric_is_a_system_error(
+        self, monkeypatch: pytest.MonkeyPatch, grader_type: str
+    ) -> None:
+        class ErrorMetricGrader(BinaryGrader):
+            def evaluate_answer(self, agent_answer: dict, config: dict) -> GraderResult:
+                return GraderResult(
+                    passed=True,
+                    metrics={"grader_error": "synthetic failure"},
+                    reasoning="synthetic error result",
+                    agent_answer=agent_answer,
+                    score=1.0,
+                )
+
+        monkeypatch.setitem(GRADER_REGISTRY, "error_metric_for_test", ErrorMetricGrader)
+        result = get_grader(grader_type).evaluate_answer(
+            {"answer": "A"},
+            {"children": [{"type": "error_metric_for_test", "config": {}}]},
+        )
+
+        assert result.passed is False
+        assert result.score == 0.0
+        assert result.metrics["grader_system_error"] is True
+        assert result.metrics["system_error_children"] == [
+            "children[0].error_metric_for_test"
+        ]
+
+    def test_nested_all_of_configuration_error_cannot_be_outvoted(self) -> None:
+        result = get_grader("average_of").evaluate_answer(
+            {"answer": "A", "value": 1},
+            {
+                "pass_rule": "min_passing",
+                "min_passing_children": 1,
+                "children": [
+                    {
+                        "type": "multiple_choice",
+                        "config": {"correct_answer": "A"},
+                    },
+                    {
+                        "type": "all_of",
+                        "config": {
+                            "children": [
+                                {
+                                    "name": "broken predicate",
+                                    "role": "gate",
+                                    "answer_field": "value",
+                                    "predicate": {"op": "not_a_real_op"},
+                                }
+                            ]
+                        },
+                    },
+                ],
+            },
+        )
+
+        assert result.passed is False
+        assert result.score == 0.0
+        assert result.metrics["configuration_error"]
+        assert result.metrics["misconfigured_children"] == ["children[1].all_of"]
+
+    def test_malformed_predicate_answer_remains_an_ordinary_miss(self) -> None:
+        result = get_grader("average_of").evaluate_answer(
+            {"labels": 123, "answer": "A"},
+            {
+                "pass_rule": "min_passing",
+                "min_passing_children": 1,
+                "children": [
+                    {
+                        "name": "label overlap",
+                        "role": "gate",
+                        "answer_field": "labels",
+                        "predicate": {"op": "f1", "expected": ["A"]},
+                    },
+                    {
+                        "type": "multiple_choice",
+                        "config": {"correct_answer": "A"},
+                    },
+                ],
+            },
+        )
+
+        assert result.passed is True
+        assert result.score == pytest.approx(0.5)
+        assert "configuration_error" not in result.metrics
+        assert "grader_system_error" not in result.metrics
+
+    def test_invalid_predicate_answer_field_cannot_be_outvoted(self) -> None:
+        result = get_grader("average_of").evaluate_answer(
+            {"answer": "A"},
+            {
+                "pass_rule": "min_passing",
+                "min_passing_children": 1,
+                "children": [
+                    {
+                        "type": "multiple_choice",
+                        "config": {"correct_answer": "A"},
+                    },
+                    {
+                        "name": "broken binding",
+                        "role": "gate",
+                        "answer_field": [],
+                        "predicate": {"op": "equals", "arg": 1},
+                    },
+                ],
+            },
+        )
+
+        assert result.passed is False
+        assert result.score == 0.0
+        assert result.metrics["configuration_error"]
+        assert result.metrics["misconfigured_children"] == ["broken binding"]
+
+    @pytest.mark.parametrize("grader_type", ["all_of", "average_of"])
+    def test_misconfigured_hard_fail_is_unavailable_not_triggered(
+        self, grader_type: str
+    ) -> None:
+        result = get_grader(grader_type).evaluate_answer(
+            {"answer": "A", "shortcut": True},
+            {
+                "children": [
+                    {
+                        "type": "multiple_choice",
+                        "config": {"correct_answer": "A"},
+                    },
+                    {
+                        "name": "broken veto",
+                        "role": "hard_fail",
+                        "answer_field": "shortcut",
+                        "predicate": {"op": "not_a_real_op"},
+                    },
+                ]
+            },
+        )
+
+        assert result.passed is False
+        assert result.score == 0.0
+        assert result.metrics["configuration_error"]
+        assert result.metrics["misconfigured_children"] == ["broken veto"]
+        assert result.metrics["hard_fail_unavailable"] == ["broken veto"]
+        assert result.metrics["hard_fail_triggered"] == []
+
+    @pytest.mark.parametrize("grader_type", ["all_of", "average_of"])
+    def test_non_object_composite_config_fails_cleanly(self, grader_type: str) -> None:
+        result = get_grader(grader_type).evaluate_answer(
+            {"answer": "A"},
+            [],  # type: ignore[arg-type]
+        )
+
+        assert result.passed is False
+        assert result.score == 0.0
+        assert result.metrics["configuration_error"]
+
+    def test_child_configuration_error_cannot_be_outvoted(self) -> None:
+        result = get_grader("average_of").evaluate_answer(
+            {"answer": "A"},
+            {
+                "pass_rule": "min_passing",
+                "min_passing_children": 1,
+                "children": [
+                    {
+                        "type": "multiple_choice",
+                        "config": {"correct_answer": "A"},
+                    },
+                    {"type": "numeric_range", "config": {}},
+                ],
+            },
+        )
+
+        assert result.passed is False
+        assert result.score == 0.0
+        assert result.metrics["scoring_count"] == 1
+        assert result.metrics["misconfigured_children"] == ["children[1].numeric_range"]
+
+    def test_zero_capacity_scoring_child_is_a_configuration_error(self) -> None:
+        average = {
+            "type": "average_of",
+            "config": {
+                "children": [
+                    {
+                        "name": "zero-capacity score",
+                        "role": "additive",
+                        "answer_field": "quality",
+                        "predicate": {
+                            "op": "weighted_label",
+                            "table": {"none": 0.0},
+                            "default": 0.0,
+                        },
+                    }
+                ]
+            },
+        }
+
+        inner = get_grader("average_of").evaluate_answer(
+            {"quality": "none"}, average["config"]
+        )
+        outer = get_grader("all_of").evaluate_answer(
+            {"quality": "none"}, {"children": [average]}
+        )
+
+        assert inner.passed is False
+        assert inner.score == 0.0
+        assert inner.metrics["configuration_error"]
+        assert outer.passed is False
+        assert outer.score == 0.0
+
+    def test_gate_only_list_match_cannot_satisfy_average_min_passing(self) -> None:
+        gate_only_list_match = {
+            "type": "list_match",
+            "config": {
+                "answer_field": "rows",
+                "match_key": "id",
+                "tuple_pass_min": 1,
+                "ground_truth": [
+                    {
+                        "id": "expected",
+                        "fields": {
+                            "value": {
+                                "role": "gate",
+                                "predicate": {"op": "equals", "arg": 1},
+                            }
+                        },
+                    }
+                ],
+            },
+        }
+        average = {
+            "type": "average_of",
+            "config": {
+                "pass_rule": "min_passing",
+                "min_passing_children": 1,
+                "children": [
+                    gate_only_list_match,
+                    {
+                        "type": "multiple_choice",
+                        "config": {"correct_answer": "B"},
+                    },
+                ],
+            },
+        }
+        answer = {
+            "rows": [{"id": "expected", "value": 1}],
+            "answer": "A",
+        }
+
+        strict_gate = get_grader("all_of").evaluate_answer(
+            answer, {"children": [gate_only_list_match]}
+        )
+        inner = get_grader("average_of").evaluate_answer(answer, average["config"])
+        outer = get_grader("all_of").evaluate_answer(answer, {"children": [average]})
+
+        assert strict_gate.passed is True
+        assert strict_gate.score == 1.0
+        assert strict_gate.metrics["score_denominator"] == 0.0
+        assert "configuration_error" not in strict_gate.metrics
+        assert inner.passed is False
+        assert inner.score == 0.0
+        assert inner.metrics["configuration_error"]
+        assert inner.metrics["misconfigured_children"] == ["children[0].list_match"]
+        assert outer.passed is False
+        assert outer.score == 0.0
+        assert outer.metrics["configuration_error"]
 
 
 class TestDictMatchOptionalKeys:
@@ -802,10 +1656,8 @@ class TestPartialAnswersScoreTheSameSkippedOrWrong:
         )
         assert skipped.score == wrong.score == pytest.approx(1 / 3)
 
-    def test_all_of_score_threshold(self) -> None:
+    def test_all_of_omission_and_wrong_answer_both_score_zero(self) -> None:
         config = {
-            "pass_rule": "score_threshold",
-            "score_threshold": 3.0,
             "children": [
                 {
                     "name": name,
@@ -819,7 +1671,7 @@ class TestPartialAnswersScoreTheSameSkippedOrWrong:
         grader = get_grader("all_of")
         skipped = grader.evaluate_answer({"a": 1}, config)
         wrong = grader.evaluate_answer({"a": 1, "b": 9, "c": 9}, config)
-        assert skipped.score == wrong.score == pytest.approx(1 / 3)
+        assert skipped.score == wrong.score == 0.0
 
     def test_longest_subsequence(self) -> None:
         config = {"answer_field": "seq", "ground_truth": [["a"], ["b"], ["c"]]}

@@ -2,6 +2,7 @@ from .base import BinaryGrader, GraderResult, get_nested_value, normalize_score
 from .completion import FinishedFileGrader
 from .composite import (
     AllOfGrader,
+    AverageOfGrader,
     DictMatchGrader,
     ListMatchGrader,
     evaluate_composite_predicate_leaf,
@@ -46,6 +47,8 @@ GRADER_REGISTRY = {
     "refusal_vocab": RefusalVocabGrader,
     "predicate_leaf": PredicateLeafGrader,
     "all_of": AllOfGrader,
+    "composite": AllOfGrader,
+    "average_of": AverageOfGrader,
     "list_match": ListMatchGrader,
     "dict_match": DictMatchGrader,
     "longest_subsequence": LongestSubsequenceGrader,
@@ -81,6 +84,7 @@ __all__ = [
     "RefusalVocabGrader",
     "PredicateLeafGrader",
     "AllOfGrader",
+    "AverageOfGrader",
     "ListMatchGrader",
     "DictMatchGrader",
     "evaluate_composite_predicate_leaf",
