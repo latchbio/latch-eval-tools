@@ -3,11 +3,12 @@ predicate-leaves and nested composites."""
 
 from typing import Any
 
-from .base import MISSING, BinaryGrader, GraderResult
+from .base import MISSING, BinaryGrader, GraderResult, normalize_score
 from .predicate import (
     SCALAR_OPS,
     _apply_role,
     evaluate_predicate,
+    predicate_score_max,
     resolve_answer_field,
 )
 
@@ -35,57 +36,12 @@ def _normalize_match_key(value: Any, mode: str) -> Any:
     return _hashable(value)
 
 
-def _as_numeric(value: Any) -> float | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int | float):
-        return float(value)
-    return None
-
-
-def _predicate_score_max(predicate: Any) -> float:
-    if not isinstance(predicate, dict):
-        return 1.0
-
-    if predicate.get("op") != "weighted_label":
-        return 1.0
-
-    scores: list[float] = []
-    table = predicate.get("table")
-    if isinstance(table, dict):
-        for raw_score in table.values():
-            score = _as_numeric(raw_score)
-            if score is not None:
-                scores.append(score)
-
-    default_score = _as_numeric(predicate.get("default", 0))
-    if default_score is not None:
-        scores.append(default_score)
-
-    positive_scores = [score for score in scores if score > 0.0]
-    if not positive_scores:
-        return 0.0
-    return max(positive_scores)
-
-
 def _leaf_score_max(leaf: Any) -> float:
     if not isinstance(leaf, dict):
         return 0.0
     if leaf.get("role") == "hard_fail":
         return 0.0
-    return _predicate_score_max(leaf.get("predicate"))
-
-
-def _normalize_score(score: float, denominator: float) -> float:
-    if denominator <= 0.0:
-        return 0.0
-
-    normalized = score / denominator
-    if normalized < 0.0:
-        return 0.0
-    if normalized > 1.0:
-        return 1.0
-    return normalized
+    return predicate_score_max(leaf.get("predicate"))
 
 
 def _list_match_additive_score_denominator(gt_entries: Any) -> float:
@@ -158,7 +114,7 @@ def _evaluate_leaf(leaf: dict, value: Any) -> tuple[str, bool, float, float, str
 
     try:
         raw = evaluate_predicate(predicate, value)
-    except (ValueError, TypeError) as exc:
+    except (KeyError, TypeError, ValueError) as exc:
         return (
             kind,
             False,
@@ -188,15 +144,38 @@ def _evaluate_leaf(leaf: dict, value: Any) -> tuple[str, bool, float, float, str
     )
 
 
+def evaluate_composite_predicate_leaf(agent_answer: dict, config: dict) -> GraderResult:
+    """Evaluate a predicate leaf with composite roles, including ``additive``."""
+
+    value = _bind_field(agent_answer, config.get("answer_field"))
+    kind, passed, score, score_max, label, info = _evaluate_leaf(config, value)
+    return GraderResult(
+        passed=passed,
+        metrics={"kind": kind, "name": label, **info},
+        reasoning=f"Composite predicate leaf {label!r}: {'PASS' if passed else 'FAIL'}",
+        agent_answer=agent_answer,
+        score=score,
+        field_scores={label: score},
+        score_max=score_max,
+    )
+
+
 def _evaluate_all_of_child(
     child: Any, agent_answer: Any
 ) -> tuple[str, bool, float, float, str, dict]:
     """Dispatch one ``all_of`` child: bare leaf vs composite envelope."""
     if _is_leaf(child):
-        value = _bind_field(agent_answer, child.get("answer_field"))
-        return _evaluate_leaf(child, value)
+        result = evaluate_composite_predicate_leaf(agent_answer, child)
+        return (
+            "hard_fail" if child.get("role") == "hard_fail" else "scoring",
+            result.passed,
+            result.score,
+            result.score_max,
+            str(result.metrics["name"]),
+            result.metrics,
+        )
 
-    from . import get_grader  # noqa: PLC0415 -- lazy to avoid circular import
+    from . import get_grader  # Lazy import is required to avoid a cycle.
 
     child_type = child.get("type") if isinstance(child, dict) else None
     child_config = child.get("config", {}) if isinstance(child, dict) else {}
@@ -209,18 +188,28 @@ def _evaluate_all_of_child(
             "?",
             {"error": "composite child missing 'type' and not a bare predicate-leaf"},
         )
+    if child_type == "predicate_leaf" and isinstance(child_config, dict):
+        sub = evaluate_composite_predicate_leaf(agent_answer, child_config)
+        label = str(sub.metrics["name"])
+        kind = "hard_fail" if child_config.get("role") == "hard_fail" else "scoring"
+        return (
+            kind,
+            sub.passed,
+            sub.score,
+            sub.score_max,
+            label,
+            sub.metrics,
+        )
+
     try:
         sub = get_grader(child_type).evaluate_answer(agent_answer, child_config)
     except (ValueError, TypeError) as exc:
         return "scoring", False, 0.0, 1.0, child_type, {"error": str(exc)}
-    score_max = 1.0
-    if child_type == "predicate_leaf" and isinstance(child_config, dict):
-        score_max = _leaf_score_max(child_config)
     return (
         "scoring",
         sub.passed,
         sub.score,
-        score_max,
+        sub.score_max,
         child_type,
         {
             "sub_metrics": sub.metrics,
@@ -274,20 +263,15 @@ class AllOfGrader(BinaryGrader):
         else:
             scoring_ok = False
 
-        # Reward is read from `score`, so a veto has to zero the score and not
-        # only flip `passed`.
-        #
-        # `pass_rule="all"` is a strict AND gate: unless every scoring child
-        # passes there is no partial credit. Paying the mean-of-children score
-        # here lets a partial (or zero-work) answer collect fractional reward
-        # even though the composite is failing, so gate the score on
-        # `scoring_ok` for this rule as well.
+        # `pass_rule` controls the binary `passed` result, independently of the
+        # partial reward carried by `score`. A hard-fail veto must zero both,
+        # while an ordinary failed scoring child still contributes its partial
+        # result to the normalized aggregate.
         no_scoring_children = scoring_count == 0
-        strict_all_failing = pass_rule == "all" and not scoring_ok
-        if no_scoring_children or veto or strict_all_failing:
+        if no_scoring_children or veto:
             score = 0.0
         else:
-            score = _normalize_score(scoring_total_score, score_denominator)
+            score = normalize_score(scoring_total_score, score_denominator)
 
         # A composite with only hard_fail children can express a veto but never a
         # reward, so any answer -- including an empty one -- would otherwise earn
@@ -304,7 +288,7 @@ class AllOfGrader(BinaryGrader):
                 "score_denominator": score_denominator,
                 "hard_fail_triggered": [name for p, name, _ in hard_fails if not p],
                 **(
-                    {"composite_error": "all_of has no scoring children"}
+                    {"configuration_error": "all_of has no scoring children"}
                     if no_scoring_children
                     else {}
                 ),
@@ -445,7 +429,7 @@ class ListMatchGrader(BinaryGrader):
         score_denominator = _list_match_additive_score_denominator(
             list(gt_by_key.values())
         )
-        score = 0.0 if veto else _normalize_score(additive_score, score_denominator)
+        score = 0.0 if veto else normalize_score(additive_score, score_denominator)
 
         return GraderResult(
             passed=passed,
@@ -460,7 +444,9 @@ class ListMatchGrader(BinaryGrader):
                 "n_tuples_evaluated": len(agent_list),
                 "hard_fail_triggered": hard_fail_triggered,
                 **(
-                    {"composite_error": "answer matched none of the ground-truth entries"}
+                    {
+                        "composite_error": "answer matched none of the ground-truth entries"
+                    }
                     if nothing_graded
                     else {}
                 ),
@@ -590,7 +576,7 @@ class DictMatchGrader(BinaryGrader):
         if veto or nothing_graded:
             score = 0.0
         else:
-            score = _normalize_score(raw_score, score_denominator)
+            score = normalize_score(raw_score, score_denominator)
         passed = all_pass and not veto and not nothing_graded
 
         return GraderResult(
@@ -611,9 +597,7 @@ class DictMatchGrader(BinaryGrader):
                     else {}
                 ),
                 **(
-                    {
-                        "all_keys_required_ignored": "omitted keys are graded as failures"
-                    }
+                    {"all_keys_required_ignored": "omitted keys are graded as failures"}
                     if not all_keys_required
                     else {}
                 ),

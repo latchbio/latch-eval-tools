@@ -1,7 +1,6 @@
 """Regression tests for grader fail-closed behaviour.
 
-Reward is read from ``GraderResult.score``, not ``passed`` (the Taiga harness
-weights ``score`` at 1.0 and ``passed`` at 0.0). Any code path that returns
+``GraderResult.score`` is the reward-bearing value. Any code path that returns
 ``passed=False`` without an explicit ``score`` therefore silently awards full
 credit. These tests pin that behaviour for every registered grader so the bug
 cannot reappear in a new grader or a new early-return branch.
@@ -149,7 +148,10 @@ def test_correct_answer_scores_full_credit(grader_type: str) -> None:
 
 
 def test_grader_result_score_default_is_fail_closed() -> None:
-    assert GraderResult(passed=False, metrics={}, reasoning="", agent_answer={}).score == 0.0
+    assert (
+        GraderResult(passed=False, metrics={}, reasoning="", agent_answer={}).score
+        == 0.0
+    )
 
 
 def test_no_grader_result_omits_an_explicit_score() -> None:
@@ -224,6 +226,59 @@ class TestHardFailVetoZeroesTheScore:
         assert result.passed
         assert result.score == 1.0
 
+    def test_typed_predicate_leaf_hard_fail_vetoes(self) -> None:
+        result = get_grader("all_of").evaluate_answer(
+            {"answer": "A", "flag": "forbidden"},
+            {
+                "children": [
+                    {
+                        "type": "multiple_choice",
+                        "config": {"correct_answer": "A"},
+                    },
+                    {
+                        "type": "predicate_leaf",
+                        "config": {
+                            "name": "forbidden flag",
+                            "role": "hard_fail",
+                            "answer_field": "flag",
+                            "predicate": {"op": "equals", "arg": "forbidden"},
+                        },
+                    },
+                ]
+            },
+        )
+
+        assert not result.passed
+        assert result.score == 0.0
+        assert result.metrics["hard_fail_triggered"] == ["forbidden flag"]
+
+    def test_typed_predicate_leaf_additive_matches_bare_leaf_semantics(self) -> None:
+        result = get_grader("all_of").evaluate_answer(
+            {"quality": "best"},
+            {
+                "children": [
+                    {
+                        "type": "predicate_leaf",
+                        "config": {
+                            "name": "quality score",
+                            "role": "additive",
+                            "answer_field": "quality",
+                            "predicate": {
+                                "op": "weighted_label",
+                                "table": {"partial": 1.0, "best": 2.0},
+                                "default": 0.0,
+                            },
+                        },
+                    }
+                ]
+            },
+        )
+
+        assert result.passed is True
+        assert result.metrics["scoring_total_score"] == 2.0
+        assert result.metrics["score_denominator"] == 2.0
+        assert result.score == 1.0
+
     def test_all_of_with_only_hard_fail_children_fails_closed(self) -> None:
         config = {
             "children": [
@@ -241,7 +296,7 @@ class TestHardFailVetoZeroesTheScore:
             result = get_grader("all_of").evaluate_answer(answer, config)
             assert not result.passed
             assert result.score == 0.0
-            assert result.metrics.get("composite_error")
+            assert result.metrics.get("configuration_error")
 
     def test_list_match_hard_fail_vetoes(self) -> None:
         config = {
@@ -321,8 +376,8 @@ class TestHardFailVetoZeroesTheScore:
         assert missing.metrics["hard_fail_triggered"] == ["e.bad"]
 
 
-class TestAllOfPassRuleAllGatesScore:
-    """`pass_rule="all"` must pay no partial credit unless every child passes."""
+class TestAllOfPassRuleAllKeepsPartialScore:
+    """`pass_rule="all"` controls passing without discarding partial reward."""
 
     CONFIG = {
         "pass_rule": "all",
@@ -342,19 +397,39 @@ class TestAllOfPassRuleAllGatesScore:
         ],
     }
 
-    def test_partial_pass_scores_zero(self) -> None:
-        # One of two children passes: the mean-of-children would be 0.5, but a
-        # strict AND gate must pay nothing until the composite passes.
-        result = get_grader("all_of").evaluate_answer(
-            {"a": 1, "b": 999}, self.CONFIG
-        )
+    def test_partial_pass_keeps_partial_score(self) -> None:
+        result = get_grader("all_of").evaluate_answer({"a": 1, "b": 999}, self.CONFIG)
         assert not result.passed
-        assert result.score == 0.0
+        assert result.score == 0.5
+
+    def test_failed_scalar_child_keeps_its_normalized_partial_score(self) -> None:
+        result = get_grader("all_of").evaluate_answer(
+            {"quality": "partial"},
+            {
+                "pass_rule": "all",
+                "children": [
+                    {
+                        "name": "quality",
+                        "role": "gate",
+                        "answer_field": "quality",
+                        "threshold": 2.0,
+                        "predicate": {
+                            "op": "weighted_label",
+                            "table": {"partial": 1.0, "best": 2.0},
+                            "default": 0.0,
+                        },
+                    }
+                ],
+            },
+        )
+
+        assert not result.passed
+        assert result.metrics["scoring_total_score"] == 1.0
+        assert result.metrics["score_denominator"] == 2.0
+        assert result.score == 0.5
 
     def test_zero_pass_scores_zero(self) -> None:
-        result = get_grader("all_of").evaluate_answer(
-            {"a": 999, "b": 999}, self.CONFIG
-        )
+        result = get_grader("all_of").evaluate_answer({"a": 999, "b": 999}, self.CONFIG)
         assert not result.passed
         assert result.score == 0.0
 
@@ -367,10 +442,9 @@ class TestAllOfPassRuleAllGatesScore:
         config = {k: v for k, v in self.CONFIG.items() if k != "pass_rule"}
         result = get_grader("all_of").evaluate_answer({"a": 1, "b": 999}, config)
         assert not result.passed
-        assert result.score == 0.0
+        assert result.score == 0.5
 
     def test_score_threshold_still_pays_partial_credit(self) -> None:
-        # Other pass rules are unaffected: they keep their mean-of-children score.
         config = {**self.CONFIG, "pass_rule": "score_threshold", "score_threshold": 5.0}
         result = get_grader("all_of").evaluate_answer({"a": 1, "b": 999}, config)
         assert not result.passed

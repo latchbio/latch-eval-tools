@@ -1,15 +1,22 @@
-from .base import BinaryGrader, GraderResult, get_nested_value
-from .numeric import NumericRangeGrader, NumericToleranceGrader
-from .marker_gene import MarkerGenePrecisionRecallGrader, MarkerGeneSeparationGrader
-from .label_set import LabelSetJaccardGrader
-from .distribution import DistributionComparisonGrader
-from .spatial import SpatialAdjacencyGrader
-from .multiple_choice import MultipleChoiceGrader
-from .refusal import RefusalVocabGrader
-from .predicate import PredicateLeafGrader
-from .composite import AllOfGrader, ListMatchGrader, DictMatchGrader
-from .longest_subsequence import LongestSubsequenceGrader
+from .base import BinaryGrader, GraderResult, get_nested_value, normalize_score
 from .completion import FinishedFileGrader
+from .composite import (
+    AllOfGrader,
+    DictMatchGrader,
+    ListMatchGrader,
+    evaluate_composite_predicate_leaf,
+)
+from .distribution import DistributionComparisonGrader
+from .helpers import (
+    grade_multiple_graders_single_answer,  # noqa: E402 -- depends on GRADER_REGISTRY
+)
+from .label_set import LabelSetJaccardGrader
+from .longest_subsequence import LongestSubsequenceGrader
+from .marker_gene import MarkerGenePrecisionRecallGrader, MarkerGeneSeparationGrader
+from .multiple_choice import MultipleChoiceGrader
+from .numeric import NumericRangeGrader, NumericToleranceGrader
+from .predicate import PredicateLeafGrader
+from .refusal import RefusalVocabGrader
 from .rubric import (
     GraderError,
     GraderTransientError,
@@ -24,7 +31,7 @@ from .rubric import (
     compute_rubric_reward,
     rubric_criterion_output_config,
 )
-from .helpers import grade_multiple_graders_single_answer  # noqa: E402 -- depends on GRADER_REGISTRY
+from .spatial import SpatialAdjacencyGrader
 
 GRADER_REGISTRY = {
     "numeric_tolerance": NumericToleranceGrader,
@@ -62,6 +69,7 @@ __all__ = [
     "BinaryGrader",
     "GraderResult",
     "get_nested_value",
+    "normalize_score",
     "NumericRangeGrader",
     "NumericToleranceGrader",
     "MarkerGenePrecisionRecallGrader",
@@ -75,6 +83,7 @@ __all__ = [
     "AllOfGrader",
     "ListMatchGrader",
     "DictMatchGrader",
+    "evaluate_composite_predicate_leaf",
     "LongestSubsequenceGrader",
     "FinishedFileGrader",
     "GraderError",
