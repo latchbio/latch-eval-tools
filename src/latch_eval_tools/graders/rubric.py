@@ -528,11 +528,8 @@ class RubricGrader:
     ) -> GraderResult:
         """Grade ``agent_answer`` against a rubric via the Anthropic Messages API.
 
-        When ``api_key`` / ``base_url`` are ``None`` the Anthropic client falls
-        back to ``ANTHROPIC_API_KEY`` / ``ANTHROPIC_BASE_URL`` from the
-        environment. This lets a caller running inside a managed Anthropic API
-        environment (e.g. a Taiga grader container with ``enable_anthropic_api``)
-        invoke the grader without threading credentials through.
+        When ``api_key`` / ``base_url`` are ``None``, the Anthropic client uses
+        its standard environment configuration.
         """
         parsed_config = RubricGraderConfig.model_validate(config)
         answer, found = get_nested_value(agent_answer, parsed_config.answer_field)

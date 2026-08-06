@@ -46,6 +46,15 @@ Available grader types:
 
 `jaccard_label_set` is a backward-compatible alias of `label_set_jaccard`.
 
+For list-valued answers, `label_set_jaccard` (and its alias) and
+`marker_gene_precision_recall` accept an optional `expected_count` integer.
+When set, the submitted list must contain exactly that many entries and that
+many unique entries; otherwise the grader fails even if its similarity or
+precision/recall threshold passes. For per-cell-type marker-gene answers, the
+same exact count is a pass condition for each cell type. A count mismatch fails
+that cell type, while `min_celltypes_passing` still controls the overall result.
+Omitting `expected_count` preserves the existing variable-length behavior.
+
 ```python
 from latch_eval_tools.graders import get_grader
 

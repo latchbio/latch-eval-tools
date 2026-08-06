@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -25,6 +26,15 @@ class _Missing:
 MISSING = _Missing()
 
 
+def normalize_score(score: float, score_max: float) -> float:
+    """Normalize a raw grader score onto the required ``[0, 1]`` reward surface."""
+
+    if not math.isfinite(score) or not math.isfinite(score_max) or score_max <= 0.0:
+        return 0.0
+    normalized = score / score_max
+    return min(1.0, max(0.0, normalized))
+
+
 @dataclass
 class GraderResult:
     passed: bool
@@ -36,6 +46,14 @@ class GraderResult:
     # fail-open default here silently awards full credit for non-answers.
     score: float = 0.0
     field_scores: dict = field(default_factory=dict)
+    # Raw predicate scores may use a larger scale (for example weighted_label
+    # values of 0, 1, and 2). Consumers that expose a bounded reward normalize
+    # score by this maximum while retaining the raw score for thresholds and
+    # diagnostics.
+    score_max: float = 1.0
+
+    def normalized_score(self) -> float:
+        return normalize_score(float(self.score), float(self.score_max))
 
 
 def get_nested_value(obj: dict, key: str) -> tuple[Any, bool]:

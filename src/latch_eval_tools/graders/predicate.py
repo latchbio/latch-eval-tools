@@ -1,6 +1,7 @@
 """Predicate AST evaluator + restricted JSONPath resolver. Boolean ops
 return bool; scalar ops (f1, jaccard, weighted_label) return float."""
 
+import math
 import re
 from typing import Any
 
@@ -26,6 +27,28 @@ KNOWN_OPS: set[str] = BOOLEAN_OPS | SCALAR_OPS
 
 
 _JSONPATH_TOKEN_RE = re.compile(r"\.([A-Za-z_][A-Za-z_0-9]*)|\[\*\]")
+
+
+def predicate_score_max(predicate: Any) -> float:
+    """Return the largest positive raw score a predicate can emit."""
+
+    if not isinstance(predicate, dict) or predicate.get("op") != "weighted_label":
+        return 1.0
+
+    raw_scores: list[object] = []
+    table = predicate.get("table")
+    if isinstance(table, dict):
+        raw_scores.extend(table.values())
+    raw_scores.append(predicate.get("default", 0))
+
+    scores: list[float] = []
+    for raw_score in raw_scores:
+        if isinstance(raw_score, bool) or not isinstance(raw_score, (int, float)):
+            continue
+        score = float(raw_score)
+        if math.isfinite(score) and score > 0.0:
+            scores.append(score)
+    return max(scores, default=0.0)
 
 
 def resolve_jsonpath(value: Any, path: str) -> list[Any]:
@@ -82,6 +105,32 @@ def _max_jaccard(value: set, possible_sets: list) -> float:
     return max(_jaccard(value, _as_set(candidate)) for candidate in possible_sets)
 
 
+def _values_equal(actual: Any, expected: Any) -> bool:
+    """Compare scalar values using the numeric graders' string semantics.
+
+    Numeric range/tolerance graders accept JSON strings such as ``"0.5"`` as
+    numbers. Equality predicates used as gates or vetoes must see the same value,
+    otherwise quoting a forbidden constant bypasses the predicate while still
+    passing numeric grading. Coercion is directed by a numeric configured value;
+    string-configured identifiers such as ``"001"`` retain exact string
+    semantics.
+    """
+
+    if (
+        isinstance(expected, (int, float))
+        and not isinstance(expected, bool)
+        and isinstance(actual, str)
+    ):
+        try:
+            numeric_actual = float(actual.strip())
+        except ValueError:
+            return False
+        if not math.isfinite(numeric_actual):
+            return False
+        return numeric_actual == expected
+    return actual == expected
+
+
 def _as_set(value: Any) -> set:
     if isinstance(value, set):
         return value
@@ -100,9 +149,9 @@ def evaluate_predicate(pred: Any, value: Any) -> bool | float:
     op = pred["op"]
 
     if op == "equals":
-        return value == pred["arg"]
+        return _values_equal(value, pred["arg"])
     if op == "in":
-        return value in pred["args"]
+        return any(_values_equal(value, candidate) for candidate in pred["args"])
     if op == "unordered_set_eq":
         return _as_set(value) == _as_set(pred["expected"])
 
@@ -199,10 +248,11 @@ class PredicateLeafGrader(BinaryGrader):
         answer_field = config.get("answer_field")
         threshold = config.get("threshold", 1.0)
         name = config.get("name")
+        score_max = predicate_score_max(predicate)
 
         value, field_label, bind_error = _resolve_field(agent_answer, answer_field)
         if bind_error is not None:
-            return _fail_grade(agent_answer, bind_error, name=name)
+            return _fail_grade(agent_answer, bind_error, name=name, score_max=score_max)
 
         if role == "additive":
             return _fail_grade(
@@ -210,12 +260,14 @@ class PredicateLeafGrader(BinaryGrader):
                 "role 'additive' is invalid at root; valid only inside "
                 "list_match or dict_match GT entries",
                 name=name,
+                score_max=score_max,
             )
         if role not in ("gate", "hard_fail"):
             return _fail_grade(
                 agent_answer,
                 f"unknown role {role!r}; expected one of gate, hard_fail",
                 name=name,
+                score_max=score_max,
             )
 
         op = predicate.get("op") if isinstance(predicate, dict) else None
@@ -228,7 +280,12 @@ class PredicateLeafGrader(BinaryGrader):
         # genuinely avoiding the vetoed behaviour.
         if value is MISSING:
             return _missing_field_grade(
-                agent_answer, field_label, op=op, role=role, name=name
+                agent_answer,
+                field_label,
+                op=op,
+                role=role,
+                name=name,
+                score_max=score_max,
             )
 
         try:
@@ -238,6 +295,7 @@ class PredicateLeafGrader(BinaryGrader):
                 agent_answer,
                 f"predicate evaluation failed: {exc}",
                 name=name,
+                score_max=score_max,
             )
 
         _, passed, score = _apply_role(role, raw_result, is_scalar, threshold)
@@ -252,6 +310,7 @@ class PredicateLeafGrader(BinaryGrader):
                 "threshold": threshold if is_scalar else None,
                 "answer_field": answer_field,
                 "name": name,
+                "score_max": score_max,
             },
             reasoning=_format_reasoning(
                 passed=passed,
@@ -266,6 +325,7 @@ class PredicateLeafGrader(BinaryGrader):
             agent_answer=agent_answer,
             score=score,
             field_scores={field_label: score},
+            score_max=score_max,
         )
 
 
@@ -322,6 +382,7 @@ def _missing_field_grade(
     op: str | None,
     role: str,
     name: str | None = None,
+    score_max: float = 1.0,
 ) -> GraderResult:
     """Agent failure (not a grader error): the graded field was never supplied."""
     label = f"'{name}'" if name else "(unnamed)"
@@ -339,11 +400,16 @@ def _missing_field_grade(
         agent_answer=agent_answer if isinstance(agent_answer, dict) else None,
         score=0.0,
         field_scores={field_label: 0.0},
+        score_max=score_max,
     )
 
 
 def _fail_grade(
-    agent_answer: Any, reason: str, *, name: str | None = None
+    agent_answer: Any,
+    reason: str,
+    *,
+    name: str | None = None,
+    score_max: float = 1.0,
 ) -> GraderResult:
     label = f"'{name}'" if name else "(unnamed)"
     return GraderResult(
@@ -353,6 +419,7 @@ def _fail_grade(
         agent_answer=agent_answer if isinstance(agent_answer, dict) else None,
         score=0.0,
         field_scores={},
+        score_max=score_max,
     )
 
 
