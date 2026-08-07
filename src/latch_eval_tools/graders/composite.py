@@ -622,7 +622,11 @@ def _composite_configuration_fail(agent_answer: Any, reason: str) -> GraderResul
 
 
 def _evaluate_average_of_pass_rule(
-    config: dict, scoring_count: int, scoring_passed: int, scoring_total_score: float
+    config: dict,
+    scoring_count: int,
+    scoring_passed: int,
+    scoring_total_score: float,
+    score_denominator: float,
 ) -> tuple[str, bool, str | None]:
     pass_rule = config.get("pass_rule", "all")
     if pass_rule == "all":
@@ -676,7 +680,11 @@ def _evaluate_average_of_pass_rule(
                 False,
                 "score_threshold must be a finite non-negative number",
             )
-        return pass_rule, scoring_total_score >= float(threshold), None
+        return (
+            pass_rule,
+            normalize_score(scoring_total_score, score_denominator) >= float(threshold),
+            None,
+        )
 
     return (
         str(pass_rule),
@@ -1084,7 +1092,7 @@ class AverageOfGrader(BinaryGrader):
             if not passed and not _child_info_has_system_error(info)
         ]
         pass_rule, scoring_ok, pass_rule_error = _evaluate_average_of_pass_rule(
-            config, scoring_count, scoring_passed, scoring_total_score
+            config, scoring_count, scoring_passed, scoring_total_score, score_denominator
         )
 
         hard_fail_triggered: list[Any] = []
