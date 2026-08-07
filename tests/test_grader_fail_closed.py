@@ -739,7 +739,7 @@ class TestAverageOfPartialCredit:
             self.THREE_OF_FOUR,
             {
                 "pass_rule": "score_threshold",
-                "score_threshold": 3.5,
+                "score_threshold": 0.95,
                 "children": self.TYPED_CHILDREN,
             },
         )
@@ -748,6 +748,36 @@ class TestAverageOfPartialCredit:
         assert result.metrics["scoring_total_score"] == 3.0
         assert result.metrics["score_denominator"] == 4.0
         assert result.score == pytest.approx(0.75)
+
+    def test_score_threshold_compares_normalized_score_not_raw_sum(self) -> None:
+        # Regression: a guess that only satisfies one of many gate children
+        # (raw sum 1.0) must not clear a near-1.0 "require nearly all gates"
+        # threshold just because 1.0 happens to be >= the threshold value.
+        one_of_four = {"a": 1, "b": -1, "c": -1, "d": -1}
+        result = get_grader("average_of").evaluate_answer(
+            one_of_four,
+            {
+                "pass_rule": "score_threshold",
+                "score_threshold": 0.875,  # intended as (4 - 0.5) / 4
+                "children": self.TYPED_CHILDREN,
+            },
+        )
+
+        assert result.metrics["scoring_total_score"] == 1.0
+        assert result.metrics["score_denominator"] == 4.0
+        assert result.score == pytest.approx(0.25)
+        assert result.passed is False
+
+        all_four = {"a": 1, "b": 2, "c": 3, "d": 4}
+        passing_result = get_grader("average_of").evaluate_answer(
+            all_four,
+            {
+                "pass_rule": "score_threshold",
+                "score_threshold": 0.875,
+                "children": self.TYPED_CHILDREN,
+            },
+        )
+        assert passing_result.passed is True
 
     def test_default_all_rule_keeps_score_when_binary_pass_is_false(self) -> None:
         result = get_grader("average_of").evaluate_answer(

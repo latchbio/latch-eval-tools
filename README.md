@@ -86,8 +86,9 @@ hard-fail-only composites are also invalid.
 `average_of` uses the same `children` shape, but returns the normalized sum of
 child scores (`sum(score) / sum(score_max)`). Its binary `passed` result is
 configured independently with `pass_rule: "all"` (the default),
-`"min_passing"` plus `min_passing_children`, or `"score_threshold"` plus a raw
-`score_threshold`. A failed pass rule does not erase valid partial credit;
+`"min_passing"` plus `min_passing_children`, or `"score_threshold"` plus a
+`score_threshold` compared against that same normalized score (0-1). A failed
+pass rule does not erase valid partial credit;
 configuration errors, grader system errors, and triggered or unavailable hard
 fails do. Predicate children may use `gate`, `additive`, or `hard_fail` roles.
 
