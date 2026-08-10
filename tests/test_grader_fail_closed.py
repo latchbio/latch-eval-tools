@@ -25,6 +25,8 @@ from latch_eval_tools.graders import (
     get_grader,
 )
 
+OVERFLOWING_INTEGER = int("9" * 400)
+
 # Minimal-but-valid config per grader so each one reaches its own logic rather
 # than bailing out on a config error.
 CONFIGS: dict[str, dict] = {
@@ -282,6 +284,68 @@ def test_no_grader_result_omits_an_explicit_score() -> None:
             ):
                 offenders.append(f"{path.relative_to(root)}:{node.lineno}")
     assert offenders == []
+
+
+@pytest.mark.parametrize(
+    ("grader_type", "config", "answer"),
+    [
+        (
+            "predicate_leaf",
+            {
+                "role": "gate",
+                "answer_field": "quality",
+                "predicate": {
+                    "op": "weighted_label",
+                    "table": {"best": OVERFLOWING_INTEGER},
+                },
+            },
+            {"quality": "best"},
+        ),
+        (
+            "average_of",
+            {
+                "pass_rule": "score_threshold",
+                "score_threshold": OVERFLOWING_INTEGER,
+                "children": [
+                    {
+                        "role": "gate",
+                        "answer_field": "x",
+                        "predicate": {"op": "equals", "arg": 1},
+                    }
+                ],
+            },
+            {"x": 1},
+        ),
+        (
+            "list_match",
+            {
+                "answer_field": "rows",
+                "match_key": "id",
+                "additive_score_min": OVERFLOWING_INTEGER,
+                "ground_truth": [
+                    {
+                        "id": "a",
+                        "fields": {
+                            "value": {
+                                "role": "additive",
+                                "predicate": {"op": "equals", "arg": 1},
+                            }
+                        },
+                    }
+                ],
+            },
+            {"rows": [{"id": "a", "value": 1}]},
+        ),
+    ],
+)
+def test_unrepresentable_configuration_numbers_fail_cleanly(
+    grader_type: str, config: dict, answer: dict
+) -> None:
+    result = get_grader(grader_type).evaluate_answer(answer, config)
+
+    assert result.passed is False
+    assert result.score == 0.0
+    assert result.metrics.get("configuration_error")
 
 
 class TestWrongAnswersDoNotEarnCredit:

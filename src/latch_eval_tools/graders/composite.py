@@ -5,13 +5,14 @@ import math
 from typing import Any
 
 from .base import MISSING, BinaryGrader, GraderResult, normalize_score
+from .number_contract import is_finite_number
 from .predicate import (
     SCALAR_OPS,
     _apply_role,
     _threshold_configuration_error,
     evaluate_predicate,
-    predicate_score_max,
     predicate_configuration_error,
+    predicate_score_max,
     resolve_answer_field,
 )
 
@@ -120,18 +121,9 @@ def _child_payload_configuration_error(
         return "child grader passed value must be boolean"
     if not isinstance(metrics, dict):
         return "child grader metrics must be an object"
-    if (
-        isinstance(score, bool)
-        or not isinstance(score, (int, float))
-        or not math.isfinite(float(score))
-    ):
+    if not is_finite_number(score):
         return "child grader score must be a finite number"
-    if (
-        isinstance(score_max, bool)
-        or not isinstance(score_max, (int, float))
-        or not math.isfinite(float(score_max))
-        or float(score_max) < 0.0
-    ):
+    if not is_finite_number(score_max) or float(score_max) < 0.0:
         return "child grader score_max must be a finite non-negative number"
     if require_positive_score_max and float(score_max) <= 0.0:
         return "average_of scoring child must have positive score capacity"
@@ -665,12 +657,7 @@ def _evaluate_average_of_pass_rule(
                 "min_passing_children is invalid with pass_rule='score_threshold'",
             )
         threshold = config.get("score_threshold")
-        if (
-            isinstance(threshold, bool)
-            or not isinstance(threshold, (int, float))
-            or not math.isfinite(float(threshold))
-            or threshold < 0
-        ):
+        if not is_finite_number(threshold) or threshold < 0:
             return (
                 pass_rule,
                 False,
@@ -729,12 +716,7 @@ def _list_match_configuration_error(config: object) -> str | None:
     if isinstance(k, int) and tuple_pass_min > k:
         return "list_match tuple_pass_min cannot exceed k"
     additive_score_min = config.get("additive_score_min", 0)
-    if (
-        isinstance(additive_score_min, bool)
-        or not isinstance(additive_score_min, (int, float))
-        or not math.isfinite(float(additive_score_min))
-        or float(additive_score_min) < 0.0
-    ):
+    if not is_finite_number(additive_score_min) or float(additive_score_min) < 0.0:
         return "list_match additive_score_min must be a finite non-negative number"
 
     ground_truth = config.get("ground_truth")

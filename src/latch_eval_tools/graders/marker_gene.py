@@ -1,19 +1,10 @@
-import math
-
 from .base import BinaryGrader, GraderResult, configuration_error_result
 from .list_contract import ListCardinality, check_list_cardinality
-
-
-def _is_finite_number(value: object) -> bool:
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(float(value))
-    )
+from .number_contract import is_finite_number
 
 
 def _validate_fraction(value: object, location: str) -> str | None:
-    if not _is_finite_number(value) or not 0.0 <= float(value) <= 1.0:
+    if not is_finite_number(value) or not 0.0 <= float(value) <= 1.0:
         return f"{location} must be a finite number in [0, 1]"
     return None
 
@@ -575,7 +566,7 @@ class MarkerGeneSeparationGrader(BinaryGrader):
             )
 
         if (
-            not _is_finite_number(agent_mean_auroc)
+            not is_finite_number(agent_mean_auroc)
             or not 0.0 <= float(agent_mean_auroc) <= 1.0
         ):
             return _answer_failure(
@@ -602,7 +593,7 @@ class MarkerGeneSeparationGrader(BinaryGrader):
                 return _answer_failure(
                     agent_answer, f"per_gene_stats contains duplicate gene {gene!r}"
                 )
-            if not _is_finite_number(auroc) or not 0.0 <= float(auroc) <= 1.0:
+            if not is_finite_number(auroc) or not 0.0 <= float(auroc) <= 1.0:
                 return _answer_failure(
                     agent_answer,
                     "Each per_gene_stats auroc must be a finite number in [0, 1]",

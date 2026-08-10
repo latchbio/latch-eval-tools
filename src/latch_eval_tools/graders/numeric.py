@@ -1,4 +1,3 @@
-import math
 from typing import Any
 
 from .base import (
@@ -7,14 +6,7 @@ from .base import (
     configuration_error_result,
     get_nested_value,
 )
-
-
-def _is_finite_number(value: object) -> bool:
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(float(value))
-    )
+from .number_contract import is_finite_number
 
 
 def _validate_ground_truth(ground_truth: object) -> str | None:
@@ -23,7 +15,7 @@ def _validate_ground_truth(ground_truth: object) -> str | None:
     for field, expected in ground_truth.items():
         if not isinstance(field, str) or field.strip() == "":
             return "ground_truth field names must be non-empty strings"
-        if not _is_finite_number(expected):
+        if not is_finite_number(expected):
             return f"ground_truth[{field!r}] must be a finite number"
     return None
 
@@ -53,7 +45,7 @@ def _validate_tolerance_entry(entry: object, location: str) -> str | None:
         if has_lower:
             for key in ("lower", "upper"):
                 value = entry[key]
-                if not _is_finite_number(value) or float(value) < 0.0:
+                if not is_finite_number(value) or float(value) < 0.0:
                     return f"{location}.{key} must be a finite non-negative number"
             return None
         # An omitted value retains the grader's historical exact-equality
@@ -67,7 +59,7 @@ def _validate_tolerance_entry(entry: object, location: str) -> str | None:
     if not has_value:
         return f"{location}.value is required for {tolerance_type} tolerance"
     value = entry["value"]
-    if not _is_finite_number(value):
+    if not is_finite_number(value):
         return f"{location}.value must be a finite number"
     if tolerance_type in {"absolute", "relative"} and float(value) < 0.0:
         return f"{location}.value must be a finite non-negative number"
@@ -102,9 +94,9 @@ def _validate_ranges(ground_truth: dict[str, Any], ranges: object) -> str | None
             return f"ranges[{field!r}] must be an object"
         minimum = range_config.get("min")
         maximum = range_config.get("max")
-        if not _is_finite_number(minimum):
+        if not is_finite_number(minimum):
             return f"ranges[{field!r}].min must be a finite number"
-        if not _is_finite_number(maximum):
+        if not is_finite_number(maximum):
             return f"ranges[{field!r}].max must be a finite number"
         if float(minimum) >= float(maximum):
             return f"ranges[{field!r}] must define min < max"
@@ -169,7 +161,7 @@ class NumericToleranceGrader(BinaryGrader):
             if isinstance(actual_value, str):
                 try:
                     actual_value = float(actual_value)
-                except ValueError:
+                except (OverflowError, ValueError):
                     all_pass = False
                     failures.append(f"{field}: cannot parse '{actual_value}' as number")
                     continue
@@ -186,7 +178,7 @@ class NumericToleranceGrader(BinaryGrader):
                 metrics[f"{field}_pass"] = False
                 continue
 
-            if not _is_finite_number(actual_value):
+            if not is_finite_number(actual_value):
                 all_pass = False
                 failures.append(f"{field}: expected a finite numeric value")
                 metrics[f"{field}_actual"] = actual_value
@@ -452,7 +444,7 @@ class NumericRangeGrader(BinaryGrader):
             if isinstance(actual_value, str):
                 try:
                     actual_value = float(actual_value)
-                except ValueError:
+                except (OverflowError, ValueError):
                     all_pass = False
                     failures.append(f"{field}: cannot parse '{actual_value}' as number")
                     metrics[f"{field}_actual"] = actual_value
