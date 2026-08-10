@@ -17,6 +17,18 @@ def _is_finite_number(value: object) -> bool:
     )
 
 
+def _json_safe_metrics(metrics: dict) -> dict:
+    # `error` metrics use `float("inf")` as a sentinel for "missing"/"undefined"
+    # comparisons (e.g. relative error against a zero ground truth). `inf`/`nan`
+    # are not valid JSON and get rejected when the grader result is persisted,
+    # so swap them for `None` on the way out. The reasoning string is built from
+    # the raw (pre-sanitized) metrics above and is unaffected.
+    return {
+        key: (None if isinstance(value, float) and not math.isfinite(value) else value)
+        for key, value in metrics.items()
+    }
+
+
 def _validate_ground_truth(ground_truth: object) -> str | None:
     if not isinstance(ground_truth, dict) or len(ground_truth) == 0:
         return "ground_truth must be a non-empty object"
@@ -291,7 +303,7 @@ class NumericToleranceGrader(BinaryGrader):
 
         return GraderResult(
             passed=all_pass,
-            metrics=metrics,
+            metrics=_json_safe_metrics(metrics),
             reasoning=reasoning,
             agent_answer=agent_answer,
             score=score,
