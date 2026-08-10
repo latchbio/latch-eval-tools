@@ -19,6 +19,7 @@ BOOLEAN_OPS: set[str] = {
     "none",
     "field",
     "jaccard_ge",
+    "abs_diff_lte",
 }
 
 SCALAR_OPS: set[str] = {"f1", "jaccard", "weighted_label"}
@@ -105,6 +106,22 @@ def _max_jaccard(value: set, possible_sets: list) -> float:
     return max(_jaccard(value, _as_set(candidate)) for candidate in possible_sets)
 
 
+def _coerce_numeric(value: Any) -> float | None:
+    """Coerce a numeric or numeric-string value to float; ``None`` if it isn't one."""
+
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value) if math.isfinite(float(value)) else None
+    if isinstance(value, str):
+        try:
+            numeric_value = float(value.strip())
+        except ValueError:
+            return None
+        return numeric_value if math.isfinite(numeric_value) else None
+    return None
+
+
 def _values_equal(actual: Any, expected: Any) -> bool:
     """Compare scalar values using the numeric graders' string semantics.
 
@@ -159,6 +176,24 @@ def predicate_configuration_error(
 
     if op == "equals":
         return None if "arg" in predicate else f"{path} requires 'arg'"
+
+    if op == "abs_diff_lte":
+        arg = predicate.get("arg")
+        if (
+            isinstance(arg, bool)
+            or not isinstance(arg, (int, float))
+            or not math.isfinite(float(arg))
+        ):
+            return f"{path}.arg must be a finite number"
+        tolerance = predicate.get("tolerance")
+        if (
+            isinstance(tolerance, bool)
+            or not isinstance(tolerance, (int, float))
+            or not math.isfinite(float(tolerance))
+            or float(tolerance) < 0.0
+        ):
+            return f"{path}.tolerance must be a finite non-negative number"
+        return None
 
     if op == "in":
         args = predicate.get("args")
@@ -295,6 +330,11 @@ def evaluate_predicate(pred: Any, value: Any) -> bool | float:
 
     if op == "equals":
         return _values_equal(value, pred["arg"])
+    if op == "abs_diff_lte":
+        numeric_value = _coerce_numeric(value)
+        if numeric_value is None:
+            return False
+        return abs(numeric_value - float(pred["arg"])) <= float(pred["tolerance"])
     if op == "in":
         return any(_values_equal(value, candidate) for candidate in pred["args"])
     if op == "unordered_set_eq":
