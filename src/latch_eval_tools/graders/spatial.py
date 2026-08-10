@@ -1,14 +1,5 @@
-import math
-
 from .base import BinaryGrader, GraderResult, configuration_error_result
-
-
-def _is_finite_number(value: object) -> bool:
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(float(value))
-    )
+from .number_contract import is_finite_number
 
 
 def _answer_failure(agent_answer: object, reason: str) -> GraderResult:
@@ -46,7 +37,7 @@ class SpatialAdjacencyGrader(BinaryGrader):
 
         for key in ("max_median_ic_to_pc_um", "max_p90_ic_to_pc_um"):
             if key in thresholds and (
-                not _is_finite_number(thresholds[key]) or float(thresholds[key]) < 0.0
+                not is_finite_number(thresholds[key]) or float(thresholds[key]) < 0.0
             ):
                 return configuration_error_result(
                     agent_answer,
@@ -56,7 +47,7 @@ class SpatialAdjacencyGrader(BinaryGrader):
                 )
         for key in ("min_pct_ic_within_15um", "min_pct_ic_mixed_within_55um"):
             if key in thresholds and (
-                not _is_finite_number(thresholds[key])
+                not is_finite_number(thresholds[key])
                 or not 0.0 <= float(thresholds[key]) <= 100.0
             ):
                 return configuration_error_result(
@@ -105,7 +96,7 @@ class SpatialAdjacencyGrader(BinaryGrader):
             "pct_ic_mixed_within_55um": pct_mixed_within_55um,
         }
         for field, value in numeric_values.items():
-            if not _is_finite_number(value):
+            if not is_finite_number(value):
                 return _answer_failure(agent_answer, f"{field} must be a finite number")
         if float(median_ic_to_pc) < 0.0 or float(p90_ic_to_pc) < 0.0:
             return _answer_failure(

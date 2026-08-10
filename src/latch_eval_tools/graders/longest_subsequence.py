@@ -1,7 +1,7 @@
-import math
 from typing import Any
 
 from .base import BinaryGrader, GraderResult
+from .number_contract import is_finite_number
 
 
 def _normalize_element(value: Any) -> Any:
@@ -65,7 +65,7 @@ def _parse_pass_threshold(
         )
 
     raw_threshold = scoring.get("pass_threshold", 1.0)
-    if isinstance(raw_threshold, bool) or not isinstance(raw_threshold, (int, float)):
+    if not is_finite_number(raw_threshold):
         return _longest_subsequence_fail(
             agent_answer,
             answer_field,
@@ -74,11 +74,7 @@ def _parse_pass_threshold(
         )
 
     pass_threshold = float(raw_threshold)
-    if (
-        not math.isfinite(pass_threshold)
-        or pass_threshold < 0.0
-        or pass_threshold > 1.0
-    ):
+    if pass_threshold < 0.0 or pass_threshold > 1.0:
         return _longest_subsequence_fail(
             agent_answer,
             answer_field,

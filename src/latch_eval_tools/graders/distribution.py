@@ -1,14 +1,5 @@
-import math
-
 from .base import BinaryGrader, GraderResult, configuration_error_result
-
-
-def _is_finite_number(value: object) -> bool:
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(float(value))
-    )
+from .number_contract import is_finite_number
 
 
 def _validate_configuration(config: object) -> tuple[dict, dict, str | None]:
@@ -28,7 +19,7 @@ def _validate_configuration(config: object) -> tuple[dict, dict, str | None]:
     for cell_type, expected_pct in distribution.items():
         if not isinstance(cell_type, str) or cell_type.strip() == "":
             return {}, {}, "cell-type names must be non-empty strings"
-        if not _is_finite_number(expected_pct):
+        if not is_finite_number(expected_pct):
             return (
                 {},
                 {},
@@ -39,7 +30,7 @@ def _validate_configuration(config: object) -> tuple[dict, dict, str | None]:
             )
 
     gt_total_cells = ground_truth.get("total_cells")
-    if gt_total_cells is not None and not _is_finite_number(gt_total_cells):
+    if gt_total_cells is not None and not is_finite_number(gt_total_cells):
         return {}, {}, "ground_truth.total_cells must be a finite number"
 
     tolerances = config.get("tolerances", {})
@@ -52,7 +43,7 @@ def _validate_configuration(config: object) -> tuple[dict, dict, str | None]:
         if not isinstance(tolerance, dict):
             return {}, {}, f"tolerances.{key} must be an object"
         value = tolerance.get("value", 0 if key == "total_cells" else 3.0)
-        if not _is_finite_number(value) or float(value) < 0.0:
+        if not is_finite_number(value) or float(value) < 0.0:
             return (
                 {},
                 {},
@@ -121,7 +112,7 @@ class DistributionComparisonGrader(BinaryGrader):
                 metrics["total_cells_expected"] = gt_total_cells
                 metrics["total_cells_diff"] = None
                 metrics["total_cells_pass"] = False
-            elif not _is_finite_number(agent_total_cells):
+            elif not is_finite_number(agent_total_cells):
                 return _answer_failure(
                     agent_answer, "total_cells must be a finite number"
                 )
@@ -155,7 +146,7 @@ class DistributionComparisonGrader(BinaryGrader):
                 continue
 
             actual_pct = agent_distribution[cell_type]
-            if not _is_finite_number(actual_pct):
+            if not is_finite_number(actual_pct):
                 all_pass = False
                 failures.append(f"{cell_type}: expected a finite numeric percentage")
                 distribution_failures.append(cell_type)
@@ -195,7 +186,7 @@ class DistributionComparisonGrader(BinaryGrader):
                 lines.append(f"  x {cell_type}: MISSING vs {expected:.2f}%")
             else:
                 actual = agent_distribution[cell_type]
-                if not _is_finite_number(actual):
+                if not is_finite_number(actual):
                     lines.append(f"  x {cell_type}: NON-NUMERIC vs {expected:.2f}%")
                     continue
                 diff = abs(actual - expected)

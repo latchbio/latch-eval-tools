@@ -6,6 +6,8 @@ import pytest
 
 from latch_eval_tools.graders import get_grader
 
+OVERFLOWING_INTEGER = int("9" * 400)
+
 VALID_CONFIGS: dict[str, dict] = {
     "numeric_tolerance": {
         "ground_truth": {"x": 1.0},
@@ -86,6 +88,10 @@ VALID_ANSWERS: dict[str, dict] = {
                 "tolerances": {"x": {"type": [], "value": 0.1}},
             },
         ),
+        (
+            "numeric_tolerance",
+            {"ground_truth": {"x": OVERFLOWING_INTEGER}, "tolerances": {}},
+        ),
         ("numeric_range", {}),
         (
             "numeric_range",
@@ -102,6 +108,10 @@ VALID_ANSWERS: dict[str, dict] = {
                 "tolerances": {"total_cells": None},
             },
         ),
+        (
+            "distribution_comparison",
+            {"ground_truth": {"cell_type_distribution": {"T": OVERFLOWING_INTEGER}}},
+        ),
         ("refusal_vocab", {}),
         (
             "refusal_vocab",
@@ -114,6 +124,14 @@ VALID_ANSWERS: dict[str, dict] = {
             "longest_subsequence",
             {"answer_field": "sequence", "ground_truth": []},
         ),
+        (
+            "longest_subsequence",
+            {
+                "answer_field": "sequence",
+                "ground_truth": [["A"]],
+                "scoring": {"pass_threshold": OVERFLOWING_INTEGER},
+            },
+        ),
         ("marker_gene_precision_recall", {"canonical_markers": []}),
         (
             "marker_gene_precision_recall",
@@ -121,8 +139,20 @@ VALID_ANSWERS: dict[str, dict] = {
         ),
         ("marker_gene_separation", {"scoring": None}),
         (
+            "marker_gene_separation",
+            {"scoring": {"pass_thresholds": {"mean_auroc": OVERFLOWING_INTEGER}}},
+        ),
+        (
             "spatial_adjacency",
             {"scoring": {"pass_thresholds": {"max_median_ic_to_pc_um": math.nan}}},
+        ),
+        (
+            "spatial_adjacency",
+            {
+                "scoring": {
+                    "pass_thresholds": {"max_median_ic_to_pc_um": OVERFLOWING_INTEGER}
+                }
+            },
         ),
         ("label_set_jaccard", {"ground_truth_labels": []}),
         ("label_set_jaccard", {"ground_truth_labels": [math.nan]}),
@@ -166,10 +196,18 @@ def test_missing_agent_answer_is_not_a_configuration_error(grader_type: str) -> 
     [
         ("numeric_tolerance", {"x": []}),
         ("numeric_tolerance", {"x": math.inf}),
+        ("numeric_tolerance", {"x": OVERFLOWING_INTEGER}),
         ("numeric_range", {"x": []}),
         (
             "distribution_comparison",
             {"total_cells": 10, "cell_type_distribution": []},
+        ),
+        (
+            "distribution_comparison",
+            {
+                "total_cells": OVERFLOWING_INTEGER,
+                "cell_type_distribution": {"T": 50.0},
+            },
         ),
         ("refusal_vocab", {"decision": {"token": "REFUSE"}}),
         ("longest_subsequence", {"sequence": ["A"]}),
@@ -183,6 +221,13 @@ def test_missing_agent_answer_is_not_a_configuration_error(grader_type: str) -> 
         ),
         (
             "marker_gene_separation",
+            {
+                "per_gene_stats": [{"gene": "CD3D", "auroc": 0.95}],
+                "mean_auroc": OVERFLOWING_INTEGER,
+            },
+        ),
+        (
+            "marker_gene_separation",
             {"per_gene_stats": [], "mean_auroc": 0.0},
         ),
         (
@@ -190,6 +235,13 @@ def test_missing_agent_answer_is_not_a_configuration_error(grader_type: str) -> 
             {
                 **VALID_ANSWERS["spatial_adjacency"],
                 "median_ic_to_pc_um": "close",
+            },
+        ),
+        (
+            "spatial_adjacency",
+            {
+                **VALID_ANSWERS["spatial_adjacency"],
+                "median_ic_to_pc_um": OVERFLOWING_INTEGER,
             },
         ),
         ("label_set_jaccard", {"labels": {"T": True}}),

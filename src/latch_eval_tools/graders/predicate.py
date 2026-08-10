@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from .base import MISSING, BinaryGrader, GraderResult
+from .number_contract import is_finite_number
 
 BOOLEAN_OPS: set[str] = {
     "equals",
@@ -43,10 +44,10 @@ def predicate_score_max(predicate: Any) -> float:
 
     scores: list[float] = []
     for raw_score in raw_scores:
-        if isinstance(raw_score, bool) or not isinstance(raw_score, (int, float)):
+        if not is_finite_number(raw_score):
             continue
         score = float(raw_score)
-        if math.isfinite(score) and score > 0.0:
+        if score > 0.0:
             scores.append(score)
     return max(scores, default=0.0)
 
@@ -123,7 +124,7 @@ def _values_equal(actual: Any, expected: Any) -> bool:
     ):
         try:
             numeric_actual = float(actual.strip())
-        except ValueError:
+        except (OverflowError, ValueError):
             return False
         if not math.isfinite(numeric_actual):
             return False
@@ -230,12 +231,7 @@ def predicate_configuration_error(
                 return f"{path}.possible_sets[{index}] is invalid: {exc}"
         if op == "jaccard_ge":
             threshold = predicate.get("threshold")
-            if (
-                isinstance(threshold, bool)
-                or not isinstance(threshold, (int, float))
-                or not math.isfinite(float(threshold))
-                or not 0.0 <= float(threshold) <= 1.0
-            ):
+            if not is_finite_number(threshold) or not 0.0 <= float(threshold) <= 1.0:
                 return f"{path}.threshold must be a finite number in [0, 1]"
         return None
 
@@ -254,18 +250,10 @@ def predicate_configuration_error(
         if not isinstance(table, dict):
             return f"{path}.table must be an object"
         for label, raw_score in table.items():
-            if (
-                isinstance(raw_score, bool)
-                or not isinstance(raw_score, (int, float))
-                or not math.isfinite(float(raw_score))
-            ):
+            if not is_finite_number(raw_score):
                 return f"{path}.table[{label!r}] must be a finite number"
         default = predicate.get("default", 0)
-        if (
-            isinstance(default, bool)
-            or not isinstance(default, (int, float))
-            or not math.isfinite(float(default))
-        ):
+        if not is_finite_number(default):
             return f"{path}.default must be a finite number"
         return None
 
@@ -278,12 +266,7 @@ def _threshold_configuration_error(
     op = predicate.get("op") if isinstance(predicate, dict) else None
     if op not in SCALAR_OPS:
         return None
-    if (
-        isinstance(threshold, bool)
-        or not isinstance(threshold, (int, float))
-        or not math.isfinite(float(threshold))
-        or float(threshold) < 0.0
-    ):
+    if not is_finite_number(threshold) or float(threshold) < 0.0:
         return f"{path} must be a finite non-negative number for scalar predicates"
     return None
 
