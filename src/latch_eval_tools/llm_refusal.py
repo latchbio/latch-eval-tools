@@ -136,6 +136,15 @@ _ANTHROPIC_FALLBACK_MARKERS: tuple[str, ...] = (
     "reduce refusals for your users",
 )
 
+# Claude Code's newer safety-intervention UX text (long-conversation safety
+# pause, message-level safeguard classifier) doesn't say "refusal" or "usage
+# policy" at all, so it needs its own markers.
+_ANTHROPIC_SAFETY_INTERVENTION_MARKERS: tuple[str, ...] = (
+    "safeguards flagged",
+    "can't help with this",
+    "start a new session to continue",
+)
+
 
 def _find_message(strings: list[str], provider: LLMRefusalProvider) -> str:
     provider_markers: tuple[str, ...]
@@ -149,10 +158,10 @@ def _find_message(strings: list[str], provider: LLMRefusalProvider) -> str:
         )
     elif provider == "anthropic":
         provider_markers = (
-            "unable to respond",
-            "usage policy",
-            "violat",
-        ) + _ANTHROPIC_FALLBACK_MARKERS
+            ("unable to respond", "usage policy", "violat")
+            + _ANTHROPIC_FALLBACK_MARKERS
+            + _ANTHROPIC_SAFETY_INTERVENTION_MARKERS
+        )
     else:
         provider_markers = (
             "refusal",
@@ -220,6 +229,9 @@ def _detect_from_value(
     anthropic_fallback_hit = any(
         marker in lowered for marker in _ANTHROPIC_FALLBACK_MARKERS
     )
+    anthropic_safety_intervention_hit = any(
+        marker in lowered for marker in _ANTHROPIC_SAFETY_INTERVENTION_MARKERS
+    )
 
     if (
         stop_reason in {"refusal", "sensitive"}
@@ -232,6 +244,7 @@ def _detect_from_value(
             )
         )
         or anthropic_fallback_hit
+        or anthropic_safety_intervention_hit
     ):
         return LLMRefusalDiagnostic(
             provider="anthropic",
