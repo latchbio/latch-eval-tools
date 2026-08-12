@@ -66,6 +66,7 @@ PI_ENV_KEYS = {
     "XAI_API_KEY",
     "OPENROUTER_API_KEY",
 }
+GROK_ENV_KEYS = {"XAI_API_KEY"}
 
 # pi ships no built-in OpenRouter provider, so we register a custom
 # openai-completions provider in /root/.pi/agent/models.json. The pi state dir
@@ -178,11 +179,25 @@ AGENT_STATE_DIRS = {
     "claudecode": ".claude",
     "openaicodex": ".codex",
     "pi": ".pi",
+    "grokbuild": ".grok",
+}
+# By default the host state dir is bind-mounted onto /root/<state_dir_name>.
+# grok is the exception: its ENTIRE install (binary in ~/.grok/downloads,
+# symlinked via ~/.grok/bin) lives under ~/.grok, so mounting the state dir onto
+# /root/.grok would shadow the binary and break `grok`. Mount onto the sessions
+# subdir instead -- persists sessions across container recreation without
+# hiding the install. (Verified: an empty mount over /root/.grok makes `grok`
+# vanish from PATH; a mount over /root/.grok/sessions leaves it intact.)
+AGENT_CONTAINER_STATE_MOUNTS = {
+    "grokbuild": "/root/.grok/sessions",
 }
 AGENT_IDENTIFIER_KEYS = {
     "claudecode": "session_id",
     "openaicodex": "thread_id",
     "pi": "id",
+    # grok's final `end` event carries `sessionId` at the top level, so the flat
+    # load_trajectory_identifier() finds it and resume works.
+    "grokbuild": "sessionId",
 }
 PI_IGNORED_EVENT_TYPES = {"message_update", "tool_execution_update"}
 PI_TOOL_TIMEOUT_EXTENSION_RELATIVE_PATH = Path(".latch_eval_tools", "tool_timeout.js")
@@ -501,6 +516,7 @@ def _build_agent_command(
     claude_code_extra_args: list[str] | None,
     resume_identifier: str | None = None,
     system_prompt: str | None = None,
+    prompt_text: str | None = None,
 ) -> list[str]:
     if agent_type == "claudecode":
         agent_cmd = list(cli_command)
@@ -554,6 +570,27 @@ def _build_agent_command(
         agent_cmd.extend(["--extension", PI_TOOL_TIMEOUT_EXTENSION_CONTAINER_PATH])
         if system_prompt not in (None, ""):
             agent_cmd.extend(["--system-prompt", system_prompt])
+    elif agent_type == "grokbuild":
+        # grok-build headless: one prompt, no TUI, structured event stream.
+        # Unlike claude/codex/pi (which read the prompt from stdin), grok's `-p`
+        # takes the prompt as an argument, so it is threaded in here.
+        agent_cmd = list(cli_command)
+        agent_cmd.extend(
+            [
+                "--no-auto-update",
+                "--no-alt-screen",
+                "--always-approve",
+                "--cwd",
+                "/workspace",
+                "--output-format",
+                "streaming-json",
+            ]
+        )
+        if resume_identifier is not None:
+            agent_cmd.extend(["--resume", resume_identifier])
+        if system_prompt not in (None, ""):
+            agent_cmd.extend(["--system-prompt", system_prompt])
+        agent_cmd.extend(["-p", prompt_text if prompt_text is not None else ""])
     else:
         raise ValueError(f"Unknown agent type: {agent_type}")
 
@@ -582,7 +619,9 @@ def _create_cli_container(
 
     agent_state_dir = work_dir / state_dir_name
     agent_state_dir.mkdir(parents=True, exist_ok=True)
-    container_state_mount = f"/root/{state_dir_name}"
+    container_state_mount = AGENT_CONTAINER_STATE_MOUNTS.get(
+        agent_type, f"/root/{state_dir_name}"
+    )
     subprocess.run(
         [
             "docker",
@@ -634,6 +673,25 @@ def _extract_last_message(trajectory: list[dict], agent_type: str) -> str:
     than pi), so this is permissive — any string that looks like assistant
     output works.
     """
+    if agent_type == "grokbuild":
+        # grok streams assistant text as flat {"type":"text","data":"..."} chunks,
+        # emitting a fresh run of them after each tool call. Return the last
+        # contiguous run (the final narration), not every chunk concatenated.
+        segments: list[str] = []
+        current: list[str] = []
+        for event in trajectory:
+            if event.get("type") == "text" and isinstance(event.get("data"), str):
+                current.append(event["data"])
+            elif current:
+                segments.append("".join(current))
+                current = []
+        if current:
+            segments.append("".join(current))
+        for segment in reversed(segments):
+            if segment.strip():
+                return segment.strip()
+        return ""
+
     for event in reversed(trajectory):
         if not isinstance(event, dict):
             continue
@@ -826,6 +884,8 @@ def _run_cli_agent(
         ENV_KEYS = OPENAI_ENV_KEYS
     elif agent_type == "pi":
         ENV_KEYS = PI_ENV_KEYS
+    elif agent_type == "grokbuild":
+        ENV_KEYS = GROK_ENV_KEYS
     else:
         raise ValueError(f"Unknown agent type: {agent_type}")
     extra_env_keys = set(json.loads(env.get("EXTRA_ENV_KEYS") or "[]"))
@@ -929,6 +989,7 @@ def _run_cli_agent(
                     claude_code_extra_args=claude_code_extra_args,
                     resume_identifier=resume_identifier,
                     system_prompt=system_prompt,
+                    prompt_text=prompt_text,
                 )
 
                 process = subprocess.Popen(
@@ -1118,7 +1179,11 @@ def _run_cli_agent(
                         log_file.flush()
                         prompt_text = "Continue."
                         continue
-                    if agent_type == "claudecode":
+                    # claudecode and grokbuild both run one-shot (`--print` / `-p`):
+                    # ending the turn kills the session, so an agent that "waits"
+                    # for a background job exits with no answer. Nudge it to resume
+                    # and finish synchronously (up to MAX_CLAUDECODE_ANSWER_RESUMES).
+                    if agent_type in ("claudecode", "grokbuild"):
                         if benchmark:
                             answer_present = (
                                 finished_file.exists()
@@ -1133,12 +1198,12 @@ def _run_cli_agent(
                                 persist_trajectory()
                                 resume_identifier = load_trajectory_identifier(
                                     trajectory_file,
-                                    AGENT_IDENTIFIER_KEYS["claudecode"],
+                                    AGENT_IDENTIFIER_KEYS[agent_type],
                                 )
                                 if resume_identifier is not None:
                                     claudecode_answer_resumes += 1
                                     log_file.write(
-                                        "\n\nClaude Code ended its turn without a "
+                                        f"\n\n{agent_type} ended its turn without a "
                                         "final answer; resuming session "
                                         f"{resume_identifier} (resume "
                                         f"{claudecode_answer_resumes}/"
@@ -1420,6 +1485,13 @@ def _extract_metadata(
         for event in trajectory:
             if event.get("type") == "session":
                 session_id = event.get("id")
+        if session_id:
+            metadata["session_id"] = session_id
+    elif agent_type == "grokbuild":
+        session_id = None
+        for event in trajectory:
+            if event.get("sessionId"):
+                session_id = event.get("sessionId")
         if session_id:
             metadata["session_id"] = session_id
 
