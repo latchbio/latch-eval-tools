@@ -441,27 +441,6 @@ def _pi_metrics(
     )
 
 
-# ---------------------------------------------------------------------------
-# grok-build (xai-org/grok-build) — headless `--output-format streaming-json`
-#
-# Schema verified against a real capture (grok 1.0.3; examples/grok_smoke_traj.jsonl).
-# grok emits flat newline-delimited events keyed by a top-level `type` (NOT the
-# ACP `session/update` envelope the docs implied). The ones we consume:
-#   {"type":"text","data":"..."}                     assistant text chunk
-#   {"type":"tool_call","toolName":"write",...}      one tool invocation
-#   {"type":"tool_call_update",...}                  tool progress/result
-#   {"type":"usage","usage":{...}}                   per-turn token usage
-#   {"type":"end","stopReason":"end_turn",           final event (authoritative):
-#     "sessionId":"...","num_turns":N,
-#     "total_cost_usd":C,
-#     "usage":{"input_tokens":..,"output_tokens":..,
-#              "cache_read_input_tokens":..,"cache_creation_input_tokens":..,
-#              "reasoning_tokens":..,"total_tokens":..}}
-# The `end` event carries cumulative usage, a provider-reported dollar cost, the
-# turn count, and the session id -- so cost is provider_reported (no pricing
-# table needed) and resume works (sessionId is top-level).
-# ---------------------------------------------------------------------------
-
 
 def _grok_usage_from_dict(usage: dict[str, Any] | None) -> HarnessUsage:
     if usage is None:

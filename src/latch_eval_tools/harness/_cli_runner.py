@@ -571,9 +571,6 @@ def _build_agent_command(
         if system_prompt not in (None, ""):
             agent_cmd.extend(["--system-prompt", system_prompt])
     elif agent_type == "grokbuild":
-        # grok-build headless: one prompt, no TUI, structured event stream.
-        # Unlike claude/codex/pi (which read the prompt from stdin), grok's `-p`
-        # takes the prompt as an argument, so it is threaded in here.
         agent_cmd = list(cli_command)
         agent_cmd.extend(
             [
@@ -1179,10 +1176,6 @@ def _run_cli_agent(
                         log_file.flush()
                         prompt_text = "Continue."
                         continue
-                    # claudecode and grokbuild both run one-shot (`--print` / `-p`):
-                    # ending the turn kills the session, so an agent that "waits"
-                    # for a background job exits with no answer. Nudge it to resume
-                    # and finish synchronously (up to MAX_CLAUDECODE_ANSWER_RESUMES).
                     if agent_type in ("claudecode", "grokbuild"):
                         if benchmark:
                             answer_present = (
