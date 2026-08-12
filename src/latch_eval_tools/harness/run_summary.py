@@ -10,7 +10,7 @@ from latch_eval_tools.llm_refusal import (
     detect_llm_refusal,
 )
 
-CliHarnessAgentType = Literal["claudecode", "openaicodex", "pi"]
+CliHarnessAgentType = Literal["claudecode", "openaicodex", "pi", "grokbuild"]
 HarnessCostSource = Literal["provider_reported", "latch_eval_tools_pricing"]
 HarnessRefusalStatus = Literal["detected", "not_detected", "not_evaluated"]
 
@@ -441,6 +441,92 @@ def _pi_metrics(
     )
 
 
+
+def _grok_usage_from_dict(usage: dict[str, Any] | None) -> HarnessUsage:
+    if usage is None:
+        return HarnessUsage()
+    return HarnessUsage(
+        input_tokens=_nonnegative_int(usage.get("input_tokens")),
+        output_tokens=_nonnegative_int(usage.get("output_tokens")),
+        cache_read_tokens=_nonnegative_int(usage.get("cache_read_input_tokens")),
+        cache_write_tokens=_nonnegative_int(usage.get("cache_creation_input_tokens")),
+        reasoning_tokens=_nonnegative_int(usage.get("reasoning_tokens")),
+    )
+
+
+def _grok_end_event(trajectory: list[dict[str, Any]]) -> dict[str, Any] | None:
+    return next(
+        (event for event in reversed(trajectory) if event.get("type") == "end"),
+        None,
+    )
+
+
+def _grok_usage(trajectory: list[dict[str, Any]]) -> HarnessUsage:
+    # Prefer the cumulative usage on the final `end` event; fall back to summing
+    # the per-turn `usage` events if the run ended without one (timeout/crash).
+    end = _grok_end_event(trajectory)
+    if end is not None:
+        usage = _dict_value(end.get("usage"))
+        if usage is not None:
+            return _grok_usage_from_dict(usage)
+
+    totals = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "reasoning_tokens": 0,
+    }
+    field_map = {
+        "input_tokens": "input_tokens",
+        "output_tokens": "output_tokens",
+        "cache_read_tokens": "cache_read_input_tokens",
+        "cache_write_tokens": "cache_creation_input_tokens",
+        "reasoning_tokens": "reasoning_tokens",
+    }
+    observed = {key: False for key in totals}
+    for event in trajectory:
+        if event.get("type") != "usage":
+            continue
+        usage = _dict_value(event.get("usage"))
+        if usage is None:
+            continue
+        for canonical, grok_name in field_map.items():
+            value = _nonnegative_int(usage.get(grok_name))
+            if value is not None:
+                totals[canonical] += value
+                observed[canonical] = True
+    return HarnessUsage(
+        **{key: (totals[key] if observed[key] else None) for key in totals}
+    )
+
+
+def _grok_step_count(trajectory: list[dict[str, Any]]) -> int:
+    # One step per tool invocation (`tool_call`); `tool_call_update` events are
+    # progress on an already-counted call and are not counted.
+    return sum(1 for event in trajectory if event.get("type") == "tool_call")
+
+
+def _grok_metrics(
+    trajectory: list[dict[str, Any]],
+    duration_seconds: float,
+    model_name: str | None,
+) -> HarnessRunMetrics:
+    end = _grok_end_event(trajectory)
+    total_cost_usd = (
+        _nonnegative_float(end.get("total_cost_usd")) if end is not None else None
+    )
+    turn_count = _nonnegative_int(end.get("num_turns")) if end is not None else None
+    return HarnessRunMetrics(
+        duration_seconds=duration_seconds,
+        turn_count=turn_count,
+        step_count=_grok_step_count(trajectory) if trajectory else None,
+        usage=_grok_usage(trajectory),
+        total_cost_usd=total_cost_usd,
+        cost_source="provider_reported" if total_cost_usd is not None else None,
+    )
+
+
 def _miniswe_messages(
     serialized_trajectory: dict[str, Any],
 ) -> list[dict[str, Any]] | None:
@@ -625,6 +711,12 @@ def build_cli_run_summary(
         )
     elif agent_type == "pi":
         metrics = _pi_metrics(
+            trajectory,
+            normalized_duration,
+            model_name,
+        )
+    elif agent_type == "grokbuild":
+        metrics = _grok_metrics(
             trajectory,
             normalized_duration,
             model_name,
