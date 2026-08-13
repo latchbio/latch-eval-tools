@@ -591,10 +591,13 @@ def _build_agent_command(
     else:
         raise ValueError(f"Unknown agent type: {agent_type}")
 
-    if model_name and model_map:
+    preserve_claude_session_model = (
+        agent_type == "claudecode" and resume_identifier is not None
+    )
+    if not preserve_claude_session_model and model_name and model_map:
         mapped_model = model_map.get(model_name, model_name)
         agent_cmd.extend(["--model", mapped_model])
-    elif model_name:
+    elif not preserve_claude_session_model and model_name:
         agent_cmd.extend(["--model", model_name])
     if agent_type == "openaicodex" and resume_identifier is not None:
         agent_cmd.append(resume_identifier)

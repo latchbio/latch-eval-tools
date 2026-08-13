@@ -1,3 +1,10 @@
+from latch_eval_tools.harness.claude_model_routing import (
+    ClaudeModelRouting,
+    ClaudeModelUsage,
+    ClaudeSafetyFallback,
+    load_claude_model_routing,
+    parse_claude_model_routing,
+)
 from latch_eval_tools.harness.claudecode import run_claudecode_task
 from latch_eval_tools.harness.grokbuild import run_grokbuild_task
 from latch_eval_tools.harness.minisweagent import run_minisweagent_task
@@ -24,6 +31,9 @@ from latch_eval_tools.harness.utils import (
 )
 
 __all__ = [
+    "ClaudeModelRouting",
+    "ClaudeModelUsage",
+    "ClaudeSafetyFallback",
     "EvalRunner",
     "HarnessRefusalAssessment",
     "HarnessRunMetrics",
@@ -36,7 +46,9 @@ __all__ = [
     "get_agent_workspace_dir",
     "get_cache_dir",
     "get_project_root",
+    "load_claude_model_routing",
     "load_trajectory_identifier",
+    "parse_claude_model_routing",
     "run_claudecode_task",
     "run_grokbuild_task",
     "run_minisweagent_task",
