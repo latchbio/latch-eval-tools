@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -13,7 +14,21 @@ MODEL_MAP = {
     "anthropic/claude-sonnet-4-7": "claude-sonnet-4-7",
     "anthropic/claude-opus-4-8": "claude-opus-4-8",
     "anthropic/claude-halva-eap": "claude-halva-eap",
+    "anthropic/claude-fable-5": "claude-fable-5",
 }
+
+
+def _switch_models_on_flag_args(value: bool | None) -> list[str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise TypeError("switch_models_on_flag must be a bool or None")
+    settings = json.dumps(
+        {"switchModelsOnFlag": value},
+        separators=(",", ":"),
+    )
+    return ["--settings", settings]
+
 
 def run_claudecode_task(
     task_prompt: str,
@@ -26,6 +41,7 @@ def run_claudecode_task(
     prompt_suffix: str | None = load_data_instructions(),
     completion: bool = False,
     benchmark: bool = False,
+    switch_models_on_flag: bool | None = None,
 ) -> dict:
     if not os.environ.get("ANTHROPIC_API_KEY"):
         raise ValueError(
@@ -43,6 +59,7 @@ def run_claudecode_task(
         model_name=model_name,
         eval_timeout=eval_timeout,
         model_map=MODEL_MAP,
+        claude_code_extra_args=_switch_models_on_flag_args(switch_models_on_flag),
         docker_image=docker_image,
         memory_limit_bytes=memory_limit_bytes,
         system_prompt=system_prompt,

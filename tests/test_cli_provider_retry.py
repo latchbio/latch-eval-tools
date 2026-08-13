@@ -413,11 +413,28 @@ def test_claude_resume_identifier_is_only_passed_to_resume_flag() -> None:
     command = _cli_runner._build_agent_command(
         "claudecode",
         ["claude"],
-        None,
-        None,
-        None,
+        "anthropic/claude-fable-5",
+        {"anthropic/claude-fable-5": "claude-fable-5"},
+        ["--settings", '{"switchModelsOnFlag":true}'],
         resume_identifier="session-id",
     )
 
     assert command.count("session-id") == 1
     assert command[command.index("--resume") + 1] == "session-id"
+    assert "--model" not in command
+    settings = json.loads(command[command.index("--settings") + 1])
+    assert settings == {"switchModelsOnFlag": True}
+
+
+def test_claude_initial_command_selects_mapped_fable_model() -> None:
+    command = _cli_runner._build_agent_command(
+        "claudecode",
+        ["claude"],
+        "anthropic/claude-fable-5",
+        {"anthropic/claude-fable-5": "claude-fable-5"},
+        ["--settings", '{"switchModelsOnFlag":true}'],
+    )
+
+    assert command[command.index("--model") + 1] == "claude-fable-5"
+    settings = json.loads(command[command.index("--settings") + 1])
+    assert settings == {"switchModelsOnFlag": True}

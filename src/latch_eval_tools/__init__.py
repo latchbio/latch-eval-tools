@@ -20,6 +20,9 @@ from latch_eval_tools.graders import (
     get_nested_value,
 )
 from latch_eval_tools.harness import (
+    ClaudeModelRouting,
+    ClaudeModelUsage,
+    ClaudeSafetyFallback,
     EvalRunner,
     HarnessRefusalAssessment,
     HarnessRunMetrics,
@@ -29,6 +32,8 @@ from latch_eval_tools.harness import (
     cleanup_workspace,
     download_data,
     download_single_dataset,
+    load_claude_model_routing,
+    parse_claude_model_routing,
     run_claudecode_task,
     run_minisweagent_task,
     run_openaicodex_task,
@@ -50,11 +55,16 @@ __all__ = [
     "TestResult",  # Backward compatibility alias
     # Harness
     "EvalRunner",
+    "ClaudeModelRouting",
+    "ClaudeModelUsage",
+    "ClaudeSafetyFallback",
     "run_minisweagent_task",
     "run_claudecode_task",
     "run_openaicodex_task",
     "run_pi_task",
     "run_plotsagent_task",
+    "load_claude_model_routing",
+    "parse_claude_model_routing",
     "download_single_dataset",
     "download_data",
     "batch_download_datasets",
