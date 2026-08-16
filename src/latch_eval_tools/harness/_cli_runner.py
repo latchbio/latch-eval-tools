@@ -132,6 +132,29 @@ OPENROUTER_MODEL_CONFIGS: dict[str, dict] = {
             "supportsUsageInStreaming": True,
         },
     },
+    # Qwen3.8-27B: dense VL model, all pi thinking levels pinned to "xhigh".
+    # https://openrouter.ai/qwen/qwen3.8-27b
+    "openrouter/qwen/qwen3.8-27b": {
+        "id": "qwen/qwen3.8-27b",
+        "name": "Qwen3.8 27B",
+        "reasoning": True,
+        "input": ["text", "image"],
+        "contextWindow": 262144,
+        "maxTokens": 131072,
+        "cost": {"input": 0.45, "output": 3.2, "cacheRead": 0, "cacheWrite": 0},
+        "thinkingLevelMap": {
+            "low": "xhigh",
+            "medium": "xhigh",
+            "high": "xhigh",
+            "xhigh": "xhigh",
+            "max": "xhigh",
+        },
+        "compat": {
+            "thinkingFormat": "reasoning_effort",
+            "supportsReasoningEffort": True,
+            "supportsUsageInStreaming": True,
+        },
+    },
 }
 
 
