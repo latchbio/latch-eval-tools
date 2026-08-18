@@ -21,10 +21,13 @@ class EvalRunner:
         run_id: str | None = None,
         cache_name: str = ".eval_cache",
         workspace_name: str = ".eval_workspace",
-        benchmark_name: str = "Eval"
+        benchmark_name: str = "Eval",
+        data_node_override: str | list[str] | None = None,
+        work_root: str | Path | None = None,
+        cache_dir: str | Path | None = None,
     ):
         """Initialize evaluation runner.
-        
+
         Args:
             eval_path: Path to eval JSON file
             keep_workspace: Whether to preserve workspace after completion
@@ -32,6 +35,11 @@ class EvalRunner:
             cache_name: Name of cache directory (e.g., .scbench, .spatialbench)
             workspace_name: Name of workspace directory
             benchmark_name: Display name for benchmark (e.g., "SCBench", "SpatialBench")
+            data_node_override: Use these data node(s) instead of the eval's data_node.
+            work_root: Explicit base dir for the workspace (see setup_workspace).
+                       Defaults to the project root for backward compatibility.
+            cache_dir: Explicit dataset cache directory (see get_cache_dir).
+                       Defaults to a project-root cache for backward compatibility.
         """
         self.eval_path = Path(eval_path)
         self.keep_workspace = keep_workspace
@@ -39,6 +47,9 @@ class EvalRunner:
         self.cache_name = cache_name
         self.workspace_name = workspace_name
         self.benchmark_name = benchmark_name
+        self.data_node_override = data_node_override
+        self.work_root = work_root
+        self.cache_dir = cache_dir
 
         if not self.eval_path.exists():
             raise FileNotFoundError(f"Eval file not found: {self.eval_path}")
@@ -65,14 +76,19 @@ class EvalRunner:
         print(self.test_case.task)
         print("-" * 80)
 
-        work_dir = setup_workspace(self.test_case.id, self.run_id, self.workspace_name)
+        work_dir = setup_workspace(self.test_case.id, self.run_id, self.workspace_name, root_dir=self.work_root)
         print(f"\nWorking directory: {work_dir}")
 
         print("\n" + "=" * 80)
         print("Staging data files...")
         print("=" * 80)
 
-        download_data(self.test_case.data_node or [], work_dir, self.cache_name)
+        data_nodes = (
+            self.data_node_override
+            if self.data_node_override is not None
+            else (self.test_case.data_node or [])
+        )
+        download_data(data_nodes, work_dir, self.cache_name, cache_dir=self.cache_dir)
 
         task_prompt = self.test_case.task
 

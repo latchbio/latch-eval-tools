@@ -4,8 +4,49 @@ Shared eval tools for single-cell bench, spatial bench, and future biology bench
 
 ## Installation
 
+### Get the `latch-eval` CLI on your PATH (recommended)
+
+Install it as a **standalone tool**. This is isolated and puts `latch-eval` on
+your PATH from any directory — it does **not** depend on which Python / conda env
+(or whether any) is active, which avoids the "command lives in an env that isn't
+active" and "wrong env shadows the command" problems:
+
 ```bash
-pip install latch-eval-tools
+# from PyPI (once a release including the CLI is published):
+uv tool install latch-eval-tools          # or: pipx install latch-eval-tools
+
+# from a local checkout (current dev / pre-release) — --editable keeps edits live:
+uv tool install --editable .
+
+# or straight from the branch:
+uv tool install "git+https://github.com/latchbio/latch-eval-tools.git@add-eval-run-cli"
+```
+
+If the tool shim directory isn't on PATH yet, wire it up once (then restart your shell):
+
+```bash
+uv tool update-shell                      # uv (adds ~/.local/bin)
+# pipx equivalent: pipx ensurepath
+```
+
+Verify: `latch-eval --help` and `which latch-eval`.
+
+### Use as a Python library
+
+```bash
+pip install latch-eval-tools              # into a venv / conda env
+```
+
+Note: a plain `pip install` registers the `latch-eval` script inside *that*
+environment's `bin/`, so the command is only on PATH while that env is **active**
+(`conda activate <env>` / `source .venv/bin/activate`), and after installing into
+a freshly-active env you may need `hash -r` (zsh: `rehash`) or a new shell. For a
+reliably-available command, prefer the standalone `uv tool` / `pipx` install above.
+
+### Run without putting anything on PATH
+
+```bash
+uvx --from latch-eval-tools latch-eval run ...   # one-off, no install
 ```
 
 ## What is included
@@ -38,6 +79,53 @@ print(result["grader_result"].reasoning if result["grader_result"] else "No grad
 - returning `{"answer": <dict>, "metadata": <dict>}`
 
 If your agent writes `eval_answer.json` in `work_dir`, the runner will load it automatically.
+
+## CLI
+
+Installing the package adds a `latch-eval` command that wraps `EvalRunner` so you
+can run a single eval JSON end-to-end (download data → run an agent in a Docker
+sandbox → grade) without writing any Python:
+
+```bash
+latch-eval run -e evals/count_cells.json --harness claudecode
+latch-eval run -e evals/de03.json --harness minisweagent --model anthropic/claude-sonnet-4-6
+```
+
+`--harness` is required: one of `claudecode`, `minisweagent`, `openaicodex`,
+`pi`. `minisweagent` also requires `--model`. Useful flags:
+
+- `--json-out PATH` — write a structured result (`passed`, `grader_result`, `agent_answer`, `metadata`)
+- `--keep-workspace` / `--no-keep-workspace` — keep run artifacts (default: keep)
+- `--output-dir DIR` — where run workspaces go, as `<output-dir>/[run-id/]<eval_id>/` (default: `./.latch-eval-runs`, relative to the current directory)
+- `--cache-dir DIR` — shared downloaded-data cache, reused across runs/projects (default: `~/.cache/latch-eval`)
+- `--data PATH` — stage a local file/dir as `/workspace/data`, bypassing the eval's `data_node` download (repeatable)
+- `--env-file PATH` — load environment variables from a specific `.env` (otherwise auto-discovered, see below)
+- `--eval-timeout SECONDS`, `--docker-image IMAGE`, `--run-id ID`
+- `--no-preflight` — skip the Docker / API-key / Latch-token checks
+
+**Environment / `.env`:** on startup the CLI auto-loads a `.env` file found by
+walking up from the current directory, so you don't have to `source .env` or
+export keys before a run. It never overrides variables already set in your real
+environment, and point it at a specific file with `--env-file PATH`. Put your
+provider keys (e.g. `ANTHROPIC_API_KEY`) there. (Don't commit `.env` — add it to
+your project's `.gitignore`.)
+
+Requires Docker, a provider API key for the chosen harness (e.g.
+`ANTHROPIC_API_KEY`), and `~/.latch/token` (via `latch login`) for `data_node`
+downloads. The command exits non-zero on FAIL / NO GRADE. Note: only a single
+`grader` is graded; evals using a multi-grader `graders` list run but produce no
+local grade.
+
+Run workspaces are written under `./.latch-eval-runs/` relative to where you
+invoke `latch-eval` (overridable with `--output-dir`), so they never land inside
+the installed package. `latch://` data nodes are downloaded once into the shared
+cache (`~/.cache/latch-eval`) and hardlinked into each run's workspace, so
+re-running an eval — from any directory — does not re-download. Use `--data` to
+point at data already on disk and skip Latch entirely; local paths and `file://`
+URIs also work directly as `data_node` values.
+
+(Library callers of `EvalRunner` are unaffected: without `work_root` / `cache_dir`,
+workspaces and cache still resolve under the project root as before.)
 
 ## Graders
 
