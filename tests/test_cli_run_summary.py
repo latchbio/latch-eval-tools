@@ -14,7 +14,7 @@ from latch_eval_tools.harness.run_summary import (
 )
 
 
-def test_claude_summary_uses_result_event_and_counts_tool_calls() -> None:
+def test_claude_summary_uses_result_event_and_counts_tool_calls(tmp_path) -> None:
     trajectory = [
         {
             "type": "assistant",
@@ -52,6 +52,7 @@ def test_claude_summary_uses_result_event_and_counts_tool_calls() -> None:
         False,
         0,
         1024,
+        tmp_path,
     )
 
     assert metadata["total_cost"] == 1.25
@@ -161,6 +162,7 @@ def test_codex_summary_reads_authoritative_local_sidecar(tmp_path) -> None:
         False,
         0,
         1024,
+        tmp_path,
         codex_sidecar_events=sidecar_events,
     )
     metrics = metadata["run_summary"]["metrics"]
@@ -265,6 +267,7 @@ def test_pi_summary_combines_trajectory_metrics_and_refusal_sidecar(
         False,
         0,
         1024,
+        tmp_path,
         refusal_events=refusal_events,
     )
     run_summary = metadata["run_summary"]

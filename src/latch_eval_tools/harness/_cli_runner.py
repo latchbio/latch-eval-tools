@@ -2,6 +2,7 @@ import json
 import math
 import os
 import random
+import re
 import subprocess
 import threading
 import time
@@ -1435,6 +1436,7 @@ def _run_cli_agent(
         oom_detected=oom_detected,
         oom_restarts=oom_restarts,
         memory_limit_bytes=memory_limit_bytes,
+        work_dir=work_dir,
         codex_sidecar_events=codex_sidecar_events,
         refusal_events=pi_refusal_events,
         agent_error=structured_agent_error,
@@ -1450,6 +1452,59 @@ def _run_cli_agent(
     return {"answer": agent_answer, "metadata": metadata}
 
 
+_UUID_RE = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+    re.IGNORECASE,
+)
+
+
+def _scan_grok_session_id(work_dir: Path) -> str | None:
+    """Recover the grok session id from the on-disk session store.
+
+    grok persists a session record under ``work_dir/.grok`` (bind-mounted onto
+    ``/root/.grok/sessions`` in the container, see AGENT_CONTAINER_STATE_MOUNTS)
+    as soon as the session is created -- well before the terminal ``end`` event,
+    which is our only other source of the id. Reading it from disk means we
+    still capture the session id when a run drops (timeout / OOM / crash) before
+    emitting ``end``. Returns the id from the most recently modified session
+    record, or ``None`` if none can be found. Never raises.
+    """
+    sessions_dir = work_dir / AGENT_STATE_DIRS["grokbuild"]  # <work_dir>/.grok
+    if not sessions_dir.is_dir():
+        return None
+
+    candidates: list[tuple[float, str]] = []
+    try:
+        entries = list(sessions_dir.rglob("*"))
+    except OSError:
+        return None
+    for entry in entries:
+        try:
+            mtime = entry.stat().st_mtime
+        except OSError:
+            continue
+        # Session id is normally the file/dir name (e.g. `<uuid>.json`).
+        name_match = _UUID_RE.search(entry.name)
+        if name_match:
+            candidates.append((mtime, name_match.group(0)))
+            continue
+        # Fall back to a `sessionId`/`id` field inside a JSON session record.
+        if entry.is_file() and entry.suffix == ".json":
+            try:
+                data = json.loads(entry.read_text())
+            except (OSError, ValueError):
+                continue
+            if isinstance(data, dict):
+                sid = data.get("sessionId") or data.get("session_id") or data.get("id")
+                if isinstance(sid, str) and _UUID_RE.search(sid):
+                    candidates.append((mtime, sid))
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0])  # oldest -> newest
+    return candidates[-1][1]
+
+
 def _extract_metadata(
     agent_type: CliHarnessAgentType,
     trajectory: list[dict[str, Any]],
@@ -1461,6 +1516,7 @@ def _extract_metadata(
     oom_detected: bool,
     oom_restarts: int,
     memory_limit_bytes: int,
+    work_dir: Path,
     codex_sidecar_events: list[dict[str, Any]] | None = None,
     refusal_events: list[dict[str, Any]] | None = None,
     agent_error: str | None = None,
@@ -1508,11 +1564,25 @@ def _extract_metadata(
             metadata["session_id"] = session_id
     elif agent_type == "grokbuild":
         session_id = None
+        request_ids: list[str] = []
         for event in trajectory:
             if event.get("sessionId"):
                 session_id = event.get("sessionId")
+            if event.get("requestId"):
+                request_ids.append(event["requestId"])
+        if session_id is not None:
+            metadata["session_id_source"] = "end_event"
+        else:
+            # The terminal `end` event never arrived (timeout / OOM / crash),
+            # so recover the id from grok's on-disk session store, which is
+            # written when the session is created.
+            session_id = _scan_grok_session_id(work_dir)
+            if session_id is not None:
+                metadata["session_id_source"] = "session_store"
         if session_id:
             metadata["session_id"] = session_id
+        if request_ids:
+            metadata["request_ids"] = request_ids
 
     if metrics.total_cost_usd is not None:
         metadata["total_cost"] = metrics.total_cost_usd
