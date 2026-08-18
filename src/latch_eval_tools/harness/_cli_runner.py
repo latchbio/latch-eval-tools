@@ -238,6 +238,10 @@ PROVIDER_CAPACITY_JITTER_SECONDS = 15.0
 PROVIDER_TRANSPORT_FALLBACK_SECONDS = 5.0
 PROVIDER_TRANSPORT_JITTER_SECONDS = 5.0
 PROVIDER_HINT_JITTER_SECONDS = 5.0
+# The status code alone does not say why a request was rejected -- a 400 covers
+# both a malformed request and a quota or spend-limit block. Record the
+# provider's message alongside it so a failed run reports the reason.
+PROVIDER_ERROR_MESSAGE_MAX_CHARS = 2048
 PI_ASSISTANT_EVENT_TYPES = frozenset({"message", "message_end"})
 
 
@@ -497,6 +501,53 @@ def classify_terminal_provider_failure(
         )
     if agent_type == "pi":
         return _pi_provider_failure(attempt_events)
+    return None
+
+
+def _nonempty_string(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _claudecode_provider_error_message(attempt_events: list[dict]) -> str | None:
+    for result in reversed(attempt_events):
+        if result.get("type") != "result":
+            continue
+        if result.get("terminal_reason") != "api_error":
+            return None
+        return _nonempty_string(result.get("result"))
+    return None
+
+
+def _pi_provider_error_message(attempt_events: list[dict]) -> str | None:
+    for event in reversed(attempt_events):
+        if event.get("type") not in PI_ASSISTANT_EVENT_TYPES:
+            continue
+        message = event.get("message")
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        if message.get("stopReason") != "error":
+            return None
+        return _nonempty_string(message.get("errorMessage"))
+    return None
+
+
+def terminal_provider_error_message(
+    agent_type: str,
+    attempt_events: list[dict],
+) -> str | None:
+    """The provider's message for the terminal API error, when the agent left one.
+
+    Pairs with ``classify_terminal_provider_failure``, which reads the status
+    code from the same event. The status alone cannot distinguish a malformed
+    request from a quota or spend-limit block; the message can.
+    """
+    if agent_type == "claudecode":
+        return _claudecode_provider_error_message(attempt_events)
+    if agent_type == "pi":
+        return _pi_provider_error_message(attempt_events)
     return None
 
 
@@ -960,6 +1011,7 @@ def _run_cli_agent(
     oom_restarts = 0
     provider_resumes = 0
     last_provider_failure: ProviderFailure | None = None
+    last_provider_error_message: str | None = None
 
     trajectory_lock = threading.Lock()
 
@@ -1004,6 +1056,7 @@ def _run_cli_agent(
                 # Only carry provider evidence from the final failed attempt.
                 # A recovered rate limit must not relabel a later unrelated error.
                 last_provider_failure = None
+                last_provider_error_message = None
                 attempt_start_index = len(trajectory)
                 agent_cmd = _build_agent_command(
                     agent_type=agent_type,
@@ -1133,6 +1186,9 @@ def _run_cli_agent(
                 )
                 if timed_out_attempt:
                     last_provider_failure = provider_failure
+                    last_provider_error_message = terminal_provider_error_message(
+                        agent_type, attempt_events
+                    )
                     log_file.write(
                         f"\n\nAgent timed out after {eval_timeout} seconds\n"
                     )
@@ -1147,6 +1203,9 @@ def _run_cli_agent(
 
                 if provider_failure is not None:
                     last_provider_failure = provider_failure
+                    last_provider_error_message = terminal_provider_error_message(
+                        agent_type, attempt_events
+                    )
                     if provider_failure.retryable:
                         persist_trajectory()
                         candidate_resume_identifier = load_trajectory_identifier(
@@ -1418,6 +1477,10 @@ def _run_cli_agent(
                 last_provider_failure.retry_after_seconds
             )
         error_details["provider_retry_count"] = provider_resumes
+        if last_provider_error_message is not None:
+            error_details["result"] = last_provider_error_message[
+                :PROVIDER_ERROR_MESSAGE_MAX_CHARS
+            ]
 
     structured_agent_error = None
     if error_details is not None:

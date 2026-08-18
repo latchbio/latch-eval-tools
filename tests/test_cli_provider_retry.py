@@ -380,6 +380,81 @@ def test_ignores_unstructured_provider_evidence(
     assert _cli_runner.classify_terminal_provider_failure("pi", attempt_events) is None
 
 
+def test_reads_claude_spend_limit_message_from_terminal_result() -> None:
+    message = (
+        "API Error: 400 You have reached your specified API usage limits. "
+        "You will regain access on 2026-09-01 at 00:00 UTC."
+    )
+    events = [
+        {
+            "type": "result",
+            "terminal_reason": "api_error",
+            "api_error_status": 400,
+            "result": message,
+        }
+    ]
+
+    # A 400 alone cannot tell a malformed request from a spend-limit block.
+    assert _cli_runner.classify_terminal_provider_failure(
+        "claudecode", events
+    ) == _cli_runner.ProviderFailure(status_code=400, retry_after_seconds=None)
+    assert _cli_runner.terminal_provider_error_message("claudecode", events) == message
+
+
+def test_reads_pi_provider_error_message_from_terminal_message() -> None:
+    error_message = '402: {"message":"Insufficient credits","code":402}'
+
+    assert (
+        _cli_runner.terminal_provider_error_message(
+            "pi",
+            [
+                {
+                    "type": "message_end",
+                    "message": {
+                        "role": "assistant",
+                        "stopReason": "error",
+                        "errorMessage": error_message,
+                    },
+                }
+            ],
+        )
+        == error_message
+    )
+
+
+@pytest.mark.parametrize(
+    "agent_type, attempt_events",
+    [
+        # Clean turn: no terminal API error, so there is no provider message.
+        (
+            "claudecode",
+            [{"type": "result", "terminal_reason": "end_turn", "is_error": False}],
+        ),
+        # Terminal API error the agent reported without any message text.
+        (
+            "claudecode",
+            [
+                {
+                    "type": "result",
+                    "terminal_reason": "api_error",
+                    "api_error_status": 400,
+                    "result": "   ",
+                }
+            ],
+        ),
+        ("pi", [{"type": "message_end", "message": {"role": "assistant"}}]),
+        # Agents whose trajectories carry no structured provider evidence.
+        ("openaicodex", [{"type": "result", "terminal_reason": "api_error"}]),
+    ],
+)
+def test_absent_provider_message_is_none(
+    agent_type: str, attempt_events: list[dict]
+) -> None:
+    assert (
+        _cli_runner.terminal_provider_error_message(agent_type, attempt_events) is None
+    )
+
+
 def test_retry_delay_honors_typed_hint_with_jitter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
