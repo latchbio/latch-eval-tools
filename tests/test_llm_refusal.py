@@ -123,6 +123,102 @@ def test_diagnostic_bounds_large_sidecar_and_agent_error_fields() -> None:
     assert len(serialized.encode("utf-8")) <= 32_768
 
 
+def _claude_code_fallback_trajectory(
+    *, result_event: dict[str, object]
+) -> list[dict[str, object]]:
+    return [
+        {"type": "system", "subtype": "init", "model": "claude-opus-4-8"},
+        {
+            "type": "system",
+            "subtype": "model_refusal_fallback",
+            "originalModel": "claude-opus-4-8",
+            "fallbackModel": "claude-sonnet-4-6",
+            "apiRefusalCategory": "bio",
+            "apiRefusalExplanation": (
+                "API integrators: you can reduce refusals for your users by "
+                "configuring a fallback model — see "
+                "https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback"
+            ),
+        },
+        {
+            "type": "assistant",
+            "message": {"model": "claude-sonnet-4-6", "stop_reason": "tool_use"},
+        },
+        result_event,
+    ]
+
+
+def test_recovered_claude_code_fallback_is_not_a_refusal() -> None:
+    # Claude Code switched models after a classifier refusal and then finished the run.
+    # Its model_refusal_fallback event carries Anthropic's "configure a fallback model"
+    # advisory, which must not mark the completed run as refused.
+    assert (
+        detect_llm_refusal(
+            trajectory_data=_claude_code_fallback_trajectory(
+                result_event={
+                    "type": "result",
+                    "subtype": "success",
+                    "is_error": False,
+                    "stop_reason": "end_turn",
+                }
+            )
+        )
+        is None
+    )
+
+
+def test_unrecovered_claude_code_fallback_is_still_a_refusal() -> None:
+    # Same shape, except the fallback model refused too, so the run really did end
+    # refused and the terminal stop reason says so.
+    result = detect_llm_refusal(
+        trajectory_data=_claude_code_fallback_trajectory(
+            result_event={
+                "type": "result",
+                "subtype": "error_during_execution",
+                "is_error": True,
+                "stop_reason": "refusal",
+            }
+        )
+    )
+    assert result is not None
+    assert result.provider == "anthropic"
+    assert result.code == "refusal"
+
+
+def test_terminal_result_stop_reason_beats_earlier_tool_use() -> None:
+    result = detect_llm_refusal(
+        trajectory_data=[
+            {"type": "assistant", "message": {"stop_reason": "tool_use"}},
+            {"type": "result", "is_error": True, "stop_reason": "refusal"},
+        ]
+    )
+    assert result is not None
+    assert result.provider == "anthropic"
+    assert result.code == "refusal"
+
+
+def test_anthropic_error_with_fallback_hint_is_still_a_refusal() -> None:
+    # No model_refusal_fallback event: the advisory arrived on a failed request, so the
+    # call was refused with nothing to recover it.
+    result = detect_llm_refusal(
+        trajectory_data=[
+            {
+                "role": "assistant",
+                "model": "claude-opus-4-8",
+                "stopReason": "error",
+                "errorMessage": (
+                    "API integrators: you can reduce refusals for your users by "
+                    "configuring a fallback model — see "
+                    "https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback"
+                ),
+            }
+        ]
+    )
+    assert result is not None
+    assert result.provider == "anthropic"
+    assert result.source == "trajectory"
+
+
 def test_write_refusal_verdict_writes_diagnostic(tmp_path) -> None:
     from latch_eval_tools.harness._cli_runner import (
         REFUSAL_VERDICT_FILENAME,
