@@ -137,6 +137,51 @@ _ANTHROPIC_FALLBACK_MARKERS: tuple[str, ...] = (
 )
 
 
+def _has_claude_fallback_switch(value: Any) -> bool:
+    """Whether the payload records Claude Code switching models after a refusal.
+
+    Claude Code emits a `system` / `model_refusal_fallback` event when a classifier
+    refusal makes it retry on another model, and that event carries Anthropic's
+    "configure a fallback model" advisory in `apiRefusalExplanation`. The advisory
+    therefore appears in the trajectory of runs that recovered and finished normally,
+    so it cannot be read as the run itself having been refused. Whether such a run was
+    ultimately refused is decided by its terminal stop reason instead.
+    """
+
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if isinstance(key, str) and key.lower() == "apirefusalexplanation":
+                return True
+            if key == "subtype" and item == "model_refusal_fallback":
+                return True
+            if _has_claude_fallback_switch(item):
+                return True
+    elif isinstance(value, list):
+        for item in value:
+            if _has_claude_fallback_switch(item):
+                return True
+    return False
+
+
+def _terminal_stop_reason(value: Any) -> str | None:
+    """Stop reason of the final Claude Code `result` event, when the payload has one.
+
+    A whole-trajectory search returns the *first* stop reason it happens across, which
+    on a multi-turn run is an intermediate `tool_use`. The terminal `result` event is
+    the one that says how the run actually ended.
+    """
+
+    if not isinstance(value, list):
+        return None
+    for item in reversed(value):
+        if not isinstance(item, dict) or item.get("type") != "result":
+            continue
+        reason = item.get("stop_reason")
+        if isinstance(reason, str) and reason:
+            return reason
+    return None
+
+
 def _find_message(strings: list[str], provider: LLMRefusalProvider) -> str:
     provider_markers: tuple[str, ...]
     if provider == "openai":
@@ -214,12 +259,14 @@ def _detect_from_value(
 
     lowered = "\n".join(strings).lower()
     code = _find_string_field(value, {"code"})
-    stop_reason = _find_string_field(value, {"stop_reason", "stopReason"})
+    stop_reason = _terminal_stop_reason(value) or _find_string_field(
+        value, {"stop_reason", "stopReason"}
+    )
     finish_reason = _find_string_field(value, {"finish_reason", "finishReason"})
 
     anthropic_fallback_hit = any(
         marker in lowered for marker in _ANTHROPIC_FALLBACK_MARKERS
-    )
+    ) and not _has_claude_fallback_switch(value)
 
     if (
         stop_reason in {"refusal", "sensitive"}
