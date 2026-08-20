@@ -22,6 +22,32 @@ def test_detects_openai_content_filter_refusal() -> None:
     assert result.provider == "openai"
 
 
+def test_detects_claude_code_long_conversation_safety_pause() -> None:
+    result = detect_llm_refusal(
+        agent_error=(
+            "API Error: Opus 4.8 can't help with this. Start a new session to "
+            "continue.\n\nSend feedback with /feedback or learn more: "
+            "https://www.anthropic.com/legal/aup.\n\nRequest ID: req_01example"
+        )
+    )
+    assert result is not None
+    assert result.provider == "anthropic"
+
+
+def test_detects_claude_code_message_safeguard_flag() -> None:
+    result = detect_llm_refusal(
+        agent_error=(
+            "API Error: Opus 5 (1M context)'s safeguards flagged this message "
+            "(https://www.anthropic.com/legal/aup.) Our intentionally broad "
+            "safeguards allow us to deliver more capabilities faster, but can "
+            "sometimes flag legitimate coding, cybersecurity, and biology tasks. "
+            "Claude Code can't respond to this message with Opus 5 (1M context)."
+        )
+    )
+    assert result is not None
+    assert result.provider == "anthropic"
+
+
 def test_returns_none_for_normal_output() -> None:
     assert detect_llm_refusal(trajectory_data={"answer": "42 cells"}) is None
 
