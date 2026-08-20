@@ -56,6 +56,20 @@ class GraderResult:
         return normalize_score(float(self.score), float(self.score_max))
 
 
+def serialize_grader_result(result: GraderResult) -> dict:
+    """Return the stable JSON-facing representation of a grader result."""
+
+    return {
+        "passed": result.passed,
+        "score": result.score,
+        "score_max": result.score_max,
+        "field_scores": result.field_scores,
+        "metrics": result.metrics,
+        "reasoning": result.reasoning,
+        "agent_answer": result.agent_answer,
+    }
+
+
 def configuration_error_result(
     agent_answer: object,
     grader_name: str,

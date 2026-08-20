@@ -10,8 +10,8 @@ from pathlib import Path
 import aiohttp
 import websockets
 
-from latch_eval_tools.graders import GRADER_REGISTRY
 from latch_eval_tools.answer_extraction import extract_answer_from_conversation
+from latch_eval_tools.graders import GRADER_REGISTRY, serialize_grader_result
 from latch_eval_tools.types import Eval, EvalResult
 
 faas_runtime_dir = Path(os.environ.get("LATCH_PLOTS_FAAS_PATH", "/root/latch-plots-faas")) / "runtime" / "mount"
@@ -686,6 +686,9 @@ class HeadlessEvalServer:
             if agent_answer is None:
                 eval_result.grader_result = {
                     "passed": False,
+                    "score": 0.0,
+                    "score_max": 1.0,
+                    "field_scores": {},
                     "metrics": {},
                     "reasoning": "Failed to extract answer from conversation history",
                     "agent_answer": None,
@@ -696,12 +699,7 @@ class HeadlessEvalServer:
                 grader = grader_cls()
                 grader_result = grader.evaluate(agent_answer, grader_config)
 
-                eval_result.grader_result = {
-                    "passed": grader_result.passed,
-                    "metrics": grader_result.metrics,
-                    "reasoning": grader_result.reasoning,
-                    "agent_answer": grader_result.agent_answer,
-                }
+                eval_result.grader_result = serialize_grader_result(grader_result)
 
                 print(f"[headless] Grader result: {'PASS' if grader_result.passed else 'FAIL'}")
                 print(f"[headless] Grader reasoning:\n{grader_result.reasoning}")

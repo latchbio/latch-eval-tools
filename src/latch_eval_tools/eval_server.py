@@ -15,7 +15,7 @@ from pathlib import Path
 import websockets
 import websockets.server
 from latch_eval_tools.types import Eval, EvalResult
-from latch_eval_tools.graders import GRADER_REGISTRY
+from latch_eval_tools.graders import GRADER_REGISTRY, serialize_grader_result
 from latch_eval_tools.answer_extraction import extract_answer_from_conversation
 from latch_eval_tools.headless_eval_server import run_eval_batch_headless
 
@@ -366,6 +366,7 @@ class EvalServer:
                 eval_result.grader_result = {
                     "passed": False,
                     "score": 0.0,
+                    "score_max": 1.0,
                     "field_scores": {},
                     "metrics": {},
                     "reasoning": "Failed to extract answer from conversation history",
@@ -377,14 +378,7 @@ class EvalServer:
                 grader = grader_cls()
                 grader_result = grader.evaluate(agent_answer, grader_config)
 
-                eval_result.grader_result = {
-                    "passed": grader_result.passed,
-                    "score": grader_result.score,
-                    "field_scores": grader_result.field_scores,
-                    "metrics": grader_result.metrics,
-                    "reasoning": grader_result.reasoning,
-                    "agent_answer": grader_result.agent_answer
-                }
+                eval_result.grader_result = serialize_grader_result(grader_result)
 
                 print(f"[eval] Grader result: {'PASS' if grader_result.passed else 'FAIL'} (score: {grader_result.score:.2%})")
                 print(f"[eval] Grader reasoning:\n{grader_result.reasoning}")

@@ -10,6 +10,7 @@ from latch_eval_tools.graders import (
     ListMatchGrader,
     MarkerGenePrecisionRecallGrader,
     MarkerGeneSeparationGrader,
+    MolecularStructureGrader,
     MultipleChoiceGrader,
     NumericRangeGrader,
     NumericToleranceGrader,
@@ -84,6 +85,7 @@ __all__ = [
     "NumericToleranceGrader",
     "MarkerGenePrecisionRecallGrader",
     "MarkerGeneSeparationGrader",
+    "MolecularStructureGrader",
     "LabelSetJaccardGrader",
     "DistributionComparisonGrader",
     "SpatialAdjacencyGrader",
@@ -101,4 +103,4 @@ __all__ = [
     "detect_llm_refusal",
 ]
 
-__version__ = "0.4.15"
+__version__ = "0.4.30"

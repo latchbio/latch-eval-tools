@@ -8,6 +8,18 @@ Shared eval tools for single-cell bench, spatial bench, and future biology bench
 pip install latch-eval-tools
 ```
 
+For molecular-structure grading and the PhysChem analysis environment (RDKit,
+nmrglue, mzML/MS helpers, pandas/Arrow, and the standard scientific plotting
+and statistics stack), install the optional chemistry extra:
+
+```bash
+pip install 'latch-eval-tools[chemistry]==0.4.30'
+```
+
+The base package remains importable without this extra. Invoking the
+`molecular_structure` grader without its pinned RDKit runtime fails closed with
+an installation hint.
+
 ## What is included
 
 - `Eval` / `EvalResult` types
@@ -43,7 +55,7 @@ If your agent writes `eval_answer.json` in `work_dir`, the runner will load it a
 
 Available grader types:
 
-`numeric_tolerance`, `numeric_range`, `label_set_jaccard`, `jaccard_label_set`, `distribution_comparison`, `marker_gene_precision_recall`, `marker_gene_separation`, `spatial_adjacency`, `multiple_choice`, `refusal_vocab`, `predicate_leaf`, `all_of`, `composite`, `average_of`, `list_match`, `dict_match`, `longest_subsequence`, `finished_file`
+`numeric_tolerance`, `numeric_range`, `label_set_jaccard`, `jaccard_label_set`, `distribution_comparison`, `marker_gene_precision_recall`, `marker_gene_separation`, `spatial_adjacency`, `multiple_choice`, `molecular_structure`, `refusal_vocab`, `predicate_leaf`, `all_of`, `composite`, `average_of`, `list_match`, `dict_match`, `longest_subsequence`, `finished_file`
 
 `jaccard_label_set` is a backward-compatible alias of `label_set_jaccard`.
 `composite` is a backward-compatible alias of `all_of`.
@@ -134,6 +146,31 @@ result = grader.evaluate_answer(
 )
 print(result.passed, result.reasoning)
 ```
+
+`molecular_structure` awards binary credit only for exact canonical molecular
+identity. Morgan radius-2, 2048-bit Tanimoto similarity and the configured
+threshold are reported as diagnostics and never award partial credit. With
+`connectivity_only: true`, stereochemistry, isotope labels, and atom-map labels
+are removed before canonical comparison; charges and molecular connectivity are
+preserved.
+
+```json
+{
+  "type": "molecular_structure",
+  "config": {
+    "answer_field": "product_smiles",
+    "expected_smiles": "CCO",
+    "connectivity_only": true,
+    "require_single_fragment": true,
+    "similarity_threshold": 0.8
+  }
+}
+```
+
+Results include the binary `score`/`passed` values, `field_scores`, raw and
+canonical structures, parse or configuration errors, exact-match and Tanimoto
+diagnostics, threshold status, the RDKit version, and frozen canonicalization
+and fingerprint revision identifiers.
 
 `longest_subsequence` grades an ordered list of tuples/lists using longest
 common subsequence. Configure `answer_field`, `ground_truth`, and optionally

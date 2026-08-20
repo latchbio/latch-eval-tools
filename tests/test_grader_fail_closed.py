@@ -50,6 +50,13 @@ CONFIGS: dict[str, dict] = {
     "marker_gene_separation": {"scoring": {"pass_thresholds": {}}},
     "spatial_adjacency": {"scoring": {"pass_thresholds": {}}},
     "multiple_choice": {"correct_answer": "C"},
+    "molecular_structure": {
+        "answer_field": "product_smiles",
+        "expected_smiles": "CCO",
+        "connectivity_only": True,
+        "require_single_fragment": True,
+        "similarity_threshold": 0.8,
+    },
     "refusal_vocab": {"refusal_vocab": ["REFUSE"], "expected_decision": "REFUSE"},
     "predicate_leaf": {
         "predicate": {"op": "equals", "arg": 1},
@@ -130,6 +137,7 @@ CORRECT_ANSWERS: dict[str, dict] = {
         "adjacency_pass": True,
     },
     "multiple_choice": {"answer": "C"},
+    "molecular_structure": {"product_smiles": "CCO"},
     "refusal_vocab": {"decision": "REFUSE"},
     "predicate_leaf": {"x": 1},
     "all_of": {"x": 1},

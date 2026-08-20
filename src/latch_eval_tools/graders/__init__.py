@@ -1,4 +1,10 @@
-from .base import BinaryGrader, GraderResult, get_nested_value, normalize_score
+from .base import (
+    BinaryGrader,
+    GraderResult,
+    get_nested_value,
+    normalize_score,
+    serialize_grader_result,
+)
 from .completion import FinishedFileGrader
 from .composite import (
     AllOfGrader,
@@ -14,6 +20,7 @@ from .helpers import (
 from .label_set import LabelSetJaccardGrader
 from .longest_subsequence import LongestSubsequenceGrader
 from .marker_gene import MarkerGenePrecisionRecallGrader, MarkerGeneSeparationGrader
+from .molecular_structure import MolecularStructureGrader
 from .multiple_choice import MultipleChoiceGrader
 from .numeric import NumericRangeGrader, NumericToleranceGrader
 from .predicate import PredicateLeafGrader
@@ -44,6 +51,7 @@ GRADER_REGISTRY = {
     "marker_gene_separation": MarkerGeneSeparationGrader,
     "spatial_adjacency": SpatialAdjacencyGrader,
     "multiple_choice": MultipleChoiceGrader,
+    "molecular_structure": MolecularStructureGrader,
     "refusal_vocab": RefusalVocabGrader,
     "predicate_leaf": PredicateLeafGrader,
     "all_of": AllOfGrader,
@@ -73,6 +81,7 @@ __all__ = [
     "GraderResult",
     "get_nested_value",
     "normalize_score",
+    "serialize_grader_result",
     "NumericRangeGrader",
     "NumericToleranceGrader",
     "MarkerGenePrecisionRecallGrader",
@@ -81,6 +90,7 @@ __all__ = [
     "DistributionComparisonGrader",
     "SpatialAdjacencyGrader",
     "MultipleChoiceGrader",
+    "MolecularStructureGrader",
     "RefusalVocabGrader",
     "PredicateLeafGrader",
     "AllOfGrader",
