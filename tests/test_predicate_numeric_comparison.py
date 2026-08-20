@@ -46,6 +46,61 @@ def test_numeric_string_triggers_hard_fail_veto() -> None:
     assert result.metrics["raw_result"] is True
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (155, True),
+        (105, True),
+        (205, True),
+        (104, False),
+        (206, False),
+        (0, False),
+        ("160", True),
+        ("not-a-number", False),
+    ],
+)
+def test_abs_diff_lte_matches_absolute_tolerance(value, expected) -> None:
+    predicate = {"op": "abs_diff_lte", "arg": 155, "tolerance": 50}
+    assert evaluate_predicate(predicate, value) is expected
+
+
+def test_abs_diff_lte_hard_fail_gates_offset_field() -> None:
+    # hard_fail triggers when the predicate is true, so the veto wraps the
+    # "passing" check in `not`: the veto fires when the field is *outside*
+    # tolerance.
+    config = {
+        "name": "offset consistency veto",
+        "role": "hard_fail",
+        "answer_field": "offset_kb_of_largest_contact_gain",
+        "predicate": {
+            "op": "not",
+            "arg": {"op": "abs_diff_lte", "arg": 155, "tolerance": 50},
+        },
+    }
+
+    triggered = PredicateLeafGrader().evaluate_answer(
+        {
+            "offset_kb_of_largest_contact_gain": 0,
+            "observed_contacts_promoter_to_distal_candidate_activated": 69,
+            "answer": 6,
+            "gain_profile_topology": 2,
+        },
+        config,
+    )
+    assert not triggered.passed
+
+    clean = PredicateLeafGrader().evaluate_answer(
+        {
+            "offset_kb_of_largest_contact_gain": 155,
+            "observed_contacts_promoter_to_distal_candidate_activated": 69,
+            "answer": 6,
+            "gain_profile_topology": 2,
+        },
+        config,
+    )
+    assert clean.passed
+
+
 def test_weighted_label_reports_its_raw_score_scale() -> None:
     result = PredicateLeafGrader().evaluate_answer(
         {"label": "best"},
