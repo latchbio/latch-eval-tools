@@ -56,7 +56,7 @@ def _write_refusal_verdict(
         print(f"failed to write refusal verdict: {exc}")
 
 
-EVAL_TIMEOUT = 600
+EVAL_TIMEOUT = 6000
 ANTHROPIC_ENV_KEYS = {"ANTHROPIC_API_KEY"}
 OPENAI_ENV_KEYS = {"OPENAI_API_KEY", "CODEX_API_KEY"}
 PI_ENV_KEYS = {
@@ -224,10 +224,6 @@ AGENT_IDENTIFIER_KEYS = {
     "grokbuild": "sessionId",
 }
 PI_IGNORED_EVENT_TYPES = {"message_update", "tool_execution_update"}
-PI_TOOL_TIMEOUT_EXTENSION_RELATIVE_PATH = Path(".latch_eval_tools", "tool_timeout.js")
-PI_TOOL_TIMEOUT_EXTENSION_CONTAINER_PATH = (
-    f"/workspace/{PI_TOOL_TIMEOUT_EXTENSION_RELATIVE_PATH}"
-)
 PROVIDER_RETRYABLE_STATUS_CODES = frozenset(
     {408, 409, 425, 429, 500, 502, 503, 504, 520, 529}
 )
@@ -591,7 +587,6 @@ def _build_agent_command(
         if resume_identifier is not None:
             agent_cmd.extend(["--session", resume_identifier])
         agent_cmd.extend(["--thinking", "xhigh"])
-        agent_cmd.extend(["--extension", PI_TOOL_TIMEOUT_EXTENSION_CONTAINER_PATH])
         if system_prompt not in (None, ""):
             agent_cmd.extend(["--system-prompt", system_prompt])
     elif agent_type == "grokbuild":
@@ -891,15 +886,6 @@ def _run_cli_agent(
 
     ensure_docker_image(docker_image)
     agent_dir = get_agent_workspace_dir(work_dir)
-    if agent_type == "pi":
-        extension_path = agent_dir / PI_TOOL_TIMEOUT_EXTENSION_RELATIVE_PATH
-        extension_path.parent.mkdir(parents=True, exist_ok=True)
-        extension_source = (
-            files("latch_eval_tools")
-            .joinpath("pi_extensions", PI_TOOL_TIMEOUT_EXTENSION_RELATIVE_PATH.name)
-            .read_text(encoding="utf-8")
-        )
-        extension_path.write_text(extension_source, encoding="utf-8")
     env_flags: list[str] = []
     ENV_KEYS = {}
     if agent_type == "claudecode":
@@ -939,10 +925,6 @@ def _run_cli_agent(
                 "NODE_OPTIONS=--max-old-space-size=8192",
             ]
         )
-        if operation_timeout > 0:
-            env_flags.extend(
-                ["-e", f"PI_BASH_DEFAULT_TIMEOUT_SECONDS={operation_timeout}"]
-            )
     if memory_limit_bytes is None:
         memory_limit_bytes = get_memory_limit_bytes()
     container_name = f"eval-{agent_type}-{uuid.uuid4().hex[:8]}"
