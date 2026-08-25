@@ -409,6 +409,45 @@ def test_capacity_retry_without_hint_uses_conservative_fallback(
     assert _cli_runner.PROVIDER_MAX_RESUMES == 1
 
 
+def test_capacity_failures_get_a_larger_budget_than_transport_failures() -> None:
+    assert _cli_runner.PROVIDER_MAX_CAPACITY_RESUMES > _cli_runner.PROVIDER_MAX_RESUMES
+
+
+def test_capacity_retry_backs_off_across_successive_resumes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_cli_runner.random, "uniform", lambda _start, _end: 0.0)
+    failure = _cli_runner.ProviderFailure(
+        status_code=429,
+        retry_after_seconds=20.0,
+    )
+
+    delays = [
+        _cli_runner.provider_retry_delay_seconds(failure, prior_resumes=resumes)
+        for resumes in range(_cli_runner.PROVIDER_MAX_CAPACITY_RESUMES)
+    ]
+
+    assert delays[0] == 20.0
+    assert delays == sorted(delays)
+    assert all(
+        delay <= _cli_runner.PROVIDER_CAPACITY_MAX_DELAY_SECONDS for delay in delays
+    )
+
+
+def test_transport_retry_does_not_back_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_cli_runner.random, "uniform", lambda _start, _end: 0.0)
+    failure = _cli_runner.ProviderFailure(
+        status_code=500,
+        retry_after_seconds=None,
+    )
+
+    assert _cli_runner.provider_retry_delay_seconds(
+        failure, prior_resumes=3
+    ) == _cli_runner.provider_retry_delay_seconds(failure)
+
+
 def test_claude_resume_identifier_is_only_passed_to_resume_flag() -> None:
     command = _cli_runner._build_agent_command(
         "claudecode",
