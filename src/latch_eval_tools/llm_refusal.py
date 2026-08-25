@@ -136,6 +136,25 @@ _ANTHROPIC_FALLBACK_MARKERS: tuple[str, ...] = (
     "reduce refusals for your users",
 )
 
+# Harness bookkeeping paths and env vars that carry "refusal" in their name. The
+# agent surfaces them in its own trajectory whenever it lists or greps its home
+# directory, so scanning raw trajectory text for the bare word "refusal" reads a
+# directory listing as a model refusal. Neutralize them before any matching.
+_HARNESS_REFUSAL_ARTIFACT_MARKERS: tuple[str, ...] = (
+    ".refusal_patcher_status.json",
+    "refusal_patcher",
+    "refusal_events.jsonl",
+    "refusal_verdict.json",
+    "latch_refusal_log",
+    "__latchteerefusal",
+)
+
+
+def _strip_harness_refusal_artifacts(lowered: str) -> str:
+    for marker in _HARNESS_REFUSAL_ARTIFACT_MARKERS:
+        lowered = lowered.replace(marker, " ")
+    return lowered
+
 
 def _find_message(strings: list[str], provider: LLMRefusalProvider) -> str:
     provider_markers: tuple[str, ...]
@@ -162,7 +181,7 @@ def _find_message(strings: list[str], provider: LLMRefusalProvider) -> str:
         )
 
     for item in strings:
-        lowered = item.lower()
+        lowered = _strip_harness_refusal_artifacts(item.lower())
         if any(marker in lowered for marker in provider_markers):
             return item
     for item in strings:
@@ -212,7 +231,7 @@ def _detect_from_value(
     if not strings:
         return None
 
-    lowered = "\n".join(strings).lower()
+    lowered = _strip_harness_refusal_artifacts("\n".join(strings).lower())
     code = _find_string_field(value, {"code"})
     stop_reason = _find_string_field(value, {"stop_reason", "stopReason"})
     finish_reason = _find_string_field(value, {"finish_reason", "finishReason"})

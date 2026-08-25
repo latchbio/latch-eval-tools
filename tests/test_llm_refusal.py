@@ -145,3 +145,40 @@ def test_write_refusal_verdict_writes_null_for_normal_run(tmp_path) -> None:
 
     _write_refusal_verdict(tmp_path, [{"text": "42 cells"}])
     assert json.loads((tmp_path / REFUSAL_VERDICT_FILENAME).read_text()) is None
+
+
+def test_harness_refusal_artifacts_do_not_count_as_refusal() -> None:
+    # A shell listing of the agent's home directory names the harness refusal
+    # bookkeeping files. Combined with unrelated prose containing "policy" or
+    # "safety", that used to be reported as a model refusal.
+    listing = (
+        "total 20\n"
+        "drwxr-xr-x 3 root root 4096 .\n"
+        "-rw-r--r-- 1 root root  569 .refusal_patcher_status.json\n"
+        "-rw-r--r-- 1 root root    0 refusal_events.jsonl\n"
+    )
+    result = detect_llm_refusal(
+        trajectory_data={
+            "messages": [
+                {"text": listing},
+                {"text": "Reviewing the sample collection policy for safety metadata."},
+            ]
+        }
+    )
+    assert result is None
+
+
+def test_harness_refusal_artifacts_do_not_leak_into_refusal_message() -> None:
+    # A genuine refusal alongside a sandbox env dump must still be detected, and
+    # must quote the model's words rather than the dump, which carries secrets.
+    result = detect_llm_refusal(
+        trajectory_data={
+            "messages": [
+                {"text": "SOME_API_KEY=redacted\n.refusal_patcher_status.json\n"},
+                {"text": "The model returned a refusal for safety reasons."},
+            ]
+        }
+    )
+    assert result is not None
+    assert result.provider == "unknown"
+    assert result.message == "The model returned a refusal for safety reasons."
