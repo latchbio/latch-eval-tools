@@ -1742,4 +1742,4 @@ class TestPartialAnswersScoreTheSameSkippedOrWrong:
         grader = get_grader("longest_subsequence")
         skipped = grader.evaluate_answer({"seq": [["a"]]}, config)
         wrong = grader.evaluate_answer({"seq": [["a"], ["x"], ["y"]]}, config)
-        assert skipped.score == wrong.score == pytest.approx(1 / 3)
+        assert skipped.score == wrong.score == 0.0

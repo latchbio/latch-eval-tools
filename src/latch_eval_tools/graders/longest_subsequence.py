@@ -161,14 +161,25 @@ class LongestSubsequenceGrader(BinaryGrader):
         gt_length = len(normalized_gt)
         agent_length = len(normalized_agent)
         denominator = max(gt_length, agent_length, 1)
-        score = lcs_length / denominator
-        passed = score >= pass_threshold
+        lcs_ratio = lcs_length / denominator
+        passed = lcs_ratio >= pass_threshold
+        # The raw LCS ratio is a diagnostic, not the reward. Reward is taken
+        # from `score`, and on a short ranking the ratio has a high zero-effort
+        # floor: two orderings of the same n elements share an LCS of roughly
+        # 2*sqrt(n) by chance, so submitting the elements in the order they were
+        # handed out pays ~0.67 on a 6-item ranking - more than a real attempt
+        # that gets the ordering half right. Gating on pass_threshold keeps the
+        # ratio available in metrics while making the reward mean "the ordering
+        # cleared the bar the eval author set", which is how every other
+        # threshold grader here (label_set, marker_gene, multiple_choice) pays.
+        score = 1.0 if passed else 0.0
 
         return GraderResult(
             passed=passed,
             score=score,
             metrics={
                 "lcs_length": lcs_length,
+                "lcs_ratio": lcs_ratio,
                 "gt_length": gt_length,
                 "agent_length": agent_length,
                 "denominator": denominator,
@@ -179,7 +190,7 @@ class LongestSubsequenceGrader(BinaryGrader):
                 lcs_length,
                 gt_length,
                 agent_length,
-                score,
+                lcs_ratio,
                 pass_threshold,
                 passed,
             ),
@@ -193,7 +204,7 @@ def _format_longest_subsequence(
     lcs_length: int,
     gt_length: int,
     agent_length: int,
-    score: float,
+    lcs_ratio: float,
     pass_threshold: float,
     passed: bool,
 ) -> str:
@@ -204,7 +215,7 @@ def _format_longest_subsequence(
         (
             f"  {marker} LCS={lcs_length} "
             f"(gt_len={gt_length}, agent_len={agent_length}, "
-            f"score={score:.4f}, threshold={pass_threshold:.4f})"
+            f"lcs_ratio={lcs_ratio:.4f}, threshold={pass_threshold:.4f})"
         ),
     ]
     return "\n".join(lines)
