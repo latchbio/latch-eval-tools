@@ -229,6 +229,14 @@ PROVIDER_RETRYABLE_STATUS_CODES = frozenset(
 )
 PROVIDER_CAPACITY_STATUS_CODES = frozenset({429, 529})
 PROVIDER_MAX_RESUMES = 1
+# Capacity failures (429/529) are shared-quota pressure rather than a broken run:
+# they clear on their own, so they get their own, larger budget. A single resume
+# retries at the provider's hinted delay and then gives up, which loses otherwise
+# healthy rollouts whenever a provider is saturated for more than one window.
+# Every resume is still bounded by the eval deadline (see retry_fits_deadline).
+PROVIDER_MAX_CAPACITY_RESUMES = 4
+PROVIDER_CAPACITY_BACKOFF_MULTIPLIER = 2.0
+PROVIDER_CAPACITY_MAX_DELAY_SECONDS = 300.0
 PROVIDER_CAPACITY_FALLBACK_SECONDS = 60.0
 PROVIDER_CAPACITY_JITTER_SECONDS = 15.0
 PROVIDER_TRANSPORT_FALLBACK_SECONDS = 5.0
@@ -496,20 +504,30 @@ def classify_terminal_provider_failure(
     return None
 
 
-def provider_retry_delay_seconds(failure: ProviderFailure) -> float:
+def provider_retry_delay_seconds(
+    failure: ProviderFailure,
+    *,
+    prior_resumes: int = 0,
+) -> float:
     if not failure.retryable:
         raise ValueError("provider failure is not retryable")
     if failure.retry_after_seconds is not None:
-        return failure.retry_after_seconds + random.uniform(
-            0.0, PROVIDER_HINT_JITTER_SECONDS
+        base = failure.retry_after_seconds
+        jitter = random.uniform(0.0, PROVIDER_HINT_JITTER_SECONDS)
+    elif failure.capacity_limited:
+        base = PROVIDER_CAPACITY_FALLBACK_SECONDS
+        jitter = random.uniform(0.0, PROVIDER_CAPACITY_JITTER_SECONDS)
+    else:
+        base = PROVIDER_TRANSPORT_FALLBACK_SECONDS
+        jitter = random.uniform(0.0, PROVIDER_TRANSPORT_JITTER_SECONDS)
+    # Back off across successive capacity resumes: the provider's hint describes
+    # the current window, and repeating it verbatim just walks into the next one.
+    if failure.capacity_limited and prior_resumes > 0:
+        base = min(
+            base * (PROVIDER_CAPACITY_BACKOFF_MULTIPLIER**prior_resumes),
+            PROVIDER_CAPACITY_MAX_DELAY_SECONDS,
         )
-    if failure.capacity_limited:
-        return PROVIDER_CAPACITY_FALLBACK_SECONDS + random.uniform(
-            0.0, PROVIDER_CAPACITY_JITTER_SECONDS
-        )
-    return PROVIDER_TRANSPORT_FALLBACK_SECONDS + random.uniform(
-        0.0, PROVIDER_TRANSPORT_JITTER_SECONDS
-    )
+    return base + jitter
 
 
 def teardown_container(container_name: str) -> None:
@@ -941,6 +959,7 @@ def _run_cli_agent(
     oom_detected = False
     oom_restarts = 0
     provider_resumes = 0
+    provider_capacity_resumes = 0
     last_provider_failure: ProviderFailure | None = None
 
     trajectory_lock = threading.Lock()
@@ -1135,19 +1154,33 @@ def _run_cli_agent(
                             trajectory_file,
                             AGENT_IDENTIFIER_KEYS[agent_type],
                         )
-                        delay = provider_retry_delay_seconds(provider_failure)
+                        capacity_limited = provider_failure.capacity_limited
+                        if capacity_limited:
+                            resumes_used = provider_capacity_resumes
+                            max_resumes = PROVIDER_MAX_CAPACITY_RESUMES
+                        else:
+                            resumes_used = provider_resumes
+                            max_resumes = PROVIDER_MAX_RESUMES
+                        delay = provider_retry_delay_seconds(
+                            provider_failure,
+                            prior_resumes=resumes_used,
+                        )
                         retry_fits_deadline = delay < deadline - time.time()
                         if (
-                            provider_resumes < PROVIDER_MAX_RESUMES
+                            resumes_used < max_resumes
                             and candidate_resume_identifier is not None
                             and retry_fits_deadline
                             and is_docker_container_running(container_name)
                         ):
-                            provider_resumes += 1
+                            if capacity_limited:
+                                provider_capacity_resumes += 1
+                            else:
+                                provider_resumes += 1
                             resume_identifier = candidate_resume_identifier
                             log_file.write(
                                 "\n\n[Provider retry "
-                                f"{provider_resumes}/{PROVIDER_MAX_RESUMES}] "
+                                f"{resumes_used + 1}/{max_resumes} "
+                                f"{provider_failure.error_code}] "
                                 f"waiting {delay:.1f}s before resuming session "
                                 f"{resume_identifier}\n"
                             )
