@@ -171,6 +171,29 @@ def _find_message(strings: list[str], provider: LLMRefusalProvider) -> str:
     return "The model refused to respond to this request."
 
 
+def _co_occurring_string(
+    strings: list[str],
+    lowered_strings: list[str],
+    required: str,
+    alternatives: tuple[str, ...],
+) -> str | None:
+    """Return the first string holding `required` alongside one of `alternatives`.
+
+    Both halves of a refusal marker pair have to land in the same message.
+    Matching them against the whole flattened trajectory lets unrelated text
+    satisfy them by chance: an `ls` listing carrying
+    ".refusal_patcher_status.json" plus the word "policy" anywhere else in a
+    long agent run is enough, which reports ordinary agent failures (missing
+    output file, timeout) as provider refusals.
+    """
+    for item, lowered_item in zip(strings, lowered_strings):
+        if required in lowered_item and any(
+            alternative in lowered_item for alternative in alternatives
+        ):
+            return item
+    return None
+
+
 def _excerpt(strings: list[str]) -> str | None:
     joined = "\n".join(item for item in strings if item.strip())
     if joined == "":
@@ -212,7 +235,8 @@ def _detect_from_value(
     if not strings:
         return None
 
-    lowered = "\n".join(strings).lower()
+    lowered_strings = [item.lower() for item in strings]
+    lowered = "\n".join(lowered_strings)
     code = _find_string_field(value, {"code"})
     stop_reason = _find_string_field(value, {"stop_reason", "stopReason"})
     finish_reason = _find_string_field(value, {"finish_reason", "finishReason"})
@@ -220,17 +244,16 @@ def _detect_from_value(
     anthropic_fallback_hit = any(
         marker in lowered for marker in _ANTHROPIC_FALLBACK_MARKERS
     )
+    anthropic_policy_hit = _co_occurring_string(
+        strings,
+        lowered_strings,
+        "usage policy",
+        ("claude", "anthropic", "unable to respond"),
+    )
 
     if (
         stop_reason in {"refusal", "sensitive"}
-        or (
-            "usage policy" in lowered
-            and (
-                "claude" in lowered
-                or "anthropic" in lowered
-                or "unable to respond" in lowered
-            )
-        )
+        or anthropic_policy_hit is not None
         or anthropic_fallback_hit
     ):
         return LLMRefusalDiagnostic(
@@ -238,7 +261,7 @@ def _detect_from_value(
             code=code
             or (stop_reason if stop_reason not in {None, "error"} else None)
             or "refusal",
-            message=_find_message(strings, "anthropic"),
+            message=anthropic_policy_hit or _find_message(strings, "anthropic"),
             source=source,
             raw_excerpt=_excerpt(strings),
         )
@@ -256,27 +279,38 @@ def _detect_from_value(
             raw_excerpt=_excerpt(strings),
         )
 
+    openai_prompt_hit = _co_occurring_string(
+        strings, lowered_strings, "invalid prompt", ("openai", "limited access")
+    )
+    openai_safety_hit = _co_occurring_string(
+        strings, lowered_strings, "limited access to this content", ("safety reasons",)
+    )
+
     if (
         "invalid_prompt" in lowered
-        or (
-            "invalid prompt" in lowered
-            and ("openai" in lowered or "limited access" in lowered)
-        )
-        or ("limited access to this content" in lowered and "safety reasons" in lowered)
+        or openai_prompt_hit is not None
+        or openai_safety_hit is not None
     ):
         return LLMRefusalDiagnostic(
             provider="openai",
             code=code or "invalid_prompt",
-            message=_find_message(strings, "openai"),
+            message=(
+                openai_prompt_hit
+                or openai_safety_hit
+                or _find_message(strings, "openai")
+            ),
             source=source,
             raw_excerpt=_excerpt(strings),
         )
 
-    if "refusal" in lowered and ("policy" in lowered or "safety" in lowered):
+    generic_refusal_hit = _co_occurring_string(
+        strings, lowered_strings, "refusal", ("policy", "safety")
+    )
+    if generic_refusal_hit is not None:
         return LLMRefusalDiagnostic(
             provider="unknown",
             code=code,
-            message=_find_message(strings, "unknown"),
+            message=generic_refusal_hit,
             source=source,
             raw_excerpt=_excerpt(strings),
         )
