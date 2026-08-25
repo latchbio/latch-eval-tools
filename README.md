@@ -137,7 +137,15 @@ print(result.passed, result.reasoning)
 
 `longest_subsequence` grades an ordered list of tuples/lists using longest
 common subsequence. Configure `answer_field`, `ground_truth`, and optionally
-`scoring.pass_threshold`; the score is `lcs_length / max(gt_len, agent_len, 1)`.
+`scoring.pass_threshold` (default `1.0`). The LCS ratio
+`lcs_length / max(gt_len, agent_len, 1)` is reported as the `lcs_ratio` metric,
+and the score is `1.0` when that ratio clears `pass_threshold`, otherwise `0.0`.
+The ratio is deliberately not the score: on a short ranking it has a high
+zero-effort floor (two orderings of the same `n` elements share an LCS of about
+`2*sqrt(n)` by chance), so paying it out rewards submitting the elements in the
+order they were given over a genuine partial attempt. Set `pass_threshold` to
+express how much reordering slack the eval allows - e.g. `0.75` on a six-element
+answer admits one transposition (`0.833`) and rejects two (`0.667`).
 
 `finished_file` compares `finished_file_contents.strip()` against `config.expected`, defaulting to
 `"finished"`.
