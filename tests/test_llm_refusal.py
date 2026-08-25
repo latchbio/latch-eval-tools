@@ -26,6 +26,37 @@ def test_returns_none_for_normal_output() -> None:
     assert detect_llm_refusal(trajectory_data={"answer": "42 cells"}) is None
 
 
+def test_ignores_refusal_markers_split_across_unrelated_messages() -> None:
+    # Observed in production: a bash `ls` dump listed
+    # ".refusal_patcher_status.json" while an unrelated turn mentioned a
+    # "policy", so a run that merely failed its output contract was reported as
+    # a provider refusal (and therefore never retried).
+    result = detect_llm_refusal(
+        trajectory_data={
+            "messages": [
+                {"text": "/root/.pi/.refusal_patcher_status.json\t4 KB"},
+                {"text": "Applying the sample QC policy to the remaining pixels."},
+                {"text": "Writing eval_answer.json"},
+            ]
+        }
+    )
+    assert result is None
+
+
+def test_detects_refusal_when_markers_share_one_message() -> None:
+    result = detect_llm_refusal(
+        trajectory_data={
+            "messages": [
+                {"text": "/root/.pi/.refusal_patcher_status.json\t4 KB"},
+                {"text": "Refusal: this request violates our safety policy."},
+            ]
+        }
+    )
+    assert result is not None
+    assert result.provider == "unknown"
+    assert result.message == "Refusal: this request violates our safety policy."
+
+
 def test_sidecar_events_take_precedence() -> None:
     result = detect_llm_refusal(
         refusal_events_data=[{"provider": "anthropic", "raw_reason": "safety"}]
