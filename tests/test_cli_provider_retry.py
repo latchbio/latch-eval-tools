@@ -393,7 +393,7 @@ def test_retry_delay_honors_typed_hint_with_jitter(
         retry_after_seconds=11.0,
     )
 
-    assert _cli_runner.provider_retry_delay_seconds(failure) == 13.5
+    assert _cli_runner.provider_retry_delay_seconds(failure, 1) == 13.5
 
 
 def test_capacity_retry_without_hint_uses_conservative_fallback(
@@ -405,8 +405,20 @@ def test_capacity_retry_without_hint_uses_conservative_fallback(
         retry_after_seconds=None,
     )
 
-    assert _cli_runner.provider_retry_delay_seconds(failure) == 75.0
-    assert _cli_runner.PROVIDER_MAX_RESUMES == 1
+    assert _cli_runner.provider_retry_delay_seconds(failure, 1) == 75.0
+    assert _cli_runner.PROVIDER_MAX_RESUMES == 5
+
+
+def test_retry_delay_backs_off_and_caps(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(_cli_runner.random, "uniform", lambda _start, _end: 0.0)
+    failure = _cli_runner.ProviderFailure(
+        status_code=429,
+        retry_after_seconds=45.0,
+    )
+
+    assert _cli_runner.provider_retry_delay_seconds(failure, 2) == 90.0
+    assert _cli_runner.provider_retry_delay_seconds(failure, 3) == 180.0
+    assert _cli_runner.provider_retry_delay_seconds(failure, 5) == 300.0
 
 
 def test_claude_resume_identifier_is_only_passed_to_resume_flag() -> None:
