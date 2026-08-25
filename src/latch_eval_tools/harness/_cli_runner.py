@@ -228,7 +228,9 @@ PROVIDER_RETRYABLE_STATUS_CODES = frozenset(
     {408, 409, 425, 429, 500, 502, 503, 504, 520, 529}
 )
 PROVIDER_CAPACITY_STATUS_CODES = frozenset({429, 529})
-PROVIDER_MAX_RESUMES = 1
+PROVIDER_MAX_RESUMES = 5
+PROVIDER_RETRY_BACKOFF_MULTIPLIER = 2.0
+PROVIDER_RETRY_MAX_DELAY_SECONDS = 300.0
 PROVIDER_CAPACITY_FALLBACK_SECONDS = 60.0
 PROVIDER_CAPACITY_JITTER_SECONDS = 15.0
 PROVIDER_TRANSPORT_FALLBACK_SECONDS = 5.0
@@ -496,19 +498,24 @@ def classify_terminal_provider_failure(
     return None
 
 
-def provider_retry_delay_seconds(failure: ProviderFailure) -> float:
+def provider_retry_delay_seconds(failure: ProviderFailure, attempt: int) -> float:
     if not failure.retryable:
         raise ValueError("provider failure is not retryable")
     if failure.retry_after_seconds is not None:
-        return failure.retry_after_seconds + random.uniform(
+        base = failure.retry_after_seconds + random.uniform(
             0.0, PROVIDER_HINT_JITTER_SECONDS
         )
-    if failure.capacity_limited:
-        return PROVIDER_CAPACITY_FALLBACK_SECONDS + random.uniform(
+    elif failure.capacity_limited:
+        base = PROVIDER_CAPACITY_FALLBACK_SECONDS + random.uniform(
             0.0, PROVIDER_CAPACITY_JITTER_SECONDS
         )
-    return PROVIDER_TRANSPORT_FALLBACK_SECONDS + random.uniform(
-        0.0, PROVIDER_TRANSPORT_JITTER_SECONDS
+    else:
+        base = PROVIDER_TRANSPORT_FALLBACK_SECONDS + random.uniform(
+            0.0, PROVIDER_TRANSPORT_JITTER_SECONDS
+        )
+    return min(
+        base * PROVIDER_RETRY_BACKOFF_MULTIPLIER ** (attempt - 1),
+        PROVIDER_RETRY_MAX_DELAY_SECONDS,
     )
 
 
@@ -1135,7 +1142,9 @@ def _run_cli_agent(
                             trajectory_file,
                             AGENT_IDENTIFIER_KEYS[agent_type],
                         )
-                        delay = provider_retry_delay_seconds(provider_failure)
+                        delay = provider_retry_delay_seconds(
+                            provider_failure, provider_resumes + 1
+                        )
                         retry_fits_deadline = delay < deadline - time.time()
                         if (
                             provider_resumes < PROVIDER_MAX_RESUMES
