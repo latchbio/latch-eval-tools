@@ -8,7 +8,7 @@ import threading
 import time
 import uuid
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from importlib.resources import files
 from pathlib import Path
@@ -228,6 +228,7 @@ PROVIDER_RETRYABLE_STATUS_CODES = frozenset(
     {408, 409, 425, 429, 500, 502, 503, 504, 520, 529}
 )
 PROVIDER_CAPACITY_STATUS_CODES = frozenset({429, 529})
+PROVIDER_MESSAGE_MAX_CHARS = 500
 PROVIDER_MAX_RESUMES = 5
 PROVIDER_RETRY_BACKOFF_MULTIPLIER = 2.0
 PROVIDER_RETRY_MAX_DELAY_SECONDS = 300.0
@@ -243,6 +244,10 @@ PI_ASSISTANT_EVENT_TYPES = frozenset({"message", "message_end"})
 class ProviderFailure:
     status_code: int
     retry_after_seconds: float | None
+    # Diagnostic payload, not identity: the provider's own text is what tells us
+    # whether a 429 is quota or capacity, and the 2026-08-26 incident took hours
+    # to diagnose without it.
+    message: str | None = field(default=None, compare=False)
 
     @property
     def retryable(self) -> bool:
@@ -426,6 +431,7 @@ def _pi_provider_failure(attempt_events: list[dict]) -> ProviderFailure | None:
         return ProviderFailure(
             status_code=status_code,
             retry_after_seconds=max(retry_hints, default=None),
+            message=error_message[:PROVIDER_MESSAGE_MAX_CHARS],
         )
     return None
 
@@ -1404,6 +1410,8 @@ def _run_cli_agent(
     if error_details is not None and last_provider_failure is not None:
         error_details["api_error_code"] = last_provider_failure.error_code
         error_details["api_error_status"] = last_provider_failure.status_code
+        if last_provider_failure.message is not None:
+            error_details["api_error_message"] = last_provider_failure.message
         if last_provider_failure.retry_after_seconds is not None:
             error_details["retry_after_seconds"] = (
                 last_provider_failure.retry_after_seconds
