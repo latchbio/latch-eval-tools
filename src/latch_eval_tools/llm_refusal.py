@@ -1,4 +1,5 @@
 import json
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -136,6 +137,35 @@ _ANTHROPIC_FALLBACK_MARKERS: tuple[str, ...] = (
     "reduce refusals for your users",
 )
 
+# Claude Code prints its own banner when the request-level safeguards decline a
+# turn, e.g. "API Error: Opus 5's safeguards flagged this message
+# (https://www.anthropic.com/legal/aup) ... Details: `[bio]`". That banner names
+# neither "usage policy" nor "refusal", so without these markers a flagged
+# claude-code rollout is indistinguishable from a harness crash and gets retried
+# instead of being recorded as a provider refusal.
+_ANTHROPIC_SAFEGUARD_MARKER = "safeguards flagged this message"
+# Kept short on purpose: the workflow-error fallback path sees a truncated
+# banner ("...(https://www.anthropic.com/legal...[truncated]"), so matching the
+# full AUP URL or the trailing can't-respond sentence would miss it there.
+_ANTHROPIC_SAFEGUARD_ALTERNATIVES: tuple[str, ...] = (
+    "anthropic.com/legal",
+    "can't respond to this message",
+    "cannot respond to this message",
+)
+
+# The banner reports the declined policy category as ``Details: `[bio]` ``.
+_ANTHROPIC_SAFEGUARD_CATEGORY_PATTERN = re.compile(
+    r"details:\s*`?\[([a-z0-9_,\s-]{1,64})\]`?", re.IGNORECASE
+)
+
+
+def _safeguard_category(text: str) -> str | None:
+    match = _ANTHROPIC_SAFEGUARD_CATEGORY_PATTERN.search(text)
+    if match is None:
+        return None
+    category = match.group(1).strip()
+    return category if category != "" else None
+
 
 def _find_message(strings: list[str], provider: LLMRefusalProvider) -> str:
     provider_markers: tuple[str, ...]
@@ -152,6 +182,7 @@ def _find_message(strings: list[str], provider: LLMRefusalProvider) -> str:
             "unable to respond",
             "usage policy",
             "violat",
+            _ANTHROPIC_SAFEGUARD_MARKER,
         ) + _ANTHROPIC_FALLBACK_MARKERS
     else:
         provider_markers = (
@@ -250,18 +281,33 @@ def _detect_from_value(
         "usage policy",
         ("claude", "anthropic", "unable to respond"),
     )
+    anthropic_safeguard_hit = _co_occurring_string(
+        strings,
+        lowered_strings,
+        _ANTHROPIC_SAFEGUARD_MARKER,
+        _ANTHROPIC_SAFEGUARD_ALTERNATIVES,
+    )
 
     if (
         stop_reason in {"refusal", "sensitive"}
         or anthropic_policy_hit is not None
+        or anthropic_safeguard_hit is not None
         or anthropic_fallback_hit
     ):
+        safeguard_category = (
+            _safeguard_category(anthropic_safeguard_hit)
+            if anthropic_safeguard_hit is not None
+            else None
+        )
         return LLMRefusalDiagnostic(
             provider="anthropic",
             code=code
             or (stop_reason if stop_reason not in {None, "error"} else None)
+            or safeguard_category
             or "refusal",
-            message=anthropic_policy_hit or _find_message(strings, "anthropic"),
+            message=anthropic_policy_hit
+            or anthropic_safeguard_hit
+            or _find_message(strings, "anthropic"),
             source=source,
             raw_excerpt=_excerpt(strings),
         )

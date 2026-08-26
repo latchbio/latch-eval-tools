@@ -16,6 +16,93 @@ def test_detects_anthropic_usage_policy_refusal_in_trajectory() -> None:
     assert result.source == "trajectory"
 
 
+CLAUDE_CODE_SAFEGUARD_BANNER = (
+    "API Error: Opus 5 (1M context)'s safeguards flagged this message "
+    "(https://www.anthropic.com/legal/aup). Our intentionally broad safeguards "
+    "allow us to deliver more capabilities faster, but can sometimes flag "
+    "legitimate coding, cybersecurity, and biology tasks. Claude Code can't "
+    "respond to this message with Opus 5 (1M context).\n\n"
+    "Double press esc to edit your last message, or try a different model with "
+    "/model.\n\n"
+    "Send feedback with /feedback or learn more: "
+    "https://support.claude.com/en/articles/16049681\n\n"
+    "Details: `[bio]`\n\n"
+    "Request ID: req_011CeRsSEdJjzppKDYQdAFkg"
+)
+
+
+def test_detects_claude_code_safeguard_banner_in_trajectory() -> None:
+    # The claude-code banner names neither "usage policy" nor "refusal", so it
+    # used to read as a plain harness crash and the rollout was retried.
+    result = detect_llm_refusal(
+        trajectory_data=[
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "api_error_status": None,
+                "result": CLAUDE_CODE_SAFEGUARD_BANNER,
+            }
+        ]
+    )
+    assert result is not None
+    assert result.provider == "anthropic"
+    assert result.source == "trajectory"
+    assert result.code == "bio"
+    assert "safeguards flagged this message" in result.message
+
+
+def test_detects_claude_code_safeguard_banner_in_agent_error() -> None:
+    result = detect_llm_refusal(agent_error=CLAUDE_CODE_SAFEGUARD_BANNER)
+    assert result is not None
+    assert result.provider == "anthropic"
+    assert result.source == "agent_output"
+    assert result.code == "bio"
+
+
+def test_claude_code_safeguard_banner_without_category_still_detected() -> None:
+    result = detect_llm_refusal(
+        agent_error=(
+            "API Error: Opus 5's safeguards flagged this message "
+            "(https://www.anthropic.com/legal/aup)."
+        )
+    )
+    assert result is not None
+    assert result.provider == "anthropic"
+    assert result.code == "refusal"
+
+
+def test_detects_truncated_claude_code_safeguard_banner_in_workflow_error() -> None:
+    # The workflow error surfaces a log tail that is cut mid-URL, so detection
+    # cannot depend on the full AUP link or the trailing can't-respond sentence.
+    result = detect_llm_refusal(
+        workflow_error_data=(
+            "Error running v2-code-agent run rollout_1: agent harness failed: "
+            "RuntimeError: claudecode exited with code 1; log_tail="
+            '"subtype":"success","api_error_status":null,"result":"API Error: '
+            "Opus 5's safeguards flagged this message "
+            "(https://www.anthropic.com/legal...[truncated]"
+        )
+    )
+    assert result is not None
+    assert result.provider == "anthropic"
+    assert result.source == "workflow_error"
+
+
+def test_ignores_safeguard_marker_split_across_unrelated_messages() -> None:
+    # "safeguards flagged this message" alone is not enough: it has to land in
+    # the same string as the banner's URL or its can't-respond sentence.
+    result = detect_llm_refusal(
+        trajectory_data={
+            "messages": [
+                {"text": "The paper explains how safeguards flagged this message."},
+                {"text": "See https://www.anthropic.com/legal/aup for details."},
+            ]
+        }
+    )
+    assert result is None
+
+
 def test_detects_openai_content_filter_refusal() -> None:
     result = detect_llm_refusal(trajectory_data={"finish_reason": "content_filter"})
     assert result is not None
