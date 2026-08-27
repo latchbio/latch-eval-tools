@@ -910,7 +910,7 @@ def _run_cli_agent(
             .read_text(encoding="utf-8")
         )
         extension_path.write_text(extension_source, encoding="utf-8")
-    env_flags: list[str] = []
+    env_flags: list[str] = ["-e", "NODE_DISABLE_COMPILE_CACHE=1"]
     ENV_KEYS = {}
     if agent_type == "claudecode":
         ENV_KEYS = ANTHROPIC_ENV_KEYS
