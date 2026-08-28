@@ -1,5 +1,6 @@
 import pytest
 
+from latch_eval_tools.graders.composite import ListMatchGrader
 from latch_eval_tools.graders.label_set import LabelSetJaccardGrader
 from latch_eval_tools.graders.marker_gene import MarkerGenePrecisionRecallGrader
 
@@ -224,3 +225,93 @@ def test_marker_gene_preserves_legacy_flat_wrapper_mode() -> None:
     assert result.passed
     assert result.score == 1.0
     assert result.metrics["answer_field_used"] == "genes"
+
+
+def _list_match_config(
+    *, k: object | None = None, weights: list[float] | None = None
+) -> dict:
+    """``n`` ground-truth rows, each with one gate and one additive leaf."""
+    weights = [1.0] * 9 if weights is None else weights
+    config = {
+        "answer_field": "rows",
+        "match_key": "cell_type",
+        "ground_truth": [
+            {
+                "cell_type": f"C{i}",
+                "fields": {
+                    "direction": {
+                        "role": "gate",
+                        "predicate": {"op": "equals", "arg": "decrease"},
+                    },
+                    "robustness": {
+                        "role": "additive",
+                        "predicate": {
+                            "op": "weighted_label",
+                            "table": {"robust": weight},
+                            "default": 0.0,
+                        },
+                    },
+                },
+            }
+            for i, weight in enumerate(weights)
+        ],
+    }
+    if k is not None:
+        config["k"] = k
+    return config
+
+
+def _rows(*indices: int) -> dict:
+    """A fully correct submitted row for each named ground-truth index."""
+    return {
+        "rows": [
+            {"cell_type": f"C{i}", "direction": "decrease", "robustness": "robust"}
+            for i in indices
+        ]
+    }
+
+
+def test_list_match_k_normalizes_against_k_rows_not_the_whole_gt_pool() -> None:
+    """Answering the maximum k rows correctly is a full score, not k/len(gt)."""
+    result = ListMatchGrader().evaluate_answer(_rows(0, 1, 2), _list_match_config(k=3))
+
+    assert result.metrics["additive_score"] == pytest.approx(3.0)
+    assert result.metrics["additive_score_denominator"] == pytest.approx(3.0)
+    assert result.score == pytest.approx(1.0)
+
+
+def test_list_match_k_keeps_partial_credit_proportional_within_k() -> None:
+    answer = _rows(0, 1, 2)
+    answer["rows"][2]["robustness"] = "not-a-listed-label"
+
+    result = ListMatchGrader().evaluate_answer(answer, _list_match_config(k=3))
+
+    assert result.metrics["additive_score"] == pytest.approx(2.0)
+    assert result.score == pytest.approx(2 / 3)
+
+
+def test_list_match_k_denominator_uses_the_highest_capacity_rows() -> None:
+    """The reachable maximum is the richest k rows, not the first or cheapest k."""
+    result = ListMatchGrader().evaluate_answer(
+        _rows(0, 1), _list_match_config(k=2, weights=[1.0, 2.0, 3.0])
+    )
+
+    assert result.metrics["additive_score"] == pytest.approx(3.0)
+    assert result.metrics["additive_score_denominator"] == pytest.approx(5.0)
+    assert result.score == pytest.approx(0.6)
+
+
+def test_list_match_without_k_still_normalizes_against_every_gt_row() -> None:
+    result = ListMatchGrader().evaluate_answer(_rows(0, 1, 2), _list_match_config())
+
+    assert result.metrics["additive_score_denominator"] == pytest.approx(9.0)
+    assert result.score == pytest.approx(1 / 3)
+
+
+def test_list_match_k_at_or_above_gt_size_leaves_the_denominator_whole() -> None:
+    result = ListMatchGrader().evaluate_answer(
+        _rows(*range(9)), _list_match_config(k=20)
+    )
+
+    assert result.metrics["additive_score_denominator"] == pytest.approx(9.0)
+    assert result.score == pytest.approx(1.0)

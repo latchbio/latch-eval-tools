@@ -227,8 +227,16 @@ def _leaf_score_max(leaf: Any) -> float:
     return predicate_score_max(leaf.get("predicate"))
 
 
-def _list_match_additive_score_denominator(gt_entries: Any) -> float:
-    additive_score_max = 0.0
+def _list_match_additive_score_denominator(gt_entries: Any, k: Any = None) -> float:
+    """Largest additive score an answer can actually reach.
+
+    ``k`` truncates the agent list before grading, so at most ``k`` ground-truth
+    rows are ever consumed. Normalizing against every row would then cap a
+    flawless answer at ``k / len(ground_truth)``, so sum only the ``k``
+    highest-capacity rows: "report any k of these rows" scores 1.0 when all k
+    submitted rows are right. Without ``k`` every row stays in the denominator.
+    """
+    per_entry_score_max: list[float] = []
     if isinstance(gt_entries, list):
         for gt_entry in gt_entries:
             if not isinstance(gt_entry, dict):
@@ -236,11 +244,19 @@ def _list_match_additive_score_denominator(gt_entries: Any) -> float:
             fields = gt_entry.get("fields")
             if not isinstance(fields, dict):
                 continue
-            for leaf in fields.values():
-                if isinstance(leaf, dict) and leaf.get("role") == "additive":
-                    additive_score_max += _leaf_score_max(leaf)
+            per_entry_score_max.append(
+                sum(
+                    _leaf_score_max(leaf)
+                    for leaf in fields.values()
+                    if isinstance(leaf, dict) and leaf.get("role") == "additive"
+                )
+            )
 
-    return additive_score_max
+    if isinstance(k, int) and not isinstance(k, bool) and k >= 0:
+        per_entry_score_max.sort(reverse=True)
+        del per_entry_score_max[k:]
+
+    return sum(per_entry_score_max)
 
 
 def _dict_match_entry_score_denominator(gt_entry: Any) -> float:
@@ -1314,7 +1330,7 @@ class ListMatchGrader(BinaryGrader):
             and not nothing_graded
         )
         score_denominator = _list_match_additive_score_denominator(
-            list(gt_by_key.values())
+            list(gt_by_key.values()), k
         )
         score = 0.0 if veto else normalize_score(additive_score, score_denominator)
 
