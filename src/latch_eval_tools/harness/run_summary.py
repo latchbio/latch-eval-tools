@@ -30,6 +30,13 @@ _CODEX_MODEL_RATES: dict[str, dict[str, float]] = {
     },
 }
 _PI_MODEL_RATES: dict[str, dict[str, float]] = {
+    # Fable 5.1 (EAP "melon"): cache reads are a reduced $0.25/M (Fable 5.1 only).
+    "anthropic/claude-melon-lp-eap": {
+        "input_tokens": 10.00 / _MILLION_TOKENS,
+        "output_tokens": 50.00 / _MILLION_TOKENS,
+        "cache_read_tokens": 0.25 / _MILLION_TOKENS,
+        "cache_write_tokens": 12.50 / _MILLION_TOKENS,
+    },
     "anthropic/claude-opus-4-7": {
         "input_tokens": 5.00 / _MILLION_TOKENS,
         "output_tokens": 25.00 / _MILLION_TOKENS,

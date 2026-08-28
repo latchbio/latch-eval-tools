@@ -265,6 +265,33 @@ def get_agent_workspace_dir(work_dir: Path) -> Path:
     return agent_dir
 
 
+def find_finished_file(agent_dir: Path) -> Path | None:
+    """Locate the agent's ``finished.txt`` completion marker.
+
+    The marker is expected at the workspace root (``/workspace/finished.txt``),
+    but agents working inside a project subdirectory sometimes write it relative
+    to their cwd (e.g. ``/workspace/<repo>/finished.txt``). Prefer the root, then
+    fall back to the first match anywhere under the workspace so a stray-cwd write
+    is still honoured. The read-only ``data`` mount is skipped to avoid treating a
+    dataset file of the same name as the agent's marker. Returns ``None`` when no
+    marker exists. Never raises.
+    """
+    root = agent_dir / "finished.txt"
+    if root.exists():
+        return root
+    data_dir = agent_dir / "data"
+    try:
+        candidates = sorted(agent_dir.rglob("finished.txt"))
+    except OSError:
+        return None
+    for candidate in candidates:
+        try:
+            candidate.relative_to(data_dir)
+        except ValueError:
+            return candidate
+    return None
+
+
 def get_agent_workspace_mount_args(agent_dir: Path) -> list[str]:
     """Return Docker bind mounts for the agent workspace.
 
