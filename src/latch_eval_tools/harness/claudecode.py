@@ -15,6 +15,7 @@ MODEL_MAP = {
     "anthropic/claude-opus-4-8": "claude-opus-4-8",
     "anthropic/claude-halva-eap": "claude-halva-eap",
     "anthropic/claude-fable-5": "claude-fable-5",
+    "anthropic/claude-melon-lp-eap": "claude-melon-lp-eap",
 }
 
 

@@ -15,6 +15,7 @@ from latch_eval_tools.harness.run_summary import build_miniswe_run_summary
 from latch_eval_tools.harness.utils import (
     DEFAULT_DOCKER_IMAGE,
     ensure_docker_image,
+    find_finished_file,
     get_agent_workspace_mount_args,
     get_agent_workspace_dir,
     get_memory_limit_bytes,
@@ -211,6 +212,9 @@ def get_model_kwargs(model_name: str) -> dict[str, Any]:
         "anthropic/claude-opus-4-7",
         "anthropic/claude-sonnet-4-6",
         "anthropic/claude-halva-eap",
+        # Fable 5.1 (EAP "melon"): thinking is always-on, so it must use adaptive
+        # thinking (never "enabled"+budget_tokens, which 400s on this model).
+        "anthropic/claude-melon-lp-eap",
     }:
         return {
             "model_kwargs": {
@@ -393,8 +397,8 @@ def run_minisweagent_task(
             disabled in that mode.
             """
             if completion:
-                finished_file = agent_dir / "finished.txt"
-                if not finished_file.exists():
+                finished_file = find_finished_file(agent_dir)
+                if finished_file is None:
                     return
                 try:
                     submission = finished_file.read_text()
@@ -569,12 +573,12 @@ def run_minisweagent_task(
                 return "Agent did not initialize."
             return f"Agent had {len(agent.messages)} message exchanges."
 
-        finished_file = agent_dir / "finished.txt"
+        finished_file = find_finished_file(agent_dir)
         if completion:
             # completion mode has no answer file. Surface the agent's last
             # assistant message as agent_answer so downstream consumers have
             # something more useful than ``null``.
-            if not finished_file.exists():
+            if finished_file is None:
                 if timed_out:
                     error_msg = "Agent timed out"
                 elif agent_error is not None:
@@ -605,7 +609,7 @@ def run_minisweagent_task(
                     "finished_file_contents": finished_file.read_text(),
                 }
         elif not eval_answer_file.exists():
-            if finished_file.exists():
+            if finished_file is not None:
                 last_message = ""
                 if agent is not None and getattr(agent, "messages", None):
                     for msg in reversed(agent.messages):

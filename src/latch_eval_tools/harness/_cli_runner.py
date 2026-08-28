@@ -21,6 +21,7 @@ from latch_eval_tools.harness.run_summary import (
 from latch_eval_tools.harness.utils import (
     DEFAULT_DOCKER_IMAGE,
     ensure_docker_image,
+    find_finished_file,
     get_agent_workspace_dir,
     get_agent_workspace_mount_args,
     get_memory_limit_bytes,
@@ -965,7 +966,6 @@ def _run_cli_agent(
     trajectory_file = work_dir / "trajectory.json"
     trajectory_file.write_text(json.dumps(trajectory, indent=2))
     eval_answer_file = agent_dir / "eval_answer.json"
-    finished_file = agent_dir / "finished.txt"
     oom_detected = False
     oom_restarts = 0
     provider_resumes = 0
@@ -1106,7 +1106,7 @@ def _run_cli_agent(
 
                         try:
                             if agent_type == "pi":
-                                if completion and finished_file.exists():
+                                if completion and find_finished_file(agent_dir):
                                     answer_submitted = True
                                 elif not completion and eval_answer_file.exists():
                                     json.loads(eval_answer_file.read_text())
@@ -1151,7 +1151,7 @@ def _run_cli_agent(
                     break
 
                 if last_return_code == 0 and (
-                    eval_answer_file.exists() or finished_file.exists()
+                    eval_answer_file.exists() or find_finished_file(agent_dir)
                 ):
                     break
 
@@ -1218,7 +1218,7 @@ def _run_cli_agent(
                     if agent_type in ("claudecode", "grokbuild"):
                         if benchmark:
                             answer_present = (
-                                finished_file.exists()
+                                find_finished_file(agent_dir) is not None
                                 if completion
                                 else eval_answer_file.exists()
                             )
@@ -1359,6 +1359,7 @@ def _run_cli_agent(
         print(f"Trajectory saved to: {trajectory_file}")
 
     eval_answer_file = agent_dir / "eval_answer.json"
+    resolved_finished = find_finished_file(agent_dir)
     agent_answer = None
     error_details = None
 
@@ -1371,7 +1372,7 @@ def _run_cli_agent(
         # completion mode has no answer file. Surface the agent's last
         # message (extracted from the streamed trajectory) so downstream
         # consumers have something more useful than ``null``.
-        if not finished_file.exists():
+        if resolved_finished is None:
             if timed_out:
                 error_msg = "Agent timed out"
             elif agent_error is not None:
@@ -1388,14 +1389,14 @@ def _run_cli_agent(
             last_message = _extract_last_message(trajectory, agent_type)
             agent_answer = {
                 "last_message": last_message,
-                "finished_file_contents": finished_file.read_text(),
+                "finished_file_contents": resolved_finished.read_text(),
             }
     elif not eval_answer_file.exists():
-        if finished_file.exists():
+        if resolved_finished is not None:
             last_message = _extract_last_message(trajectory, agent_type)
             agent_answer = {
                 "last_message": last_message,
-                "finished_file_contents": finished_file.read_text(),
+                "finished_file_contents": resolved_finished.read_text(),
             }
         else:
             if timed_out:
