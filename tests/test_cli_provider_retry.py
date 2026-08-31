@@ -54,6 +54,64 @@ def test_classifies_terminal_claude_overload_without_retry_hint() -> None:
     assert failure.error_code == "overloaded"
 
 
+def test_terminal_claude_failure_keeps_provider_message() -> None:
+    failure = _cli_runner.classify_terminal_provider_failure(
+        "claudecode",
+        [
+            {
+                "type": "result",
+                "terminal_reason": "api_error",
+                "api_error_status": 400,
+                "result": (
+                    "API Error: 400 You have reached your specified API usage"
+                    " limits. You will regain access on 2026-09-01 at 00:00 UTC."
+                ),
+            }
+        ],
+    )
+
+    assert failure is not None
+    assert failure.message is not None
+    assert "specified API usage limits" in failure.message
+    assert len(failure.message) <= _cli_runner.PROVIDER_MESSAGE_MAX_CHARS
+
+
+def test_terminal_claude_failure_without_message_text() -> None:
+    failure = _cli_runner.classify_terminal_provider_failure(
+        "claudecode",
+        [
+            {
+                "type": "result",
+                "terminal_reason": "api_error",
+                "api_error_status": 400,
+                "result": "   ",
+            }
+        ],
+    )
+
+    assert failure is not None
+    assert failure.message is None
+
+
+def test_inflight_claude_retry_keeps_provider_message() -> None:
+    failure = _cli_runner.classify_terminal_provider_failure(
+        "claudecode",
+        [
+            {
+                "type": "system",
+                "subtype": "api_retry",
+                "error_status": 429,
+                "error": "rate_limit",
+                "retry_delay_ms": 11_000,
+            }
+        ],
+        include_inflight_retry=True,
+    )
+
+    assert failure is not None
+    assert failure.message == "rate_limit"
+
+
 def test_ignores_recovered_claude_api_retry() -> None:
     failure = _cli_runner.classify_terminal_provider_failure(
         "claudecode",
