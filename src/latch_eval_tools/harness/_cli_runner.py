@@ -438,6 +438,15 @@ def _pi_provider_failure(attempt_events: list[dict]) -> ProviderFailure | None:
     return None
 
 
+def _claudecode_provider_message(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    message = value.strip()
+    if message == "":
+        return None
+    return message[:PROVIDER_MESSAGE_MAX_CHARS]
+
+
 def _claudecode_provider_failure(
     attempt_events: list[dict],
     *,
@@ -469,6 +478,10 @@ def _claudecode_provider_failure(
         return ProviderFailure(
             status_code=status_code,
             retry_after_seconds=retry_after_seconds,
+            # The CLI puts the provider's own text in `result` ("API Error: 400
+            # You have reached your specified API usage limits..."). Without it
+            # a spend cap we can raise looks identical to a bare http_400.
+            message=_claudecode_provider_message(result.get("result")),
         )
 
     if include_inflight_retry:
@@ -486,6 +499,7 @@ def _claudecode_provider_failure(
                 retry_after_seconds=(
                     retry_delay_ms / 1000.0 if retry_delay_ms is not None else None
                 ),
+                message=_claudecode_provider_message(event.get("error")),
             )
     return None
 
