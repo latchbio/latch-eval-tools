@@ -106,6 +106,14 @@ def _max_jaccard(value: set, possible_sets: list) -> float:
     return max(_jaccard(value, _as_set(candidate)) for candidate in possible_sets)
 
 
+def _as_comparable_number(actual: str) -> float | None:
+    try:
+        numeric = float(actual.strip())
+    except (OverflowError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) else None
+
+
 def _values_equal(actual: Any, expected: Any) -> bool:
     """Compare scalar values using the numeric graders' string semantics.
 
@@ -122,13 +130,8 @@ def _values_equal(actual: Any, expected: Any) -> bool:
         and not isinstance(expected, bool)
         and isinstance(actual, str)
     ):
-        try:
-            numeric_actual = float(actual.strip())
-        except (OverflowError, ValueError):
-            return False
-        if not math.isfinite(numeric_actual):
-            return False
-        return numeric_actual == expected
+        numeric_actual = _as_comparable_number(actual)
+        return numeric_actual is not None and numeric_actual == expected
     return actual == expected
 
 
@@ -279,7 +282,20 @@ def evaluate_predicate(pred: Any, value: Any) -> bool | float:
     if op == "equals":
         return _values_equal(value, pred["arg"])
     if op == "in":
-        return any(_values_equal(value, candidate) for candidate in pred["args"])
+        args = pred["args"]
+        # `in` short-circuits on identity, so a NaN would match itself; == never does.
+        if value in args and not (isinstance(value, float) and math.isnan(value)):
+            return True
+        # _values_equal only diverges from == by coercing a str actual to a number,
+        # and that coercion is the same for every candidate.
+        if not isinstance(value, str):
+            return False
+        numeric_value = _as_comparable_number(value)
+        return numeric_value is not None and any(
+            numeric_value == candidate
+            for candidate in args
+            if isinstance(candidate, (int, float)) and not isinstance(candidate, bool)
+        )
     if op == "unordered_set_eq":
         return _as_set(value) == _as_set(pred["expected"])
 
