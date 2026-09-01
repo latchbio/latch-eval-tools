@@ -65,3 +65,13 @@ def test_weighted_label_reports_its_raw_score_scale() -> None:
     assert result.score == 2.0
     assert result.score_max == 2.0
     assert result.normalized_score() == 1.0
+
+
+def test_in_does_not_coerce_against_boolean_candidates() -> None:
+    assert evaluate_predicate({"op": "in", "args": [True]}, "1") is False
+    assert evaluate_predicate({"op": "in", "args": [True]}, 1) is True
+
+
+def test_in_never_matches_nan() -> None:
+    nan = float("nan")
+    assert evaluate_predicate({"op": "in", "args": [nan]}, nan) is False
