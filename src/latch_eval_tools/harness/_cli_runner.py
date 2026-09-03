@@ -585,7 +585,7 @@ def _build_agent_command(
                 "--skip-git-repo-check",
                 "--json",
                 "-c",
-                'model_reasoning_effort="xhigh"',
+                'model_reasoning_effort="max"',
                 "-c",
                 'model_reasoning_summary="detailed"',
                 "-c",
@@ -601,7 +601,7 @@ def _build_agent_command(
         agent_cmd.extend(["--mode", "json", "--print"])
         if resume_identifier is not None:
             agent_cmd.extend(["--session", resume_identifier])
-        agent_cmd.extend(["--thinking", "xhigh"])
+        agent_cmd.extend(["--thinking", "max"])
         agent_cmd.extend(["--extension", PI_TOOL_TIMEOUT_EXTENSION_CONTAINER_PATH])
         if system_prompt not in (None, ""):
             agent_cmd.extend(["--system-prompt", system_prompt])
