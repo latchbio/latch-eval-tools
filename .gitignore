@@ -7,3 +7,8 @@ __pycache__
 .eval_cache
 output
 eval_workspace
+.eval_workspace
+.eval_cache_dendritic
+results
+eval_result.json
+scripts

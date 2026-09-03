@@ -1,3 +1,4 @@
+from .artifact import ArtifactGrader
 from .base import BinaryGrader, GraderResult, get_nested_value, normalize_score
 from .completion import FinishedFileGrader
 from .composite import (
@@ -35,6 +36,7 @@ from .rubric import (
 from .spatial import SpatialAdjacencyGrader
 
 GRADER_REGISTRY = {
+    "artifact": ArtifactGrader,
     "numeric_tolerance": NumericToleranceGrader,
     "numeric_range": NumericRangeGrader,
     "label_set_jaccard": LabelSetJaccardGrader,
