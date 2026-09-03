@@ -18,6 +18,11 @@ RUN_SUMMARY_SCHEMA_VERSION = 1
 HARNESS_PRICING_VERSION = "1"
 _MILLION_TOKENS = 1_000_000
 _CODEX_MODEL_RATES: dict[str, dict[str, float]] = {
+    "openai/gpt-6-astra": {
+        "input_tokens": 10.00 / _MILLION_TOKENS,
+        "cache_read_tokens": 1.00 / _MILLION_TOKENS,
+        "output_tokens": 50.00 / _MILLION_TOKENS,
+    },
     "openai/gpt-5.4": {
         "input_tokens": 2.50 / _MILLION_TOKENS,
         "cache_read_tokens": 0.25 / _MILLION_TOKENS,
