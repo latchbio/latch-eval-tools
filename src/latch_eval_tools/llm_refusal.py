@@ -1,4 +1,5 @@
 import json
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -130,6 +131,49 @@ def _find_string_field(value: Any, field_names: set[str]) -> str | None:
     return None
 
 
+_STOP_REASON_FIELDS: set[str] = {
+    "stop_reason",
+    "stopReason",
+    "raw_stop_reason",
+    "rawStopReason",
+}
+_REFUSAL_STOP_REASONS: frozenset[str] = frozenset({"refusal", "sensitive"})
+_FINISH_REASON_FIELDS: set[str] = {"finish_reason", "finishReason"}
+_CONTENT_FILTER_FINISH_REASONS: frozenset[str] = frozenset({"content_filter"})
+
+
+def _find_field_value(
+    value: Any, field_names: set[str], allowed_values: frozenset[str]
+) -> str | None:
+    """Return the first value of `field_names` that is one of `allowed_values`.
+
+    A trajectory records one entry per model response, so the refused response
+    is almost never the first one carrying a stop reason. Reading whichever stop
+    reason turned up first reported the wrong code (`tool_use`, `pending`,
+    `stop_sequence`) and missed refusals recorded further into the run. Coding
+    harnesses also surface `stopReason: error` for a refused request and keep
+    the API's own stop reason in `rawStopReason`, so both spellings are checked.
+    """
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if (
+                key in field_names
+                and isinstance(item, str)
+                and item.lower() in allowed_values
+            ):
+                return item.lower()
+        for item in value.values():
+            found = _find_field_value(item, field_names, allowed_values)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for item in value:
+            found = _find_field_value(item, field_names, allowed_values)
+            if found is not None:
+                return found
+    return None
+
+
 _ANTHROPIC_FALLBACK_MARKERS: tuple[str, ...] = (
     "refusals-and-fallback",
     "configuring a fallback model",
@@ -148,10 +192,15 @@ def _find_message(strings: list[str], provider: LLMRefusalProvider) -> str:
             "content_filter",
         )
     elif provider == "anthropic":
+        # "violat" on its own matched the agent's own work — a pandas snippet
+        # printing "n rows violating >0.011" was reported as the refusal
+        # message — so the phrasing a refusal actually uses is required.
         provider_markers = (
             "unable to respond",
-            "usage policy",
-            "violat",
+            "usage polic",
+            "violate our",
+            "violates our",
+            "violation of our",
         ) + _ANTHROPIC_FALLBACK_MARKERS
     else:
         provider_markers = (
@@ -171,11 +220,45 @@ def _find_message(strings: list[str], provider: LLMRefusalProvider) -> str:
     return "The model refused to respond to this request."
 
 
+# A bare "refusal" only reads as refusal prose when it stands on its own.
+# Embedded in a path or an identifier it is bookkeeping, not a verdict, and one
+# `find /` listing carries both halves of the marker pair in a single string:
+# "/root/.pi/.refusal_patcher_status.json" next to
+# "/etc/java-17-openjdk/security/policy/README.txt", or a `git log` line naming
+# a branch "bg-agent/refusal-false-positive-harness-artifacts". Both reported
+# ordinary agent failures as provider refusals.
+_STANDALONE_REFUSAL_PATTERN = re.compile(r"(?<![\w./-])refusals?(?![\w./-])")
+
+
+# A provider states a refusal in a sentence or two. Command output that merely
+# mentions refusals runs far longer — a `git log` of a harness repo lists commit
+# subjects like "stop reading harness refusal artifacts as model refusals"
+# alongside a branch about "safety", satisfying both halves of the weakest
+# marker pair in one string.
+_COMPACT_STRING_MAX_CHARACTERS = 1000
+_COMPACT_STRING_MAX_LINES = 5
+
+
+def _is_compact(item: str) -> bool:
+    return (
+        len(item) <= _COMPACT_STRING_MAX_CHARACTERS
+        and item.count("\n") < _COMPACT_STRING_MAX_LINES
+    )
+
+
+def _contains_required(lowered_item: str, required: str | re.Pattern[str]) -> bool:
+    if isinstance(required, str):
+        return required in lowered_item
+    return required.search(lowered_item) is not None
+
+
 def _co_occurring_string(
     strings: list[str],
     lowered_strings: list[str],
-    required: str,
+    required: str | re.Pattern[str],
     alternatives: tuple[str, ...],
+    *,
+    compact_only: bool = False,
 ) -> str | None:
     """Return the first string holding `required` alongside one of `alternatives`.
 
@@ -185,11 +268,26 @@ def _co_occurring_string(
     ".refusal_patcher_status.json" plus the word "policy" anywhere else in a
     long agent run is enough, which reports ordinary agent failures (missing
     output file, timeout) as provider refusals.
+
+    `compact_only` additionally restricts the match to a string short enough to
+    be a provider message rather than a dump of command output.
     """
     for item, lowered_item in zip(strings, lowered_strings):
-        if required in lowered_item and any(
+        if compact_only and not _is_compact(item):
+            continue
+        if _contains_required(lowered_item, required) and any(
             alternative in lowered_item for alternative in alternatives
         ):
+            return item
+    return None
+
+
+def _marker_string(
+    strings: list[str], lowered_strings: list[str], markers: tuple[str, ...]
+) -> str | None:
+    """Return the first string carrying one of `markers`."""
+    for item, lowered_item in zip(strings, lowered_strings):
+        if any(marker in lowered_item for marker in markers):
             return item
     return None
 
@@ -238,11 +336,15 @@ def _detect_from_value(
     lowered_strings = [item.lower() for item in strings]
     lowered = "\n".join(lowered_strings)
     code = _find_string_field(value, {"code"})
-    stop_reason = _find_string_field(value, {"stop_reason", "stopReason"})
-    finish_reason = _find_string_field(value, {"finish_reason", "finishReason"})
+    refusal_stop_reason = _find_field_value(
+        value, _STOP_REASON_FIELDS, _REFUSAL_STOP_REASONS
+    )
+    content_filter_finish_reason = _find_field_value(
+        value, _FINISH_REASON_FIELDS, _CONTENT_FILTER_FINISH_REASONS
+    )
 
-    anthropic_fallback_hit = any(
-        marker in lowered for marker in _ANTHROPIC_FALLBACK_MARKERS
+    anthropic_fallback_hit = _marker_string(
+        strings, lowered_strings, _ANTHROPIC_FALLBACK_MARKERS
     )
     anthropic_policy_hit = _co_occurring_string(
         strings,
@@ -252,16 +354,19 @@ def _detect_from_value(
     )
 
     if (
-        stop_reason in {"refusal", "sensitive"}
+        refusal_stop_reason is not None
         or anthropic_policy_hit is not None
-        or anthropic_fallback_hit
+        or anthropic_fallback_hit is not None
     ):
         return LLMRefusalDiagnostic(
             provider="anthropic",
-            code=code
-            or (stop_reason if stop_reason not in {None, "error"} else None)
-            or "refusal",
-            message=anthropic_policy_hit or _find_message(strings, "anthropic"),
+            code=refusal_stop_reason or code or "refusal",
+            # Report the string that carried the marker. Searching the run again
+            # for marker-ish text surfaced whatever the agent itself had
+            # written, which reads as if the model refused its own analysis.
+            message=anthropic_policy_hit
+            or anthropic_fallback_hit
+            or _find_message(strings, "anthropic"),
             source=source,
             raw_excerpt=_excerpt(strings),
         )
@@ -269,11 +374,11 @@ def _detect_from_value(
     if (
         code == "cyber_policy"
         or "cyber policy" in lowered
-        or finish_reason == "content_filter"
+        or content_filter_finish_reason is not None
     ):
         return LLMRefusalDiagnostic(
             provider="openai",
-            code=code or finish_reason or "cyber_policy",
+            code=code or content_filter_finish_reason or "cyber_policy",
             message=_find_message(strings, "openai"),
             source=source,
             raw_excerpt=_excerpt(strings),
@@ -304,7 +409,11 @@ def _detect_from_value(
         )
 
     generic_refusal_hit = _co_occurring_string(
-        strings, lowered_strings, "refusal", ("policy", "safety")
+        strings,
+        lowered_strings,
+        _STANDALONE_REFUSAL_PATTERN,
+        ("policy", "safety"),
+        compact_only=True,
     )
     if generic_refusal_hit is not None:
         return LLMRefusalDiagnostic(
