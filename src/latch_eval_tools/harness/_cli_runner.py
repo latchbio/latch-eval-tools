@@ -34,6 +34,22 @@ from latch_eval_tools.harness.utils import (
 from latch_eval_tools.llm_refusal import detect_llm_refusal
 
 REFUSAL_VERDICT_FILENAME = "refusal_verdict.json"
+FALLBACK_API_KEYS_ENV = "ANTHROPIC_API_KEY_FALLBACKS"
+
+
+def read_fallback_api_keys(env: dict[str, str]) -> list[str]:
+    """Pop the ordered Anthropic fallback keys so the agent only ever sees ANTHROPIC_API_KEY."""
+    raw = env.pop(FALLBACK_API_KEYS_ENV, None)
+    if not raw:
+        return []
+    keys = json.loads(raw)
+    if not isinstance(keys, list) or not all(
+        isinstance(key, str) and key for key in keys
+    ):
+        raise ValueError(
+            f"{FALLBACK_API_KEYS_ENV} must be a JSON array of non-empty strings"
+        )
+    return keys
 
 
 def _write_refusal_verdict(
@@ -892,6 +908,9 @@ def _run_cli_agent(
     enhanced_prompt = prompt_with_suffix(task_prompt, prompt_suffix)
 
     env = os.environ.copy()
+    fallback_api_keys = read_fallback_api_keys(env)
+    refusal_fallback_count = 0
+    refusal_trajectory_start = 0
 
     if agent_type == "openaicodex":
         if "CODEX_API_KEY" not in env and "OPENAI_API_KEY" in env:
@@ -1136,6 +1155,35 @@ def _run_cli_agent(
                     log_file.write("\n\nDetected eval_answer.json, stopping agent\n")
                     log_file.flush()
                     break
+                refusal = (
+                    detect_llm_refusal(trajectory_data=attempt_events)
+                    if fallback_api_keys and not timed_out_attempt
+                    else None
+                )
+                if refusal is not None and refusal.provider == "anthropic":
+                    persist_trajectory()
+                    identifier_key = AGENT_IDENTIFIER_KEYS.get(agent_type)
+                    fallback_resume_identifier = (
+                        load_trajectory_identifier(trajectory_file, identifier_key)
+                        if identifier_key is not None
+                        else None
+                    )
+                    if (
+                        fallback_resume_identifier is not None
+                        and is_docker_container_running(container_name)
+                    ):
+                        env["ANTHROPIC_API_KEY"] = fallback_api_keys.pop(0)
+                        refusal_fallback_count += 1
+                        refusal_trajectory_start = len(trajectory)
+                        log_file.write(
+                            f"\n\n[Refusal fallback {refusal_fallback_count}] "
+                            f"resuming session {fallback_resume_identifier} on the "
+                            "next API key\n"
+                        )
+                        log_file.flush()
+                        resume_identifier = fallback_resume_identifier
+                        prompt_text = "Continue."
+                        continue
                 provider_failure = classify_terminal_provider_failure(
                     agent_type,
                     attempt_events,
@@ -1440,6 +1488,8 @@ def _run_cli_agent(
         if isinstance(error_value, str):
             structured_agent_error = error_value
 
+    # A refusal answered by a later key is not the run's verdict; judge the tail.
+    refusal_trajectory = trajectory[refusal_trajectory_start:]
     metadata = _extract_metadata(
         agent_type,
         trajectory,
@@ -1455,11 +1505,13 @@ def _run_cli_agent(
         codex_sidecar_events=codex_sidecar_events,
         refusal_events=pi_refusal_events,
         agent_error=structured_agent_error,
+        refusal_trajectory=refusal_trajectory,
     )
+    metadata["refusal_fallback_count"] = refusal_fallback_count
 
     _write_refusal_verdict(
         work_dir,
-        trajectory,
+        refusal_trajectory,
         refusal_events=pi_refusal_events,
         agent_error=structured_agent_error,
     )
@@ -1535,6 +1587,7 @@ def _extract_metadata(
     codex_sidecar_events: list[dict[str, Any]] | None = None,
     refusal_events: list[dict[str, Any]] | None = None,
     agent_error: str | None = None,
+    refusal_trajectory: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     run_summary = build_cli_run_summary(
         agent_type=agent_type,
@@ -1544,6 +1597,7 @@ def _extract_metadata(
         codex_sidecar_events=codex_sidecar_events,
         refusal_events=refusal_events,
         agent_error=agent_error,
+        refusal_trajectory=refusal_trajectory,
     )
     metrics = run_summary.metrics
     metadata = {
