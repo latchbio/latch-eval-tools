@@ -707,6 +707,7 @@ def build_cli_run_summary(
     codex_sidecar_events: list[dict[str, Any]] | None = None,
     refusal_events: list[dict[str, Any]] | None = None,
     agent_error: str | None = None,
+    refusal_trajectory: list[dict[str, Any]] | None = None,
 ) -> HarnessRunSummary:
     normalized_duration = _nonnegative_float(duration_seconds)
     if normalized_duration is None:
@@ -739,7 +740,7 @@ def build_cli_run_summary(
     return HarnessRunSummary(
         metrics=metrics,
         refusal=assess_llm_refusal(
-            trajectory=trajectory,
+            trajectory=trajectory if refusal_trajectory is None else refusal_trajectory,
             refusal_events=refusal_events,
             agent_error=agent_error,
         ),
