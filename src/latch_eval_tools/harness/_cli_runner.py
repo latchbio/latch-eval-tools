@@ -909,6 +909,8 @@ def _run_cli_agent(
 
     env = os.environ.copy()
     fallback_api_keys = read_fallback_api_keys(env)
+    # The container env is fixed at `docker run`; a key switch rides on `docker exec -e`.
+    exec_env_flags: list[str] = []
     refusal_fallback_count = 0
     refusal_trajectory_start = 0
 
@@ -1046,7 +1048,14 @@ def _run_cli_agent(
                 )
 
                 process = subprocess.Popen(
-                    ["docker", "exec", "-i", container_name, *agent_cmd],
+                    [
+                        "docker",
+                        "exec",
+                        "-i",
+                        *exec_env_flags,
+                        container_name,
+                        *agent_cmd,
+                    ],
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
@@ -1172,7 +1181,10 @@ def _run_cli_agent(
                         fallback_resume_identifier is not None
                         and is_docker_container_running(container_name)
                     ):
-                        env["ANTHROPIC_API_KEY"] = fallback_api_keys.pop(0)
+                        exec_env_flags = [
+                            "-e",
+                            f"ANTHROPIC_API_KEY={fallback_api_keys.pop(0)}",
+                        ]
                         refusal_fallback_count += 1
                         refusal_trajectory_start = len(trajectory)
                         log_file.write(
