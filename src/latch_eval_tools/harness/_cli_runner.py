@@ -260,7 +260,10 @@ PI_ASSISTANT_EVENT_TYPES = frozenset({"message", "message_end"})
 
 @dataclass(frozen=True)
 class ProviderFailure:
-    status_code: int
+    # None means the agent reported an API error but never told us which one.
+    # That is still a provider failure, so it must not be silently downgraded
+    # to an unclassified harness crash.
+    status_code: int | None
     retry_after_seconds: float | None
     # Diagnostic payload, not identity: the provider's own text is what tells us
     # whether a 429 is quota or capacity, and the 2026-08-26 incident took hours
@@ -269,6 +272,10 @@ class ProviderFailure:
 
     @property
     def retryable(self) -> bool:
+        # An API error of unknown status is retried: the resume budget bounds
+        # the cost, and refusing to retry strands the whole run on one flake.
+        if self.status_code is None:
+            return True
         return self.status_code in PROVIDER_RETRYABLE_STATUS_CODES
 
     @property
@@ -277,6 +284,8 @@ class ProviderFailure:
 
     @property
     def error_code(self) -> str:
+        if self.status_code is None:
+            return "api_error"
         if self.status_code == 429:
             return "rate_limit"
         if self.status_code == 529:
@@ -465,9 +474,12 @@ def _claudecode_provider_failure(
             continue
         if result.get("terminal_reason") != "api_error":
             return None
+        # The result event does not always carry api_error_status. The run still
+        # died on a provider API error, so classify it as one and let the status
+        # stay unknown rather than dropping the failure on the floor -- callers
+        # read a missing failure as an unclassified harness crash and stop
+        # retrying, which strands the run on a transient provider blip.
         status_code = _optional_int(result.get("api_error_status"))
-        if status_code is None:
-            return None
 
         retry_after_seconds: float | None = None
         for event in reversed(attempt_events[:result_index]):
@@ -475,7 +487,14 @@ def _claudecode_provider_failure(
                 break
             if event.get("type") != "system" or event.get("subtype") != "api_retry":
                 continue
-            if _optional_int(event.get("error_status")) != status_code:
+            event_status = _optional_int(event.get("error_status"))
+            if status_code is None:
+                # The retry events describe the same failure the result event
+                # summarized, so adopt their status when the summary omits it.
+                if event_status is None:
+                    continue
+                status_code = event_status
+            elif event_status != status_code:
                 continue
             retry_delay_ms = _optional_nonnegative_float(event.get("retry_delay_ms"))
             if retry_delay_ms is not None:

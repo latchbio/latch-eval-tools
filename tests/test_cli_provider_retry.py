@@ -54,6 +54,69 @@ def test_classifies_terminal_claude_overload_without_retry_hint() -> None:
     assert failure.error_code == "overloaded"
 
 
+def test_recovers_claude_api_error_status_from_retry_events() -> None:
+    failure = _cli_runner.classify_terminal_provider_failure(
+        "claudecode",
+        [
+            {
+                "type": "system",
+                "subtype": "api_retry",
+                "error_status": 529,
+                "error": "overloaded",
+                "retry_delay_ms": 8_000,
+            },
+            {
+                "type": "result",
+                "terminal_reason": "api_error",
+                "result": "API Error: overloaded",
+            },
+        ],
+    )
+
+    assert failure == _cli_runner.ProviderFailure(
+        status_code=529,
+        retry_after_seconds=8.0,
+    )
+    assert failure.error_code == "overloaded"
+    assert failure.retryable
+    assert failure.capacity_limited
+
+
+def test_classifies_claude_api_error_without_any_status_as_retryable() -> None:
+    failure = _cli_runner.classify_terminal_provider_failure(
+        "claudecode",
+        [
+            {"type": "assistant", "message": {"role": "assistant", "content": []}},
+            {
+                "type": "result",
+                "terminal_reason": "api_error",
+                "result": "API Error",
+            },
+        ],
+    )
+
+    assert failure == _cli_runner.ProviderFailure(
+        status_code=None,
+        retry_after_seconds=None,
+    )
+    assert failure.error_code == "api_error"
+    assert failure.retryable
+    assert not failure.capacity_limited
+
+
+def test_unknown_status_api_error_uses_transport_retry_delay() -> None:
+    failure = _cli_runner.ProviderFailure(status_code=None, retry_after_seconds=None)
+
+    delay = _cli_runner.provider_retry_delay_seconds(failure, 1)
+
+    assert (
+        _cli_runner.PROVIDER_TRANSPORT_FALLBACK_SECONDS
+        <= delay
+        <= _cli_runner.PROVIDER_TRANSPORT_FALLBACK_SECONDS
+        + _cli_runner.PROVIDER_TRANSPORT_JITTER_SECONDS
+    )
+
+
 def test_ignores_recovered_claude_api_retry() -> None:
     failure = _cli_runner.classify_terminal_provider_failure(
         "claudecode",
