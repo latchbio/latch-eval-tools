@@ -121,6 +121,37 @@ def prompt_with_suffix(task_prompt: str, prompt_suffix: str | None = None) -> st
     return f"{task_prompt}\n{prompt_suffix}"
 
 
+# Answer-protocol conventions. Legacy names are the default; the neutral
+# benchmark names are used only when a run is launched with benchmark=True.
+# Readers accept both so old trajectories and mixed-version deploys keep
+# working regardless of which convention the prompt used.
+LEGACY_COMPLETION_MARKER = "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+BENCHMARK_COMPLETION_MARKER = "FINISHED"
+COMPLETION_MARKERS = frozenset(
+    {LEGACY_COMPLETION_MARKER, BENCHMARK_COMPLETION_MARKER}
+)
+
+LEGACY_ANSWER_FILENAME = "eval_answer.json"
+BENCHMARK_ANSWER_FILENAME = "analysis_output.json"
+ANSWER_FILENAMES = (BENCHMARK_ANSWER_FILENAME, LEGACY_ANSWER_FILENAME)
+
+
+def find_answer_file(agent_dir: Path) -> Path | None:
+    for name in ANSWER_FILENAMES:
+        candidate = agent_dir / name
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def benchmark_convention(text: str) -> str:
+    """Rewrite legacy answer-protocol names in prompt text to the neutral
+    benchmark names."""
+    return text.replace(
+        LEGACY_COMPLETION_MARKER, BENCHMARK_COMPLETION_MARKER
+    ).replace(LEGACY_ANSWER_FILENAME, BENCHMARK_ANSWER_FILENAME)
+
+
 def _inspect_docker_container_state(
     container_name: str,
     state_field: str,

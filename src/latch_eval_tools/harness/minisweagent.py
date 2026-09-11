@@ -13,8 +13,11 @@ import yaml
 
 from latch_eval_tools.harness.run_summary import build_miniswe_run_summary
 from latch_eval_tools.harness.utils import (
+    COMPLETION_MARKERS,
     DEFAULT_DOCKER_IMAGE,
+    benchmark_convention,
     ensure_docker_image,
+    find_answer_file,
     find_finished_file,
     get_agent_workspace_mount_args,
     get_agent_workspace_dir,
@@ -256,6 +259,17 @@ def get_model_kwargs(model_name: str) -> dict[str, Any]:
         return {}
 
 
+def _apply_benchmark_convention(value: Any) -> Any:
+    """Recursively rewrite legacy answer-protocol names in config strings."""
+    if isinstance(value, str):
+        return benchmark_convention(value)
+    if isinstance(value, dict):
+        return {k: _apply_benchmark_convention(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_apply_benchmark_convention(v) for v in value]
+    return value
+
+
 def run_minisweagent_task(
     task_prompt: str,
     work_dir: Path,
@@ -270,6 +284,7 @@ def run_minisweagent_task(
     system_prompt: str | None = None,
     prompt_suffix: str | None = load_data_instructions(),
     completion: bool = False,
+    benchmark: bool = False,
 ) -> dict:
     """Run MiniSWE agent on a task.
 
@@ -312,7 +327,7 @@ def run_minisweagent_task(
             return super().step()
 
     class FlexibleDockerEnvironment(DockerEnvironment):
-        completion_marker = "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+        completion_markers = COMPLETION_MARKERS
 
         def execute(
             self, action: dict, cwd: str = "", *, timeout: int | None = None
@@ -415,11 +430,11 @@ def run_minisweagent_task(
             lines = output.get("output", "").lstrip().splitlines(keepends=True)
             if (
                 lines
-                and lines[0].strip() == self.completion_marker
+                and lines[0].strip() in self.completion_markers
                 and output["returncode"] == 0
             ):
                 submission = "".join(lines[1:])
-                if not (agent_dir / "eval_answer.json").exists():
+                if find_answer_file(agent_dir) is None:
                     return
                 raise Submitted(
                     {
@@ -467,8 +482,13 @@ def run_minisweagent_task(
     try:
         os.chdir(str(agent_dir))
 
-        enhanced_prompt = prompt_with_suffix(task_prompt, prompt_suffix)
+        effective_prompt_suffix = prompt_suffix
+        if benchmark and effective_prompt_suffix:
+            effective_prompt_suffix = benchmark_convention(effective_prompt_suffix)
+        enhanced_prompt = prompt_with_suffix(task_prompt, effective_prompt_suffix)
         config = yaml.safe_load(read_packaged_prompt("miniswe_config.yaml"))
+        if benchmark:
+            config = _apply_benchmark_convention(config)
         effective_agent_config: dict[str, Any] = config["agent"] | (
             agent_config if isinstance(agent_config, dict) else {}
         )
@@ -558,7 +578,7 @@ def run_minisweagent_task(
                 print(f"Agent trajectory saved to: {trajectory_file}")
                 print(f"  Total message exchanges: {len(agent.messages)}")
 
-        eval_answer_file = agent_dir / "eval_answer.json"
+        eval_answer_file = find_answer_file(agent_dir)
         agent_answer = None
         error_details = None
 
@@ -608,7 +628,7 @@ def run_minisweagent_task(
                     "last_message": last_message,
                     "finished_file_contents": finished_file.read_text(),
                 }
-        elif not eval_answer_file.exists():
+        elif eval_answer_file is None:
             if finished_file is not None:
                 last_message = ""
                 if agent is not None and getattr(agent, "messages", None):
@@ -644,10 +664,10 @@ def run_minisweagent_task(
                 agent_answer = json.loads(eval_answer_file.read_text())
             except json.JSONDecodeError as e:
                 error_details = {
-                    "error": f"Failed to parse eval_answer.json: {e}",
+                    "error": f"Failed to parse {eval_answer_file.name}: {e}",
                     "file_contents": eval_answer_file.read_text()[:500],
                 }
-                print(f"\nWarning: Failed to parse eval_answer.json: {e}")
+                print(f"\nWarning: Failed to parse {eval_answer_file.name}: {e}")
 
         metadata = {}
         if agent is not None:

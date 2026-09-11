@@ -5,6 +5,7 @@ from latch_eval_tools.types import TestCase
 from latch_eval_tools.graders import GRADER_REGISTRY, GraderResult
 from latch_eval_tools.harness.utils import (
     download_data,
+    find_answer_file,
     get_agent_workspace_dir,
     setup_workspace,
     cleanup_workspace,
@@ -110,8 +111,8 @@ class EvalRunner:
                 import traceback
                 traceback.print_exc()
 
-        eval_answer_path = get_agent_workspace_dir(work_dir) / "eval_answer.json"
-        if agent_answer is None and eval_answer_path.exists():
+        eval_answer_path = find_answer_file(get_agent_workspace_dir(work_dir))
+        if agent_answer is None and eval_answer_path is not None:
             try:
                 agent_answer = json.loads(eval_answer_path.read_text())
                 print(f"Loaded agent answer from {eval_answer_path}")

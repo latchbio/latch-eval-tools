@@ -20,7 +20,9 @@ from latch_eval_tools.harness.run_summary import (
 )
 from latch_eval_tools.harness.utils import (
     DEFAULT_DOCKER_IMAGE,
+    benchmark_convention,
     ensure_docker_image,
+    find_answer_file,
     find_finished_file,
     get_agent_workspace_dir,
     get_agent_workspace_mount_args,
@@ -905,6 +907,8 @@ def _run_cli_agent(
     agent_log_file = work_dir / "agent_output.log"
     if agent_log_file.exists():
         agent_log_file.unlink()
+    if benchmark and prompt_suffix:
+        prompt_suffix = benchmark_convention(prompt_suffix)
     enhanced_prompt = prompt_with_suffix(task_prompt, prompt_suffix)
 
     env = os.environ.copy()
@@ -986,7 +990,10 @@ def _run_cli_agent(
     trajectory: list[dict] = []
     trajectory_file = work_dir / "trajectory.json"
     trajectory_file.write_text(json.dumps(trajectory, indent=2))
-    eval_answer_file = agent_dir / "eval_answer.json"
+
+    def _find_eval_answer_file() -> Path | None:
+        return find_answer_file(agent_dir)
+
     oom_detected = False
     oom_restarts = 0
     provider_resumes = 0
@@ -1134,10 +1141,11 @@ def _run_cli_agent(
 
                         try:
                             if agent_type == "pi":
+                                answer_file = _find_eval_answer_file()
                                 if completion and find_finished_file(agent_dir):
                                     answer_submitted = True
-                                elif not completion and eval_answer_file.exists():
-                                    json.loads(eval_answer_file.read_text())
+                                elif not completion and answer_file is not None:
+                                    json.loads(answer_file.read_text())
                                     answer_submitted = True
                                 if answer_submitted:
                                     process.terminate()
@@ -1161,7 +1169,7 @@ def _run_cli_agent(
                 last_return_code = process.returncode
                 attempt_events = trajectory[attempt_start_index:]
                 if answer_submitted:
-                    log_file.write("\n\nDetected eval_answer.json, stopping agent\n")
+                    log_file.write("\n\nDetected final answer file, stopping agent\n")
                     log_file.flush()
                     break
                 refusal = (
@@ -1211,7 +1219,8 @@ def _run_cli_agent(
                     break
 
                 if last_return_code == 0 and (
-                    eval_answer_file.exists() or find_finished_file(agent_dir)
+                    _find_eval_answer_file() is not None
+                    or find_finished_file(agent_dir)
                 ):
                     break
 
@@ -1252,7 +1261,7 @@ def _run_cli_agent(
                 if last_return_code == 0:
                     if (
                         agent_type == "pi"
-                        and not eval_answer_file.exists()
+                        and _find_eval_answer_file() is None
                         and _pi_clean_exit_needs_resume(attempt_events)
                     ):
                         persist_trajectory()
@@ -1269,7 +1278,7 @@ def _run_cli_agent(
 
                         log_file.write(
                             "\n\nPi compacted or hit length before writing "
-                            "eval_answer.json; resuming session "
+                            "the final answer file; resuming session "
                             f"{resume_identifier}\n"
                         )
                         log_file.flush()
@@ -1280,7 +1289,7 @@ def _run_cli_agent(
                             answer_present = (
                                 find_finished_file(agent_dir) is not None
                                 if completion
-                                else eval_answer_file.exists()
+                                else _find_eval_answer_file() is not None
                             )
                             if (
                                 not answer_present
@@ -1418,7 +1427,7 @@ def _run_cli_agent(
         persist_trajectory()
         print(f"Trajectory saved to: {trajectory_file}")
 
-    eval_answer_file = agent_dir / "eval_answer.json"
+    eval_answer_file = find_answer_file(agent_dir)
     resolved_finished = find_finished_file(agent_dir)
     agent_answer = None
     error_details = None
@@ -1451,7 +1460,7 @@ def _run_cli_agent(
                 "last_message": last_message,
                 "finished_file_contents": resolved_finished.read_text(),
             }
-    elif not eval_answer_file.exists():
+    elif eval_answer_file is None:
         if resolved_finished is not None:
             last_message = _extract_last_message(trajectory, agent_type)
             agent_answer = {
@@ -1478,10 +1487,10 @@ def _run_cli_agent(
             agent_answer = json.loads(eval_answer_file.read_text())
         except json.JSONDecodeError as e:
             error_details = {
-                "error": f"Failed to parse eval_answer.json: {e}",
+                "error": f"Failed to parse {eval_answer_file.name}: {e}",
                 "file_contents": eval_answer_file.read_text()[:500],
             }
-            print(f"\nWarning: Failed to parse eval_answer.json: {e}")
+            print(f"\nWarning: Failed to parse {eval_answer_file.name}: {e}")
 
     if error_details is not None and last_provider_failure is not None:
         error_details["api_error_code"] = last_provider_failure.error_code
