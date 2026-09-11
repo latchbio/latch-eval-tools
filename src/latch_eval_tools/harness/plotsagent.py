@@ -5,6 +5,9 @@ import threading
 import time
 from pathlib import Path
 from datetime import datetime
+
+from latch_eval_tools.harness.utils import find_answer_file
+
 EVAL_TIMEOUT = 600
 
 
@@ -161,8 +164,8 @@ def run_plotsagent_task(
             error_details = {"error": f"Failed to parse output: {e}"}
 
     if agent_answer is None:
-        eval_answer_file = work_dir / "eval_answer.json"
-        if eval_answer_file.exists():
+        eval_answer_file = find_answer_file(work_dir)
+        if eval_answer_file is not None:
             try:
                 agent_answer = json.loads(eval_answer_file.read_text())
             except json.JSONDecodeError:
@@ -170,8 +173,8 @@ def run_plotsagent_task(
 
     if agent_answer is None:
         if workspace_dir.exists():
-            ws_eval_answer = workspace_dir / "eval_answer.json"
-            if ws_eval_answer.exists():
+            ws_eval_answer = find_answer_file(workspace_dir)
+            if ws_eval_answer is not None:
                 try:
                     agent_answer = json.loads(ws_eval_answer.read_text())
                     eval_answer_file = work_dir / "eval_answer.json"

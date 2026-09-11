@@ -21,6 +21,7 @@ def run_pi_task(
     system_prompt: str | None = None,
     prompt_suffix: str | None = load_data_instructions(),
     completion: bool = False,
+    benchmark: bool = False,
     operation_timeout: int = 0,
 ) -> dict:
     return _run_cli_agent(
@@ -35,5 +36,6 @@ def run_pi_task(
         system_prompt=system_prompt,
         prompt_suffix=prompt_suffix,
         completion=completion,
+        benchmark=benchmark,
         operation_timeout=operation_timeout,
     )
