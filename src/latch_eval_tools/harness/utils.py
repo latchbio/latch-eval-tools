@@ -126,7 +126,7 @@ def prompt_with_suffix(task_prompt: str, prompt_suffix: str | None = None) -> st
 # Readers accept both so old trajectories and mixed-version deploys keep
 # working regardless of which convention the prompt used.
 LEGACY_COMPLETION_MARKER = "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
-BENCHMARK_COMPLETION_MARKER = "FINISHED"
+BENCHMARK_COMPLETION_MARKER = "RUN_COMPLETE"
 COMPLETION_MARKERS = frozenset(
     {LEGACY_COMPLETION_MARKER, BENCHMARK_COMPLETION_MARKER}
 )

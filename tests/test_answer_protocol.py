@@ -41,6 +41,6 @@ def test_benchmark_convention_rewrites_legacy_names() -> None:
     )
     rewritten = benchmark_convention(text)
     assert "analysis_output.json" in rewritten
-    assert "echo FINISHED" in rewritten
+    assert "echo RUN_COMPLETE" in rewritten
     assert "eval_answer.json" not in rewritten
     assert "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" not in rewritten
