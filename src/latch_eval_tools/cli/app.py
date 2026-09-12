@@ -1,0 +1,117 @@
+"""Argument parsing and entry point for the ``latch-eval`` CLI.
+
+``latch-eval run`` wraps :class:`~latch_eval_tools.EvalRunner` so a single drafted
+eval JSON can be run end-to-end (download data -> run an agent in a Docker sandbox
+-> grade the answer) from the shell:
+
+    latch-eval run --eval evals/QC01.json --harness claudecode
+    latch-eval run -e evals/DE03.json --harness minisweagent --model anthropic/claude-sonnet-4-6
+"""
+
+import argparse
+import sys
+
+from dotenv import find_dotenv, load_dotenv
+from latch_eval_tools.cli.run import run_command, HARNESSES
+
+
+def _load_dotenv(env_file):
+    """Load environment variables from a .env file if one is around.
+
+    With no explicit path, discovers a .env from the current working directory
+    upward (so the file where you invoke the command is found) and loads it
+    without overriding variables already set in the real environment.
+    """
+    path = env_file or find_dotenv(usecwd=True)
+    if path:
+        load_dotenv(path, override=False)
+        print(f"[env] loaded environment variables from {path}", file=sys.stderr)
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="latch-eval",
+        description="Run and grade Latch eval JSON files locally.",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    run_p = sub.add_parser("run", help="Run a single eval JSON against an agent and grade it.")
+    run_p.add_argument("-e", "--eval", required=True, help="Path to the eval JSON file.")
+    run_p.add_argument(
+        "--harness",
+        required=True,
+        choices=HARNESSES,
+        help="Agent harness to run the task with.",
+    )
+    run_p.add_argument(
+        "--model",
+        default=None,
+        help="Model name for the harness (required for minisweagent, "
+        "e.g. anthropic/claude-sonnet-4-6).",
+    )
+    run_p.add_argument(
+        "--data",
+        action="append",
+        default=None,
+        metavar="PATH",
+        help="Local file or directory to stage as the agent's /workspace/data, "
+        "bypassing the eval's data_node download entirely. Repeatable. Use when "
+        "you already have the data on disk.",
+    )
+    run_p.add_argument("--run-id", default=None, help="Optional run ID to namespace the workspace.")
+    run_p.add_argument(
+        "--eval-timeout",
+        type=int,
+        default=None,
+        help="Override the agent eval timeout in seconds.",
+    )
+    run_p.add_argument(
+        "--docker-image",
+        default=None,
+        help="Override the Docker image used to sandbox the agent.",
+    )
+    run_p.add_argument(
+        "--keep-workspace",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Keep the workspace (trajectory.json, agent_output.log, eval_answer.json) "
+        "after the run. On by default for the authoring loop.",
+    )
+    run_p.add_argument(
+        "--output-dir",
+        default=".latch-eval-runs",
+        metavar="DIR",
+        help="Directory (relative to the current working directory by default) "
+        "to hold run workspaces, as <output-dir>/[run-id/]<eval_id>/. "
+        "Default: ./.latch-eval-runs",
+    )
+    run_p.add_argument(
+        "--cache-dir",
+        default="~/.cache/latch-eval",
+        metavar="DIR",
+        help="Shared directory for the downloaded-data cache (reused across runs "
+        "and projects). Default: ~/.cache/latch-eval",
+    )
+    run_p.add_argument("--benchmark-name", default="Eval", help="Display name for the benchmark.")
+    run_p.add_argument("--json-out", default=None, help="Write a structured result JSON to this path.")
+    run_p.add_argument(
+        "--no-preflight",
+        action="store_true",
+        help="Skip the Docker / API key / Latch token preflight checks.",
+    )
+    run_p.add_argument(
+        "--env-file",
+        default=None,
+        metavar="PATH",
+        help="Load environment variables from this .env file. By default a .env "
+        "found from the current directory upward is auto-loaded.",
+    )
+    run_p.set_defaults(func=run_command)
+    return parser
+
+
+def main(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    _load_dotenv(args.env_file)
+    return args.func(args)
