@@ -359,6 +359,33 @@ def rubric_json_schema_output_config(
     return output_config
 
 
+def build_rubric_criterion_instruction(criterion: RubricCriterion) -> str:
+    """Define ``met`` for one criterion in terms of its score polarity.
+
+    A criterion with a negative ``score_delta`` describes a failure to penalize,
+    not a requirement to satisfy. Asking only "is this criterion met?" is
+    ambiguous for those: judges return ``met=true`` to mean "the response is
+    fine here" while their rationale says the failure is absent, which then
+    subtracts the penalty and fails an otherwise perfect response.
+    """
+
+    if criterion.score_delta < 0:
+        return (
+            "This criterion describes a failure to penalize, not a requirement to "
+            f"satisfy: it subtracts {abs(criterion.score_delta)} from the score when it "
+            "applies.\n"
+            "Set met=true ONLY if the response actually exhibits the failure described "
+            "above. If the response does not exhibit it, set met=false — including when "
+            "the response handles the concern well.\n"
+            'Do not use met=true to mean "the response is fine here".'
+        )
+    return (
+        f"This criterion is a requirement worth +{criterion.score_delta} when satisfied.\n"
+        "Set met=true only if the response satisfies everything the criterion requires; "
+        "otherwise set met=false."
+    )
+
+
 def build_rubric_criterion_user_prompt(
     response: str,
     criterion: RubricCriterion,
@@ -372,7 +399,9 @@ def build_rubric_criterion_user_prompt(
 {criterion.description}
 </criterion>
 
-Judge whether this single rubric criterion is met by the response.
+Judge this single rubric criterion against the response.
+
+{build_rubric_criterion_instruction(criterion)}
 
 Keep the rationale under 256 characters."""
 
@@ -624,7 +653,8 @@ def format_rubric_reasoning(
     for index, criterion in enumerate(config.criteria):
         judgment = judgments_by_index.get(index)
         met = judgment.met if judgment is not None else False
-        marker = "+" if met else "x"
+        # A met penalty criterion costs points, so it must not read as a "+".
+        marker = "+" if met == (criterion.score_delta > 0) else "x"
         rationale = "" if judgment is None else judgment.rationale
         lines.append(f"  {marker} [{index}] {criterion.description} (delta={criterion.score_delta})")
         if rationale:

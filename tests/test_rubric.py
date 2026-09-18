@@ -15,14 +15,17 @@ from latch_eval_tools.graders.rubric import (
     RUBRIC_GRADER_SYSTEM_PROMPT,
     GraderError,
     GraderTransientError,
+    RubricCriterion,
     RubricCriterionGraderOutput,
     RubricGrader,
     RubricGraderConfig,
     RubricGraderOutput,
     RubricGraderOutputParseError,
     TransientRetryController,
+    build_rubric_criterion_user_prompt,
     classify_transient_error,
     compute_rubric_reward,
+    format_rubric_reasoning,
     resolve_anthropic_model_name,
     retry_after_seconds_from_error,
     rubric_criterion_output_config,
@@ -88,6 +91,49 @@ def test_compute_rubric_reward_normalizes_and_clamps() -> None:
         "criterion_1": 0.0,
         "criterion_2": -0.5,
     }
+
+
+def test_criterion_prompt_defines_met_by_score_polarity() -> None:
+    requirement = RubricCriterion(description="states that hERG is required", score_delta=0.25)
+    penalty = RubricCriterion(description="fabricates patient facts", score_delta=-1)
+
+    requirement_prompt = build_rubric_criterion_user_prompt("memo", requirement, 0)
+    penalty_prompt = build_rubric_criterion_user_prompt("memo", penalty, 1)
+
+    assert "requirement worth +0.25" in requirement_prompt
+    assert "satisfies everything the criterion requires" in requirement_prompt
+
+    # A penalty criterion describes a failure; met=true must mean the failure is
+    # present, otherwise a clean response gets the penalty subtracted.
+    assert "failure to penalize, not a requirement" in penalty_prompt
+    assert "subtracts 1.0 from the score" in penalty_prompt
+    assert "actually exhibits the failure described" in penalty_prompt
+    assert 'Do not use met=true to mean "the response is fine here".' in penalty_prompt
+
+
+def test_rubric_reasoning_marks_a_triggered_penalty_as_a_failure() -> None:
+    config = RubricGraderConfig.model_validate(
+        {
+            "answer_field": "assessment",
+            "criteria": [
+                {"description": "reports validation results", "score_delta": 0.5},
+                {"description": "fabricates patient facts", "score_delta": -1},
+            ],
+        }
+    )
+    output = RubricGraderOutput.model_validate(
+        {
+            "judgments": [
+                {"index": 0, "met": True, "rationale": "reports MAE vs baseline"},
+                {"index": 1, "met": True, "rationale": "invented a specimen"},
+            ]
+        }
+    )
+
+    reasoning = format_rubric_reasoning(config, output, compute_rubric_reward(config, output))
+
+    assert "+ [0] reports validation results" in reasoning
+    assert "x [1] fabricates patient facts" in reasoning
 
 
 def test_llm_registry() -> None:
