@@ -279,6 +279,26 @@ def _detect_from_value(
             raw_excerpt=_excerpt(strings),
         )
 
+    # Codex can surface a provider safety rejection as a message-only error,
+    # without a content_filter finish reason or structured refusal code.
+    openai_biology_hit = next(
+        (
+            message
+            for message in strings
+            if "this content was flagged for possible biological risk"
+            in message.lower()
+        ),
+        None,
+    )
+    if openai_biology_hit is not None:
+        return LLMRefusalDiagnostic(
+            provider="openai",
+            code=code or "biological_risk",
+            message=openai_biology_hit,
+            source=source,
+            raw_excerpt=_excerpt(strings),
+        )
+
     openai_prompt_hit = _co_occurring_string(
         strings, lowered_strings, "invalid prompt", ("openai", "limited access")
     )
