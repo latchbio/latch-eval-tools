@@ -176,3 +176,46 @@ def test_write_refusal_verdict_writes_null_for_normal_run(tmp_path) -> None:
 
     _write_refusal_verdict(tmp_path, [{"text": "42 cells"}])
     assert json.loads((tmp_path / REFUSAL_VERDICT_FILENAME).read_text()) is None
+
+
+BIOLOGICAL_RISK_MESSAGE = (
+    "This content was flagged for possible biological risk. If this seems wrong, "
+    "try rephrasing your request. We are continuously refining our work in "
+    "detecting biological risk, and you can read more about our approach in our "
+    "blog post: https://openai.com/index/preparing-for-future-ai-capabilities-in-biology"
+)
+
+
+def test_codex_message_only_biological_refusal_uses_shared_detector():
+    event = {"type": "turn.failed", "error": {"message": BIOLOGICAL_RISK_MESSAGE}}
+    for kwargs in (
+        {"agent_output_data": event["error"]},
+        {"trajectory_data": [event]},
+        {"agent_error": BIOLOGICAL_RISK_MESSAGE},
+        {"workflow_error_data": json.dumps(event)},
+    ):
+        diagnostic = detect_llm_refusal(**kwargs)
+        assert diagnostic is not None
+        assert diagnostic.provider == "openai"
+        assert diagnostic.code == "biological_risk"
+        assert diagnostic.message == BIOLOGICAL_RISK_MESSAGE
+
+
+def test_v2_summary_recognizes_codex_biological_refusal():
+    from latch_eval_tools.harness.run_summary import assess_llm_refusal
+
+    assessment = assess_llm_refusal(
+        trajectory=[
+            {"type": "turn.failed", "error": {"message": BIOLOGICAL_RISK_MESSAGE}}
+        ]
+    )
+    assert assessment.status == "detected"
+    assert assessment.diagnostic.code == "biological_risk"
+
+
+def test_biology_topic_and_network_errors_are_not_refusals():
+    for message in (
+        "Analyze possible biological risk in the provided dataset.",
+        "Connection failed: error sending request",
+    ):
+        assert detect_llm_refusal(agent_output_data={"message": message}) is None
