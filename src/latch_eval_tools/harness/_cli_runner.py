@@ -262,7 +262,13 @@ PI_ASSISTANT_EVENT_TYPES = frozenset({"message", "message_end"})
 
 @dataclass(frozen=True)
 class ProviderFailure:
-    status_code: int
+    # ``None`` when the CLI told us the run ended on an API error but did not
+    # attach an HTTP status. Claude Code leaves ``api_error_status`` null for
+    # aborts that never carried a status (transport drops, streams cut
+    # mid-response); dropping those on the floor turned a retryable provider
+    # blip into an opaque "<agent> exited with code 1" harness crash that
+    # nothing resumes or retries.
+    status_code: int | None
     retry_after_seconds: float | None
     # Diagnostic payload, not identity: the provider's own text is what tells us
     # whether a 429 is quota or capacity, and the 2026-08-26 incident took hours
@@ -271,14 +277,22 @@ class ProviderFailure:
 
     @property
     def retryable(self) -> bool:
+        # A status-less API error is retryable: the CLI only reports one after
+        # exhausting its own in-process retries, so it is transport-shaped.
+        if self.status_code is None:
+            return True
         return self.status_code in PROVIDER_RETRYABLE_STATUS_CODES
 
     @property
     def capacity_limited(self) -> bool:
+        if self.status_code is None:
+            return False
         return self.status_code in PROVIDER_CAPACITY_STATUS_CODES
 
     @property
     def error_code(self) -> str:
+        if self.status_code is None:
+            return "api_error"
         if self.status_code == 429:
             return "rate_limit"
         if self.status_code == 529:
@@ -456,6 +470,21 @@ def _pi_provider_failure(attempt_events: list[dict]) -> ProviderFailure | None:
     return None
 
 
+def _claudecode_result_message(result: dict) -> str | None:
+    """The CLI's own error text from a terminal ``result`` event, if any.
+
+    Without it a status-less ``api_error`` is undiagnosable: the only thing
+    left is a 512-char slice of the JSON log tail.
+    """
+    message = result.get("result")
+    if not isinstance(message, str):
+        return None
+    message = message.strip()
+    if message == "":
+        return None
+    return message[:PROVIDER_MESSAGE_MAX_CHARS]
+
+
 def _claudecode_provider_failure(
     attempt_events: list[dict],
     *,
@@ -468,8 +497,6 @@ def _claudecode_provider_failure(
         if result.get("terminal_reason") != "api_error":
             return None
         status_code = _optional_int(result.get("api_error_status"))
-        if status_code is None:
-            return None
 
         retry_after_seconds: float | None = None
         for event in reversed(attempt_events[:result_index]):
@@ -477,7 +504,14 @@ def _claudecode_provider_failure(
                 break
             if event.get("type") != "system" or event.get("subtype") != "api_retry":
                 continue
-            if _optional_int(event.get("error_status")) != status_code:
+            event_status = _optional_int(event.get("error_status"))
+            if status_code is None:
+                # The terminal result carried no status; the in-flight retry
+                # events for the same turn are the only place it survives.
+                if event_status is None:
+                    continue
+                status_code = event_status
+            elif event_status != status_code:
                 continue
             retry_delay_ms = _optional_nonnegative_float(event.get("retry_delay_ms"))
             if retry_delay_ms is not None:
@@ -487,6 +521,7 @@ def _claudecode_provider_failure(
         return ProviderFailure(
             status_code=status_code,
             retry_after_seconds=retry_after_seconds,
+            message=_claudecode_result_message(result),
         )
 
     if include_inflight_retry:

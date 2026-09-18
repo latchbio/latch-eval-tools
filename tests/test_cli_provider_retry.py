@@ -54,6 +54,59 @@ def test_classifies_terminal_claude_overload_without_retry_hint() -> None:
     assert failure.error_code == "overloaded"
 
 
+def test_classifies_terminal_claude_api_error_without_status() -> None:
+    failure = _cli_runner.classify_terminal_provider_failure(
+        "claudecode",
+        [
+            {
+                "type": "result",
+                "terminal_reason": "api_error",
+                "api_error_status": None,
+                "result": "API Error: Connection error.",
+            }
+        ],
+    )
+
+    assert failure == _cli_runner.ProviderFailure(
+        status_code=None,
+        retry_after_seconds=None,
+    )
+    assert failure is not None
+    assert failure.error_code == "api_error"
+    assert failure.message == "API Error: Connection error."
+    # The run still ended on the provider, so it is worth resuming; treating it
+    # as a bare harness crash is what left these runs unretried.
+    assert failure.retryable
+    assert not failure.capacity_limited
+
+
+def test_recovers_claude_api_error_status_from_inflight_retry() -> None:
+    failure = _cli_runner.classify_terminal_provider_failure(
+        "claudecode",
+        [
+            {
+                "type": "system",
+                "subtype": "api_retry",
+                "error_status": 529,
+                "error": "overloaded",
+                "retry_delay_ms": 7_000,
+            },
+            {
+                "type": "result",
+                "terminal_reason": "api_error",
+                "api_error_status": None,
+            },
+        ],
+    )
+
+    assert failure == _cli_runner.ProviderFailure(
+        status_code=529,
+        retry_after_seconds=7.0,
+    )
+    assert failure is not None
+    assert failure.capacity_limited
+
+
 def test_ignores_recovered_claude_api_retry() -> None:
     failure = _cli_runner.classify_terminal_provider_failure(
         "claudecode",
