@@ -1100,8 +1100,6 @@ def _run_cli_agent(
                                     continue
                                 with trajectory_lock:
                                     trajectory.append(event)
-                                # Keep reading stdout quickly enough for the CLI
-                                # to flush its final events before it exits.
                                 if (
                                     time.monotonic() - last_snapshot_at
                                     >= TRAJECTORY_SNAPSHOT_INTERVAL_SECONDS
@@ -1173,8 +1171,6 @@ def _run_cli_agent(
                     process.kill()
                     process.wait()
 
-                # Drain buffered output before inspecting the attempt or closing
-                # the log; process exit does not mean the readers reached EOF.
                 stdout_thread.join()
                 stderr_thread.join()
                 last_return_code = process.returncode
