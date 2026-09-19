@@ -1100,8 +1100,10 @@ def _run_cli_agent(
                                     continue
                                 with trajectory_lock:
                                     trajectory.append(event)
+                                # TODO(tim): determine if this also applies to other harnesses
                                 if (
-                                    time.monotonic() - last_snapshot_at
+                                    agent_type != "claudecode"
+                                    or time.monotonic() - last_snapshot_at
                                     >= TRAJECTORY_SNAPSHOT_INTERVAL_SECONDS
                                 ):
                                     persist_trajectory()
@@ -1171,8 +1173,9 @@ def _run_cli_agent(
                     process.kill()
                     process.wait()
 
-                stdout_thread.join()
-                stderr_thread.join()
+                drain_timeout = None if agent_type == "claudecode" else 5
+                stdout_thread.join(timeout=drain_timeout)
+                stderr_thread.join(timeout=drain_timeout)
                 last_return_code = process.returncode
                 attempt_events = trajectory[attempt_start_index:]
                 if answer_submitted:
