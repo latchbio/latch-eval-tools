@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from latch_eval_tools.harness.run_summary import (
+    CODEX_TOOL_CALL_PAYLOAD_TYPES,
     CliHarnessAgentType,
     build_cli_run_summary,
 )
@@ -801,6 +802,11 @@ def _iter_jsonl_objects(source: Path) -> Iterator[dict[str, Any]]:
         print(f"Failed to read harness sidecar {source}: {exc}")
 
 
+# Tool calls are kept so the run summary can count agent steps; reasoning items
+# are kept so they can be merged back into the trajectory.
+_CODEX_SIDECAR_RESPONSE_ITEM_TYPES = CODEX_TOOL_CALL_PAYLOAD_TYPES | {"reasoning"}
+
+
 def _read_codex_sidecar_events(
     work_dir: Path,
     trajectory: list[dict[str, Any]],
@@ -829,10 +835,10 @@ def _read_codex_sidecar_events(
             payload = event.get("payload")
             if not isinstance(payload, dict):
                 continue
-            if event_type == "response_item" and payload.get("type") in {
-                "function_call",
-                "reasoning",
-            }:
+            if (
+                event_type == "response_item"
+                and payload.get("type") in _CODEX_SIDECAR_RESPONSE_ITEM_TYPES
+            ):
                 events.append(event)
             elif event_type == "event_msg" and payload.get("type") == "token_count":
                 events.append(event)

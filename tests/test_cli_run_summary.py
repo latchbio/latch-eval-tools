@@ -188,6 +188,81 @@ def test_codex_summary_reads_authoritative_local_sidecar(tmp_path) -> None:
     }
 
 
+def test_codex_summary_counts_freeform_tool_calls_as_steps(tmp_path) -> None:
+    """Codex CLI 0.155+ records shell work as `custom_tool_call`, not
+    `function_call`. Those runs reported step_count 0 until both the sidecar
+    reader and the step counter learned the newer payload types."""
+    thread_id = "01a0b642-a35c-7703-95a5-4af0ed260c99"
+    trajectory = [
+        {"type": "thread.started", "thread_id": thread_id},
+        {"type": "turn.started"},
+        {"type": "turn.completed", "usage": {"input_tokens": 7, "output_tokens": 3}},
+    ]
+    (tmp_path / "trajectory.json").write_text(json.dumps(trajectory))
+    codex_dir = tmp_path / ".codex" / "sessions" / "2026" / "09" / "18"
+    codex_dir.mkdir(parents=True)
+    (codex_dir / f"rollout-2026-09-18T20-43-35-{thread_id}.jsonl").write_text(
+        "\n".join(
+            json.dumps(event)
+            for event in [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "custom_tool_call",
+                        "name": "exec",
+                        "call_id": "call-1",
+                    },
+                },
+                # Outputs pair with calls and must not be double counted.
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "custom_tool_call_output",
+                        "call_id": "call-1",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {"type": "local_shell_call", "call_id": "call-2"},
+                },
+                {
+                    "type": "response_item",
+                    "payload": {"type": "function_call", "call_id": "call-3"},
+                },
+                {
+                    "type": "response_item",
+                    "payload": {"type": "reasoning", "id": "rs-1"},
+                },
+            ]
+        )
+    )
+
+    sidecar_events = _read_codex_sidecar_events(tmp_path, trajectory)
+    assert sidecar_events is not None
+    # 3 tool calls + 1 reasoning item; the tool-call output is filtered out.
+    assert len(sidecar_events) == 4
+
+    metadata = _extract_metadata(
+        "openaicodex",
+        trajectory,
+        4.5,
+        "openai/gpt-6-astra",
+        False,
+        600,
+        None,
+        False,
+        0,
+        1024,
+        tmp_path,
+        codex_sidecar_events=sidecar_events,
+    )
+    metrics = metadata["run_summary"]["metrics"]
+
+    assert metrics["turn_count"] == 1
+    assert metrics["step_count"] == 3
+    assert metadata["n_steps"] == 3
+
+
 def test_codex_stream_fallback_preserves_cached_input_usage() -> None:
     summary = build_cli_run_summary(
         agent_type="openaicodex",
