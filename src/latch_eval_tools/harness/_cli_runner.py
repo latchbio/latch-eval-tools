@@ -76,6 +76,7 @@ def _write_refusal_verdict(
 
 
 EVAL_TIMEOUT = 6000
+TRAJECTORY_SNAPSHOT_INTERVAL_SECONDS = 1.0
 ANTHROPIC_ENV_KEYS = {"ANTHROPIC_API_KEY"}
 OPENAI_ENV_KEYS = {"OPENAI_API_KEY", "CODEX_API_KEY"}
 PI_ENV_KEYS = {
@@ -1078,6 +1079,7 @@ def _run_cli_agent(
                 def stream_stdout():
                     if process.stdout is None:
                         return
+                    last_snapshot_at = time.monotonic()
                     try:
                         for line in process.stdout:
                             if agent_type != "pi":
@@ -1098,7 +1100,14 @@ def _run_cli_agent(
                                     continue
                                 with trajectory_lock:
                                     trajectory.append(event)
-                                persist_trajectory()
+                                # Keep reading stdout quickly enough for the CLI
+                                # to flush its final events before it exits.
+                                if (
+                                    time.monotonic() - last_snapshot_at
+                                    >= TRAJECTORY_SNAPSHOT_INTERVAL_SECONDS
+                                ):
+                                    persist_trajectory()
+                                    last_snapshot_at = time.monotonic()
                             except json.JSONDecodeError:
                                 print(f"Warning: Failed to parse JSON: {stripped}")
                     except ValueError:
@@ -1164,8 +1173,10 @@ def _run_cli_agent(
                     process.kill()
                     process.wait()
 
-                stdout_thread.join(timeout=5)
-                stderr_thread.join(timeout=5)
+                # Drain buffered output before inspecting the attempt or closing
+                # the log; process exit does not mean the readers reached EOF.
+                stdout_thread.join()
+                stderr_thread.join()
                 last_return_code = process.returncode
                 attempt_events = trajectory[attempt_start_index:]
                 if answer_submitted:
