@@ -529,7 +529,67 @@ def _evaluate_all_of_child(
     )
 
 
+def _child_points(child: Any) -> tuple[float | None, str | None]:
+    """Read a child's explicit point value.
+
+    ``points`` overrides the point value a child contributes to the bundle,
+    so a 5-point rubric-style component and a 1-point deterministic check can
+    sit side by side. Returns ``(None, None)`` when unset, in which case the
+    child keeps its natural ``score_max``.
+    """
+
+    if not isinstance(child, dict) or "points" not in child:
+        return None, None
+
+    points = child["points"]
+    if isinstance(points, bool) or not is_finite_number(points) or float(points) <= 0.0:
+        return None, "child 'points' must be a finite number greater than zero"
+    if child.get("role") == "hard_fail" or (
+        isinstance(child.get("config"), dict)
+        and child["config"].get("role") == "hard_fail"
+    ):
+        return None, "'points' is invalid on a hard_fail child; vetoes do not score"
+    return float(points), None
+
+
+def _rescale_to_points(
+    score: float, score_max: float, points: float
+) -> tuple[float, float]:
+    """Restate a child's award out of ``points`` instead of its own scale."""
+
+    return points * normalize_score(score, score_max), points
+
+
 def _evaluate_average_of_child(
+    child: Any, agent_answer: Any, index: int
+) -> tuple[str, bool, float, float, str, dict]:
+    """Dispatch one ``average_of`` child, restated onto its ``points`` scale."""
+
+    points, points_error = _child_points(child)
+    if points_error is not None:
+        return (
+            "invalid",
+            False,
+            0.0,
+            1.0,
+            _all_of_child_label(child, index),
+            {"configuration_error": points_error},
+        )
+
+    kind, passed, score, score_max, label, info = _evaluate_average_of_child_award(
+        child, agent_answer, index
+    )
+    if points is None or kind != "scoring":
+        return kind, passed, score, score_max, label, info
+    if score_max <= 0.0 or not math.isfinite(score_max) or not math.isfinite(score):
+        # Leave a broken award alone; the payload check downstream reports it.
+        return kind, passed, score, score_max, label, info
+
+    scaled_score, scaled_max = _rescale_to_points(score, score_max, points)
+    return kind, passed, scaled_score, scaled_max, label, {**info, "points": points}
+
+
+def _evaluate_average_of_child_award(
     child: Any, agent_answer: Any, index: int
 ) -> tuple[str, bool, float, float, str, dict]:
     """Dispatch one ``average_of`` scoring component or hard-fail veto."""
