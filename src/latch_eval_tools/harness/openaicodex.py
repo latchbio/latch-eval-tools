@@ -37,6 +37,7 @@ def run_openaicodex_task(
     prompt_suffix: str | None = load_data_instructions(),
     completion: bool = False,
     benchmark: bool = False,
+    completion_file_path: str | None = None,
 ) -> dict:
     openai_key = os.environ.get("OPENAI_API_KEY")
     codex_key = os.environ.get("CODEX_API_KEY")
@@ -60,4 +61,5 @@ def run_openaicodex_task(
         prompt_suffix=prompt_suffix,
         completion=completion,
         benchmark=benchmark,
+        completion_file_path=completion_file_path,
     )

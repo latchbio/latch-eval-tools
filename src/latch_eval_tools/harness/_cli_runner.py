@@ -1156,12 +1156,18 @@ def _run_cli_agent(
 
                         try:
                             if agent_type == "pi":
-                                answer_file = _find_eval_answer_file()
-                                if completion and find_finished_file(agent_dir):
-                                    answer_submitted = True
-                                elif not completion and answer_file is not None:
-                                    json.loads(answer_file.read_text())
-                                    answer_submitted = True
+                                if completion_file is not None:
+                                    answer_submitted = (
+                                        completion
+                                        and completion_file == find_finished_file(agent_dir)
+                                    )
+                                else:
+                                    answer_file = _find_eval_answer_file()
+                                    if completion and find_finished_file(agent_dir):
+                                        answer_submitted = True
+                                    elif not completion and answer_file is not None:
+                                        json.loads(answer_file.read_text())
+                                        answer_submitted = True
                                 if answer_submitted:
                                     process.terminate()
                                     try:
@@ -1281,7 +1287,11 @@ def _run_cli_agent(
                 if last_return_code == 0:
                     if (
                         agent_type == "pi"
-                        and _find_eval_answer_file() is None
+                        and (
+                            not completion_file.is_file()
+                            if completion_file is not None
+                            else _find_eval_answer_file() is None
+                        )
                         and _pi_clean_exit_needs_resume(attempt_events)
                     ):
                         persist_trajectory()
