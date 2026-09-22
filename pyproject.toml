@@ -22,6 +22,10 @@ dependencies = [
     "mini-swe-agent~=2.2",
     "litellm~=1.87.0",
     "jinja2~=3.1",
+    "trimesh>=5.1.0",
+    "shapely>=2.1.2",
+    "mapbox-earcut>=2.1.0",
+    "manifold3d>=3.5.3",
 ]
 [tool.hatch.metadata]
 allow-direct-references = true

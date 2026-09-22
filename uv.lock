@@ -3067,7 +3067,7 @@ wheels = [
 
 [[package]]
 name = "latch-eval-tools"
-version = "0.4.36"
+version = "0.4.40"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -3075,6 +3075,8 @@ dependencies = [
     { name = "jinja2" },
     { name = "latch" },
     { name = "litellm" },
+    { name = "manifold3d" },
+    { name = "mapbox-earcut" },
     { name = "matplotlib" },
     { name = "mini-swe-agent" },
     { name = "numpy" },
@@ -3082,6 +3084,8 @@ dependencies = [
     { name = "orjson" },
     { name = "pydantic" },
     { name = "scipy" },
+    { name = "shapely" },
+    { name = "trimesh" },
     { name = "websockets" },
 ]
 
@@ -3092,6 +3096,8 @@ requires-dist = [
     { name = "jinja2", specifier = "~=3.1" },
     { name = "latch", specifier = ">=2.0.0" },
     { name = "litellm", specifier = "~=1.87.0" },
+    { name = "manifold3d", specifier = ">=3.5.3" },
+    { name = "mapbox-earcut", specifier = ">=2.1.0" },
     { name = "matplotlib", specifier = ">=3.0.0" },
     { name = "mini-swe-agent", specifier = "~=2.2" },
     { name = "numpy", specifier = ">=1.24.0" },
@@ -3099,6 +3105,8 @@ requires-dist = [
     { name = "orjson", specifier = ">=3.0.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "scipy", specifier = ">=1.10.0" },
+    { name = "shapely", specifier = ">=2.1.2" },
+    { name = "trimesh", specifier = ">=5.1.0" },
     { name = "websockets", specifier = ">=12.0" },
 ]
 
@@ -3433,6 +3441,106 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/f7/da/137ddeea14c2cb86864838277b2607d09f8253f152156a07f84e11768a28/lz4-4.4.5-cp314-cp314-win32.whl", hash = "sha256:bd85d118316b53ed73956435bee1997bd06cc66dd2fa74073e3b1322bd520a67", size = 90139, upload-time = "2025-11-03T13:02:24.301Z" },
     { url = "https://files.pythonhosted.org/packages/18/2c/8332080fd293f8337779a440b3a143f85e374311705d243439a3349b81ad/lz4-4.4.5-cp314-cp314-win_amd64.whl", hash = "sha256:92159782a4502858a21e0079d77cdcaade23e8a5d252ddf46b0652604300d7be", size = 101497, upload-time = "2025-11-03T13:02:25.187Z" },
     { url = "https://files.pythonhosted.org/packages/ca/28/2635a8141c9a4f4bc23f5135a92bbcf48d928d8ca094088c962df1879d64/lz4-4.4.5-cp314-cp314-win_arm64.whl", hash = "sha256:d994b87abaa7a88ceb7a37c90f547b8284ff9da694e6afcfaa8568d739faf3f7", size = 93812, upload-time = "2025-11-03T13:02:26.133Z" },
+]
+
+[[package]]
+name = "manifold3d"
+version = "3.5.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/81/4a/6432232e9af5048427f5be40540657771a956d8b8ad6cb5df108191d8788/manifold3d-3.5.3.tar.gz", hash = "sha256:bca52ab870cb64343303bddbf63f17e06f97f88e46e20c22f8630dcef0df1dbd", size = 307680, upload-time = "2026-09-07T09:38:57.411Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8f/c5/679198ebaf0d6b232a030f6b9ad785ac5f587df1122c2c23c260d1fbf868/manifold3d-3.5.3-cp312-cp312-macosx_10_14_universal2.whl", hash = "sha256:acc9899a9e402cf501bd64d8c6209862205395cce722613135d319b3a8ea29e6", size = 1843288, upload-time = "2026-09-07T09:38:12.274Z" },
+    { url = "https://files.pythonhosted.org/packages/70/57/0488b93c94fdc7ba460aa2fd6e58acc1a0c205e2552093549e79c2b26dbc/manifold3d-3.5.3-cp312-cp312-macosx_10_14_x86_64.whl", hash = "sha256:df002b89dd8cea5bc15e56618436dd53a2551be73121f21aea8c73e004b2c632", size = 1005348, upload-time = "2026-09-07T09:38:14.216Z" },
+    { url = "https://files.pythonhosted.org/packages/5e/02/39618dc12c8ea75ed9a3f59ea7eabd5045b5e89ecccc41bcfa94898b1bc6/manifold3d-3.5.3-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:b624d85bfe36f07fdfda28cbeb39db4775c627d6070fc3c9ff1f15986fa04d45", size = 884728, upload-time = "2026-09-07T09:38:15.55Z" },
+    { url = "https://files.pythonhosted.org/packages/bd/4e/e59e889dc225f5656915f0c55f56bad6d924c11e38cbec04d66641dabd33/manifold3d-3.5.3-cp312-cp312-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:91fba34aa7eee993034888c4e1f9b0d377672fb857cdeb20613aee0f5f893de1", size = 1317925, upload-time = "2026-09-07T09:38:17.143Z" },
+    { url = "https://files.pythonhosted.org/packages/8a/80/8d8711718b1203d722493c5b507d9bbf34c3fb116e4c32b9278287ae4bfd/manifold3d-3.5.3-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:1d7f8bfc3b04e383fa172dee648f8c98a1d11b3b758e999ab6c3a2af19711359", size = 1427176, upload-time = "2026-09-07T09:38:18.682Z" },
+    { url = "https://files.pythonhosted.org/packages/11/67/1a7a9bf5f701fe1b93003be19ba0d2d4235ab6756ea98ef9c29967695483/manifold3d-3.5.3-cp312-cp312-win_amd64.whl", hash = "sha256:c0fabc63e2f3b96ab0a24b8583a7a5ef0e2b9a3feddbb65fe9d450a8b983f831", size = 1036097, upload-time = "2026-09-07T09:38:20.114Z" },
+    { url = "https://files.pythonhosted.org/packages/12/41/53b3e46ec994e9f5fdb2006dc9f51edc9bf45c2502753c40dcee13e0ffa7/manifold3d-3.5.3-cp312-cp312-win_arm64.whl", hash = "sha256:f5f9a9118bbe67eabe98cca18361575d1b391a137bcf202dae78211fc514c8d5", size = 1123419, upload-time = "2026-09-17T00:22:57.057Z" },
+    { url = "https://files.pythonhosted.org/packages/87/7f/24573e1b700d642744dd67aa94d84c8debe21eb5493582ecf996dff59509/manifold3d-3.5.3-cp313-cp313-macosx_10_14_universal2.whl", hash = "sha256:f7aba4eb54a8dafd97377e25ec990525c3d4ad4973f32840a43452888085f01b", size = 1843258, upload-time = "2026-09-07T09:38:21.631Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/f7/f73cfbc2eeb20f2981898d4619dbb81f6d6ff101721f9a7794c607690f1b/manifold3d-3.5.3-cp313-cp313-macosx_10_14_x86_64.whl", hash = "sha256:ad2657dc2826ee4deed8d4a7438a0629befc5efc4cbe9c793d1f29f2cd8aede5", size = 1005296, upload-time = "2026-09-07T09:38:23.118Z" },
+    { url = "https://files.pythonhosted.org/packages/ec/fe/4ce29b6d3e7490368244d3a7ab618570589162deb0d9483056ddc5ece918/manifold3d-3.5.3-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:4713a5b07db2503df93fefa5a6a88aa05b61037175b7ca55be9f31c42a71771a", size = 884709, upload-time = "2026-09-07T09:38:24.621Z" },
+    { url = "https://files.pythonhosted.org/packages/2f/2c/bb0f386c25c0f4d3a2e96e2687586e140d9fb800d7f0374fc42016c8cdd0/manifold3d-3.5.3-cp313-cp313-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:f476f446e7a0d8337d61bce5689e5a5953fc2fdbf99f8b648b062e827258edc8", size = 1317897, upload-time = "2026-09-07T09:38:26.209Z" },
+    { url = "https://files.pythonhosted.org/packages/1a/4e/7a057ba1a044096fc86fac4db4f90e44ee9a0b3098d3b1e26d83636ccaf6/manifold3d-3.5.3-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:239b300cd1cbe9f8c0397863d2f657800f9c3212316a7e0d60554bf81e4c3617", size = 1427118, upload-time = "2026-09-07T09:38:27.525Z" },
+    { url = "https://files.pythonhosted.org/packages/09/bb/03142c8640985438e864e96b40d0bcc885973ac66461f03efea70b7a6b50/manifold3d-3.5.3-cp313-cp313-win_amd64.whl", hash = "sha256:5a0e1ed0f04b1d937bb7c96afbdcc83826f4dcaea0b6f9c332140822cf136b38", size = 1036023, upload-time = "2026-09-07T09:38:29.075Z" },
+    { url = "https://files.pythonhosted.org/packages/07/0c/c4573f562cbdb4e250ce2d82b24ccbbc5cd467ed6be59abd1abf758d8458/manifold3d-3.5.3-cp313-cp313-win_arm64.whl", hash = "sha256:759cba83f94839d0e74eb5ee4da7b17bf0ead667c48ccf4876ef9fb9e2096e5e", size = 1123307, upload-time = "2026-09-17T00:22:58.713Z" },
+    { url = "https://files.pythonhosted.org/packages/44/a7/152f495d83e9b6fe49db94b01e80bbff7adce35a96959a657bc938d93b3c/manifold3d-3.5.3-cp314-cp314-macosx_10_15_universal2.whl", hash = "sha256:5367aaa3bf683a99f469046b9fba6d454e87e731de4a4ccfba82947d44fd42e5", size = 1843039, upload-time = "2026-09-07T09:38:30.529Z" },
+    { url = "https://files.pythonhosted.org/packages/2a/12/60b8b8925149fdee880bf14ba35c535e490ec413cf828dbdfe11a873dd01/manifold3d-3.5.3-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:e59aa3d64d816c66986e6ca67d708cce06eb05eb5b28a7153bcc1e5cddd5add0", size = 1004987, upload-time = "2026-09-07T09:38:31.928Z" },
+    { url = "https://files.pythonhosted.org/packages/d4/4a/c0030817134f32b972fa229c63dec0d7c1e4dc2a294af91b92bd43c76a85/manifold3d-3.5.3-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:8635c8c8323266078a99477a6b758c4f4a506842137e4b57dfe4e6af098d17c9", size = 884653, upload-time = "2026-09-07T09:38:33.253Z" },
+    { url = "https://files.pythonhosted.org/packages/19/cc/1d43a4b48df6cb147289078188713ee7d9b3da94a54dc31867478ec269cc/manifold3d-3.5.3-cp314-cp314-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:c25d1fe3a9fb92bdf3a74c38023c3d52d3339a3d5d9675ab20b0c4adeb79ac32", size = 1319037, upload-time = "2026-09-07T09:38:34.651Z" },
+    { url = "https://files.pythonhosted.org/packages/22/51/e055a158d735e4d740538662c22679017bde0506e9a1a05353f7d7d5841c/manifold3d-3.5.3-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:2e180b74120550207823f107f8cfa6c14a1a037b4413d0d8865a4fe2768dca34", size = 1427464, upload-time = "2026-09-07T09:38:36.407Z" },
+    { url = "https://files.pythonhosted.org/packages/a7/5e/9a7b588ff2dce12284f3cc782a078af0c088bd36ce5d7f90c4efff9b80aa/manifold3d-3.5.3-cp314-cp314-win_amd64.whl", hash = "sha256:6a1f7a8451c861c6bb210c6af09c86c0c92882881c12bc0f354aef9c65771814", size = 1068394, upload-time = "2026-09-07T09:38:37.901Z" },
+    { url = "https://files.pythonhosted.org/packages/3c/cb/050bccd1d4556e767a4df2d3b43e969fa6f27bbf156969392ccc5b0a1ae6/manifold3d-3.5.3-cp314-cp314-win_arm64.whl", hash = "sha256:5af66ea7943f551ce7e866aeab56ad870714a75ddd97a0596e065e2760bd8304", size = 1158008, upload-time = "2026-09-17T00:23:00.218Z" },
+    { url = "https://files.pythonhosted.org/packages/33/3c/66568912904716ad2f0741172bf7d987f955f0cc27355064f0bedb7c02b6/manifold3d-3.5.3-cp314-cp314t-macosx_10_15_universal2.whl", hash = "sha256:a90ec84d0fa8672a7b6f70b4b87a436b1e762f92da4dcfe26ab96afb633c12ab", size = 1853604, upload-time = "2026-09-07T09:38:39.293Z" },
+    { url = "https://files.pythonhosted.org/packages/cf/d2/6717eae4bad231133cb0b9b45cdefe9eb34b9f1dd8df216122dc5e11acd0/manifold3d-3.5.3-cp314-cp314t-macosx_10_15_x86_64.whl", hash = "sha256:b6d913645a0b823ed93e70fd8ec5b82486c6295e2fdb81e892fb04d7ba972324", size = 1011077, upload-time = "2026-09-07T09:38:40.896Z" },
+    { url = "https://files.pythonhosted.org/packages/23/c2/3b52cccf32b7f7b183831d77ecce3ac291ea905208cd68c0fed272844dae/manifold3d-3.5.3-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:7307839242f4ceaacbaccf01672b09c2f1750a17ee708bcef2d1f884160419eb", size = 890400, upload-time = "2026-09-07T09:38:42.311Z" },
+    { url = "https://files.pythonhosted.org/packages/af/39/2c63b35e25c539b9bc011b73200a0f5e4636d5adfb210b9560dd80398226/manifold3d-3.5.3-cp314-cp314t-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:de2581a4f0dd379af5b308f77d1f4eaf79b4c995b111c0bb35b625ad3f40e003", size = 1326940, upload-time = "2026-09-07T09:38:43.852Z" },
+    { url = "https://files.pythonhosted.org/packages/64/91/af48549ed7c2c3ae33cc499c033684d5c3e3117e6a3aacbafca344cc5da0/manifold3d-3.5.3-cp314-cp314t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:10b94f6bb6cd0914c15d8de9acb4de9366cf0d091724e938246d4699f9aaeff0", size = 1433602, upload-time = "2026-09-07T09:38:45.527Z" },
+    { url = "https://files.pythonhosted.org/packages/38/42/4fba4b35880a3fd8c2c37630df2e281205cfb3df583d650c132afd1e8b70/manifold3d-3.5.3-cp314-cp314t-win_amd64.whl", hash = "sha256:be7d2a4f0d9272f2f0a974adc90385a43c963bdaedb26480fbdf8f3b925b08af", size = 1070589, upload-time = "2026-09-07T09:38:46.945Z" },
+]
+
+[[package]]
+name = "mapbox-earcut"
+version = "2.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/aa/14/8505f246191c41da54a64a4d6c30049ed47b6047930d8f0de328dadb06ee/mapbox_earcut-2.1.0.tar.gz", hash = "sha256:fb0c1e43581a635bbaabf4a5149009014d370c515816c4d5a7d8118477f28d48", size = 46744, upload-time = "2026-09-08T19:01:06.749Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2c/d0/74534b0a7df17340cb2ab2c959909ec7005eaaf8422da646565205b04664/mapbox_earcut-2.1.0-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:ba3e72cbe58c564acc4e07458da0da0cbf3e034705a093cdf6213815793cf566", size = 69401, upload-time = "2026-09-08T18:59:41.448Z" },
+    { url = "https://files.pythonhosted.org/packages/67/3e/d93e98c76afad5075151d6e19a8446092a53fd42823f4734138dbc74fd5b/mapbox_earcut-2.1.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:4e392807f3e25f268826ece0f32739f0410ac46eebf70f06e701950297292d7c", size = 66308, upload-time = "2026-09-08T18:59:42.656Z" },
+    { url = "https://files.pythonhosted.org/packages/52/4f/b886e77d14f9807abccb2eb0e4752400746fa16cc6a2c9197e88385332ca/mapbox_earcut-2.1.0-cp312-cp312-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:3f6181c097afb5de2a7160424cdb0660510bf8689ed4585a3f61f3f52596c18b", size = 73034, upload-time = "2026-09-08T18:59:43.941Z" },
+    { url = "https://files.pythonhosted.org/packages/9d/d0/9557f5d60e21c434cf87d70fe056899eb6b7ee8cf7755c556e06c77c8dab/mapbox_earcut-2.1.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:5592b56bf6ba66c1d360edf019c7708c8ec9ab6b71b336e457f4660a077676ed", size = 76846, upload-time = "2026-09-08T18:59:45.248Z" },
+    { url = "https://files.pythonhosted.org/packages/29/71/6ea9a0bf249782684b241c58a7fdf58c07aa760233a5c0d4366d10f2c25e/mapbox_earcut-2.1.0-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:c0875192aed99a58e438abbcd5c096517c7947002a5f442440e2a7673f20cc0d", size = 168787, upload-time = "2026-09-08T18:59:46.708Z" },
+    { url = "https://files.pythonhosted.org/packages/be/d5/8cbe09f35d6dedccfc90d7823bbdf7782e0665134dd5abd53d18e2ad1bc7/mapbox_earcut-2.1.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:ace5e2f5f53d742fffdb795c66e8387b0cca04ecf11588fbb8ab14150f30f214", size = 174324, upload-time = "2026-09-08T18:59:48.087Z" },
+    { url = "https://files.pythonhosted.org/packages/9d/c1/7c9453cb4e0cf19184da13324d96f349e5a180dc78da12dda886dce894a6/mapbox_earcut-2.1.0-cp312-cp312-win32.whl", hash = "sha256:c87bf3755011fde95713c5b655c67b144e23e218e65efed2b7ec44f0188b3af9", size = 272880, upload-time = "2026-09-08T18:59:49.478Z" },
+    { url = "https://files.pythonhosted.org/packages/ba/58/b1021f9065d315a5d325a913cc76c996a1629fb032df9c3fa5c9939bf692/mapbox_earcut-2.1.0-cp312-cp312-win_amd64.whl", hash = "sha256:eeea00eeb70873d840290e98471671d02e4ac0536b847b785177a14001e33a95", size = 279405, upload-time = "2026-09-08T18:59:50.936Z" },
+    { url = "https://files.pythonhosted.org/packages/fb/95/f9b0ecb85c62768b2827ab50fcda3228e5f133c0e11aa9dc4759c6f4c1dd/mapbox_earcut-2.1.0-cp312-cp312-win_arm64.whl", hash = "sha256:d48c8abdf0268903689335f4b609022b588b84d98a455c2a2cb0d6bacd5bad50", size = 448075, upload-time = "2026-09-08T18:59:52.76Z" },
+    { url = "https://files.pythonhosted.org/packages/c9/8d/9225758660ddf74fa757a044efdd40bc3e9ad509bc012c0efd58082012dc/mapbox_earcut-2.1.0-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:fe652ace9a050b9f6447e9d7a9f2465fab951547e295ba1de7f2404f8bdf326f", size = 69339, upload-time = "2026-09-08T18:59:54.207Z" },
+    { url = "https://files.pythonhosted.org/packages/b1/c7/34fc86374e487adeae197f42883664abe72c48663e9d106b6b431645d053/mapbox_earcut-2.1.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:01e1df4c841ebdccce44e07046e6d23f307019957f69751439da744f7b09a262", size = 66326, upload-time = "2026-09-08T18:59:55.603Z" },
+    { url = "https://files.pythonhosted.org/packages/38/24/edf60cbcdf8327e18279dce6963496542dfefbf3c49641a8a68e753b9a6d/mapbox_earcut-2.1.0-cp313-cp313-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:611a6fc362c6a24cd7fc230e2740300e60bc5360e6085e36b40c5776eaf156a5", size = 72924, upload-time = "2026-09-08T18:59:56.854Z" },
+    { url = "https://files.pythonhosted.org/packages/fe/a1/841d702350b644808fc9c4793910045a9fb63a387aabe132de225d0a07cc/mapbox_earcut-2.1.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:7cee9422275dd8700bb04f82eac3410d03c283630a1cc536b1a09cc721a5c0a1", size = 76712, upload-time = "2026-09-08T18:59:58.146Z" },
+    { url = "https://files.pythonhosted.org/packages/47/ca/349241fb7971173f2bb7f626396b2d504c7ed3fc1f46f19c18769865fc94/mapbox_earcut-2.1.0-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:d2d87ecc9a00faafb7a0e6c0179bc61e54f79c23f44c33269605475d5eeceb07", size = 168702, upload-time = "2026-09-08T18:59:59.439Z" },
+    { url = "https://files.pythonhosted.org/packages/38/45/1a43da1002787a1b4dcc3740d0216d60239cf92a878ac6cc1ca8d2d4d089/mapbox_earcut-2.1.0-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:086cf89caf061da1669add4f92aa76e5e90a232edc7f82445df362334fd4c3f8", size = 174200, upload-time = "2026-09-08T19:00:01.047Z" },
+    { url = "https://files.pythonhosted.org/packages/e2/65/c97fabf109c2e381611e20a9657a4097d90dcbd82abb2e183e0247a81a8f/mapbox_earcut-2.1.0-cp313-cp313-win32.whl", hash = "sha256:fed97aaa1cd846c1a24867a43fe0a6603e84b25543cec9f58aced65a8c5c723f", size = 272923, upload-time = "2026-09-08T19:00:02.618Z" },
+    { url = "https://files.pythonhosted.org/packages/60/e1/dc52f1b18347c29742ff1a82c0f88553c8fac71fdc541cabe553ddead1c4/mapbox_earcut-2.1.0-cp313-cp313-win_amd64.whl", hash = "sha256:0224b889f67b2868b4cf4dc3ba7dd7006122ece2199159147edce80e05df079c", size = 279382, upload-time = "2026-09-08T19:00:04.145Z" },
+    { url = "https://files.pythonhosted.org/packages/e9/45/cc48844e03f595b535facd5f5b481db05f98e017b3858fab96c639b5da50/mapbox_earcut-2.1.0-cp313-cp313-win_arm64.whl", hash = "sha256:7b3441c188704bd03ca7c320c444378eda529ef494220b9b735389b87765a38e", size = 448060, upload-time = "2026-09-08T19:00:05.728Z" },
+    { url = "https://files.pythonhosted.org/packages/56/f5/d927a6c18e628fe76ee6d5be1991a9ed55f07b8d608f37acd78aa9bf0337/mapbox_earcut-2.1.0-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:01754511b3b2adf9068a0aec595f6b3c2ef91e101942f0805153a555bfb4226b", size = 69484, upload-time = "2026-09-08T19:00:07.089Z" },
+    { url = "https://files.pythonhosted.org/packages/4c/b7/7a558c3a36ec6818632dce1c4e45ea4bac764b4e484a9f15a44e33116c9a/mapbox_earcut-2.1.0-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:8e2d94b2a5ff27082975c57372fc6c966111482b82f42c322dbae22a11737c78", size = 66389, upload-time = "2026-09-08T19:00:08.467Z" },
+    { url = "https://files.pythonhosted.org/packages/44/d1/499e87fc1b630ef2d1ac3083587258d0dea4e5e7b1048e73d9d9770f133d/mapbox_earcut-2.1.0-cp314-cp314-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:b51988c17538fb98dd18a45656ea1d54c30b4d384eabd20eb8ad0a142116495f", size = 73010, upload-time = "2026-09-08T19:00:09.732Z" },
+    { url = "https://files.pythonhosted.org/packages/86/4f/3655c691732f14cc829fa45a4629085a7ada9e1bb65caf231e6ce982e9d4/mapbox_earcut-2.1.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:db56b69aace164fb82884f9ca36864ea3d6e8ec643defebec83541dddf41be32", size = 76774, upload-time = "2026-09-08T19:00:10.94Z" },
+    { url = "https://files.pythonhosted.org/packages/60/12/9ea657f8117c3c0d6e0d96218395c57f0b289654955f90405d7981e5b816/mapbox_earcut-2.1.0-cp314-cp314-musllinux_1_2_aarch64.whl", hash = "sha256:0b300e634ca98f44bd7300d06f177197e5872f63675a4003ea1857d16f364571", size = 168768, upload-time = "2026-09-08T19:00:12.479Z" },
+    { url = "https://files.pythonhosted.org/packages/ee/ba/3be16d09fcb5277cb1f27a65566584d0bac33664aa3e74f20b224cfda762/mapbox_earcut-2.1.0-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:5488bdd616a4ab9b8ec2b177f9d94ca33243020209fb5025ca0c6d19fd043a76", size = 174279, upload-time = "2026-09-08T19:00:14.256Z" },
+    { url = "https://files.pythonhosted.org/packages/4e/1e/7c3e2cdf47c70526376769dd981ed0e608e44a9772e1edd213e3f211e31b/mapbox_earcut-2.1.0-cp314-cp314-win32.whl", hash = "sha256:ef8e993d04ce5f8e198f55af4f5de0a64164c7d2f914fee29731d2c14da63bcf", size = 280875, upload-time = "2026-09-08T19:00:15.776Z" },
+    { url = "https://files.pythonhosted.org/packages/92/e8/a94aa807140140d515fccb7393c75d2aaddac2403a207588fb3da1a2b688/mapbox_earcut-2.1.0-cp314-cp314-win_amd64.whl", hash = "sha256:d8816d6b4b83d2a3e4b9a2f685a9d16418c680825ac277642c05975a08af073c", size = 288975, upload-time = "2026-09-08T19:00:17.285Z" },
+    { url = "https://files.pythonhosted.org/packages/30/91/4d53f1cd838936da7cf7f14a641a07bff730cc19f5be3e3b77eb75475e9e/mapbox_earcut-2.1.0-cp314-cp314-win_arm64.whl", hash = "sha256:5d28efcc3448f524ad45f52db9046b3296de32a0406f62ba203b360e3492d7fa", size = 464111, upload-time = "2026-09-08T19:00:18.699Z" },
+    { url = "https://files.pythonhosted.org/packages/36/95/4477d1231487470822a98cff8dae19720ae3eef1798fa4a51e97b8251452/mapbox_earcut-2.1.0-cp314-cp314t-macosx_10_15_x86_64.whl", hash = "sha256:1c924fd7f19a1b1a2421306c651b228d36be30c131a1d552c2303214c67cf186", size = 70579, upload-time = "2026-09-08T19:00:20.033Z" },
+    { url = "https://files.pythonhosted.org/packages/05/01/89e382936dcc3a0cf8260fd30d428afec81fa53e35062b150ff95350b154/mapbox_earcut-2.1.0-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:01e35034f923d087359a8551ee8546abfcc4d711674859ca41385409d44e993b", size = 67583, upload-time = "2026-09-08T19:00:21.804Z" },
+    { url = "https://files.pythonhosted.org/packages/86/5d/3e52d5dd94d7227d5161d2270a29b5831738a119ff343c78b111c070463c/mapbox_earcut-2.1.0-cp314-cp314t-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:66439a181c1416907607b97f3f749ad22cb8b5d410a37da3a7d3f4914739a19d", size = 72469, upload-time = "2026-09-08T19:00:23.051Z" },
+    { url = "https://files.pythonhosted.org/packages/97/6e/4cdab89617fbc955b85c91250767b482dce19813515dcee2d78a76da0354/mapbox_earcut-2.1.0-cp314-cp314t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:52f75cca40240f33fe18de005ee1ecb1c13af6ecc45d108400ac6489b54562ca", size = 75465, upload-time = "2026-09-08T19:00:24.31Z" },
+    { url = "https://files.pythonhosted.org/packages/9c/8d/d86b1da12235b27d8530ca30e5499bba646468926978eb46bd8f4ce79747/mapbox_earcut-2.1.0-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:691825b5b93171b1725491fada1ddae70c37330360f70592bf07c1b770a2b437", size = 169874, upload-time = "2026-09-08T19:00:25.632Z" },
+    { url = "https://files.pythonhosted.org/packages/e1/16/c852be8d82c438ac583b6a07db02ff5547634c64966f5bc5fd761f1a6589/mapbox_earcut-2.1.0-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:d0eab4447b73c54b4b73ccc25881a66d533b13ca37d887cf654efc17b8da21f8", size = 174841, upload-time = "2026-09-08T19:00:27.31Z" },
+    { url = "https://files.pythonhosted.org/packages/04/9e/b0c286fb9d2d71d08665d23f00906d402f67b4379570b5cf115a2e7c07d7/mapbox_earcut-2.1.0-cp314-cp314t-win32.whl", hash = "sha256:46c75cbf1d10b3e3b88dc2e0047f6f0c715e1bd4d56931727751f776660c0357", size = 283466, upload-time = "2026-09-08T19:00:28.841Z" },
+    { url = "https://files.pythonhosted.org/packages/a3/02/091aa8f58defed3696b12ff7d4a56e78fcb3416b3d4e32fb183a2ce31646/mapbox_earcut-2.1.0-cp314-cp314t-win_amd64.whl", hash = "sha256:4b11782a4bec5c5b442ebf5421361ea4b8d343ac15fd58d8dee39c0affc81a4f", size = 290860, upload-time = "2026-09-08T19:00:30.399Z" },
+    { url = "https://files.pythonhosted.org/packages/0a/c7/e410ccb819156c4500f363a4cf6f1bddbf1f48007b10fd2352d93b0ac2c4/mapbox_earcut-2.1.0-cp315-cp315-macosx_10_15_x86_64.whl", hash = "sha256:2f5f9e0e7be256393cb872b3af3064bd7eaddda16c0d238588b5c8ba9a8544b7", size = 69626, upload-time = "2026-09-08T19:00:31.844Z" },
+    { url = "https://files.pythonhosted.org/packages/ba/62/49ebf1d6afbbdba83b73efbb2e91b45701ac6f0f07d5cf9242c521d28992/mapbox_earcut-2.1.0-cp315-cp315-macosx_11_0_arm64.whl", hash = "sha256:6cccc1efbfbc989ed178f91d1e855969fdc4acf26d4396ad404fec011ec69973", size = 66539, upload-time = "2026-09-08T19:00:33.059Z" },
+    { url = "https://files.pythonhosted.org/packages/3a/cf/b4a2bea95c0ab9b46206898308103087df993d656e0e089891be331dbf29/mapbox_earcut-2.1.0-cp315-cp315-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:26e40f410c0b101626111252fd657d310220254434bd240d29503d83c0857d71", size = 73192, upload-time = "2026-09-08T19:00:34.319Z" },
+    { url = "https://files.pythonhosted.org/packages/d1/be/af8af09b7c74613a38fe4ca23afbdd45e70bf9019ff4b91401ce879b8572/mapbox_earcut-2.1.0-cp315-cp315-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:c5b7b07974a3832175fb79bcfba32582cdb04142703d804c40fe1043d4dfca3f", size = 76920, upload-time = "2026-09-08T19:00:35.736Z" },
+    { url = "https://files.pythonhosted.org/packages/70/91/bdc5aa7dae025b8faf022987397bb27081f3b95d49ed45b4c9347b7f8528/mapbox_earcut-2.1.0-cp315-cp315-musllinux_1_2_aarch64.whl", hash = "sha256:0d6e11e5e722cc29d2da08840802742b0337842bed0c6655b8785874e646cc34", size = 168860, upload-time = "2026-09-08T19:00:37.075Z" },
+    { url = "https://files.pythonhosted.org/packages/05/d1/a72944ae9567d8745668dacefafa92d6a9aadac63b2d9c155feef7b8c87e/mapbox_earcut-2.1.0-cp315-cp315-musllinux_1_2_x86_64.whl", hash = "sha256:b7447082d864ac496aa6e0b23e31428bda9ec3ca217c09ea9af405274fb56410", size = 174434, upload-time = "2026-09-08T19:00:38.639Z" },
+    { url = "https://files.pythonhosted.org/packages/5c/f6/3518161f9caa9c5f50cf59ed764749b3a4eb650c07cdb11bd2a6ec4a7a6e/mapbox_earcut-2.1.0-cp315-cp315-win32.whl", hash = "sha256:fbaae75dc6c34d94329f55068aa3c0e4285b8f54a84e569f3d7c14be4774295c", size = 280968, upload-time = "2026-09-08T19:00:40.307Z" },
+    { url = "https://files.pythonhosted.org/packages/fb/21/ba8bc7f379005f2df1f21cafde1b7f5880f539af35356c67a1bc156d9367/mapbox_earcut-2.1.0-cp315-cp315-win_amd64.whl", hash = "sha256:e1b21fd100655ae3c0a2f62e08994228051f9b0b31e081c535c1431361b54614", size = 289212, upload-time = "2026-09-08T19:00:41.851Z" },
+    { url = "https://files.pythonhosted.org/packages/d6/22/cabd764d02ba6a4639354d78f65456f2f0bbc7ca4c553d39e96c71a52c2a/mapbox_earcut-2.1.0-cp315-cp315t-macosx_10_15_x86_64.whl", hash = "sha256:0e1cd2514e2774c11f988f33af09b3ff30f534c6dd9630d6a0b99694274d4b6a", size = 70737, upload-time = "2026-09-08T19:00:43.774Z" },
+    { url = "https://files.pythonhosted.org/packages/dd/ee/1e92aaa17861ee9a5e7b406e33325b89f3e83fbc5767763f5cb57fa20fdd/mapbox_earcut-2.1.0-cp315-cp315t-macosx_11_0_arm64.whl", hash = "sha256:260814d85d5cb7f02b99d0fb69b4ec83a0cc4aaedb2c7f9c69d9f47a8ad38ff5", size = 67734, upload-time = "2026-09-08T19:00:45.063Z" },
+    { url = "https://files.pythonhosted.org/packages/ce/a2/ec7ea2249e5b47b5c779f3879e83a51072d19b78822655f56cbad716fb0f/mapbox_earcut-2.1.0-cp315-cp315t-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:3bce59b92603849ef49084cad77dda3da323970ba7a82de3a0a35fc962ab92a1", size = 72598, upload-time = "2026-09-08T19:00:46.289Z" },
+    { url = "https://files.pythonhosted.org/packages/f0/fb/ed1e52409b65873c1cbfcd3b701ac9adecb506585268f8c4d813a359d51a/mapbox_earcut-2.1.0-cp315-cp315t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:da53538a84bc1bb32d3983710d0014be6f41f2e5dc90fad51dfb53278b0a1698", size = 75645, upload-time = "2026-09-08T19:00:47.588Z" },
+    { url = "https://files.pythonhosted.org/packages/9e/67/5d4d81b893b2d0a7950edcd688fdc8fcfde92c6c3aaa49dbc306a6912019/mapbox_earcut-2.1.0-cp315-cp315t-musllinux_1_2_aarch64.whl", hash = "sha256:f90df2b36e6008a5993e29c74a9d711fa227600a6f9675cb182f7feef3dcfbd7", size = 170030, upload-time = "2026-09-08T19:00:49.108Z" },
+    { url = "https://files.pythonhosted.org/packages/28/d3/f2e047ba37e25f98b4086afed39c9ee6566c98a9c5bd7a32a8f459df4c8c/mapbox_earcut-2.1.0-cp315-cp315t-musllinux_1_2_x86_64.whl", hash = "sha256:afa1e3c5b9d983b58e88cf5a1ab8d57c7817777a9a9bc13d26356f940fa0bad1", size = 175056, upload-time = "2026-09-08T19:00:50.677Z" },
+    { url = "https://files.pythonhosted.org/packages/05/f5/0beffb7ad07b71ece774b201b6efe969571fa7697be9649ad53b4eb4d8f7/mapbox_earcut-2.1.0-cp315-cp315t-win32.whl", hash = "sha256:d7dca5e525f54c28160d5515f5aeae135a35cb82408e3bd280b01f208d23f5e0", size = 283566, upload-time = "2026-09-08T19:00:52.234Z" },
+    { url = "https://files.pythonhosted.org/packages/92/3c/b73e2b9e4291663eaf1c2548ffc9051ccd47abd0f68e99f39e3dd8c8d603/mapbox_earcut-2.1.0-cp315-cp315t-win_amd64.whl", hash = "sha256:265e2670bad18d86a6a542b09ae6426e8025fcc7bfc7b039027f6af380d2a604", size = 291083, upload-time = "2026-09-08T19:00:53.822Z" },
 ]
 
 [[package]]
@@ -7240,6 +7348,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/09/a9/6ba95a270c6f1fbcd8dac228323f2777d886cb206987444e4bce66338dd4/tqdm-4.67.3.tar.gz", hash = "sha256:7d825f03f89244ef73f1d4ce193cb1774a8179fd96f31d7e1dcde62092b960bb", size = 169598, upload-time = "2026-02-03T17:35:53.048Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/16/e1/3079a9ff9b8e11b846c6ac5c8b5bfb7ff225eee721825310c91b3b50304f/tqdm-4.67.3-py3-none-any.whl", hash = "sha256:ee1e4c0e59148062281c49d80b25b67771a127c85fc9676d3be5f243206826bf", size = 78374, upload-time = "2026-02-03T17:35:50.982Z" },
+]
+
+[[package]]
+name = "trimesh"
+version = "5.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/21/3f/a13d797349fdd00a8586b60d6b71df849e1766e2002729697a265b27a773/trimesh-5.1.0.tar.gz", hash = "sha256:927aa8748af8b84cb969c8f53270d929e546f2beada77a2bc234b605fddf1454", size = 870501, upload-time = "2026-08-31T18:28:55.464Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f5/c8/5ede3b786ef58e0076e9ca748b2c1787183f85e5ad8133373715c31248f9/trimesh-5.1.0-py3-none-any.whl", hash = "sha256:0fa85d1d131e321b683c00747c20090200b92071298b905ea588f609eb204c89", size = 750004, upload-time = "2026-08-31T18:28:53.746Z" },
 ]
 
 [[package]]
