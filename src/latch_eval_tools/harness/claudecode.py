@@ -43,6 +43,7 @@ def run_claudecode_task(
     completion: bool = False,
     benchmark: bool = False,
     switch_models_on_flag: bool | None = None,
+    completion_file_path: str | None = None,
 ) -> dict:
     if not os.environ.get("ANTHROPIC_API_KEY"):
         raise ValueError(
@@ -71,4 +72,5 @@ def run_claudecode_task(
         " synchronously and poll until the job finishes before returning.",
         completion=completion,
         benchmark=benchmark,
+        completion_file_path=completion_file_path,
     )
