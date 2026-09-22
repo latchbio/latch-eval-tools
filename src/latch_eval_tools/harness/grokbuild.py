@@ -23,7 +23,6 @@ def run_grokbuild_task(
     prompt_suffix: str | None = load_data_instructions(),
     completion: bool = False,
     benchmark: bool = False,
-    completion_file_path: str | None = None,
 ) -> dict:
     if not os.environ.get("XAI_API_KEY"):
         raise ValueError(
@@ -51,5 +50,4 @@ def run_grokbuild_task(
         " synchronously and poll until the job finishes before returning.",
         completion=completion,
         benchmark=benchmark,
-        completion_file_path=completion_file_path,
     )

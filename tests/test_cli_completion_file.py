@@ -2,29 +2,18 @@ import io
 import json
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
 
-from latch_eval_tools.harness import _cli_runner, claudecode, grokbuild
-
-AgentType = Literal["claudecode", "grokbuild"]
+from latch_eval_tools.harness import _cli_runner, claudecode
 
 
-@pytest.fixture(params=["claudecode", "grokbuild"])
-def agent_type(request: pytest.FixtureRequest) -> AgentType:
-    return request.param
-
-
-def _process(agent_type: AgentType, returncode: int | None = 0) -> Mock:
-    event = (
-        {"type": "result", "session_id": "test-session", "subtype": "success"}
-        if agent_type == "claudecode"
-        else {"type": "end", "sessionId": "test-session"}
-    )
+def _process(returncode: int | None = 0) -> Mock:
+    event = {"type": "result", "session_id": "test-session", "subtype": "success"}
     process = Mock(
-        args=[agent_type],
+        args=["claude"],
         stdin=io.StringIO(),
         stdout=io.StringIO(json.dumps(event) + "\n"),
         stderr=io.StringIO(),
@@ -37,7 +26,6 @@ def _process(agent_type: AgentType, returncode: int | None = 0) -> Mock:
 def _run_cli(
     monkeypatch: pytest.MonkeyPatch,
     work_dir: Path,
-    agent_type: AgentType,
     popen: Callable[..., Mock],
     *,
     completion: bool = False,
@@ -57,8 +45,8 @@ def _run_cli(
     monkeypatch.setattr(_cli_runner.time, "sleep", lambda _: None)
     monkeypatch.setattr(_cli_runner.subprocess, "Popen", popen)
     return _cli_runner._run_cli_agent(
-        agent_type=agent_type,
-        cli_command=[agent_type],
+        agent_type="claudecode",
+        cli_command=["claude"],
         task_prompt="Write the requested report.",
         work_dir=work_dir,
         memory_limit_bytes=1024,
@@ -69,13 +57,13 @@ def _run_cli(
 
 
 def test_declared_report_completes_after_one_clean_exit(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, agent_type: AgentType
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     (tmp_path / "report.md").write_text("# Completed report\n")
-    popen = Mock(side_effect=lambda *_, **__: _process(agent_type))
+    popen = Mock(side_effect=lambda *_, **__: _process())
 
     result = _run_cli(
-        monkeypatch, tmp_path, agent_type, popen, completion_file_path="report.md"
+        monkeypatch, tmp_path, popen, completion_file_path="report.md"
     )
 
     assert popen.call_count == 1
@@ -87,7 +75,6 @@ def test_declared_report_completes_after_one_clean_exit(
 def test_missing_report_resumes_even_if_legacy_answer_exists(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    agent_type: AgentType,
     incidental_file: str | None,
 ) -> None:
     if incidental_file is not None:
@@ -96,11 +83,11 @@ def test_missing_report_resumes_even_if_legacy_answer_exists(
     def launch(*_: Any, **__: Any) -> Mock:
         if popen.call_count == 2:
             (tmp_path / "report.md").write_text("# Completed report\n")
-        return _process(agent_type)
+        return _process()
 
     popen = Mock(side_effect=launch)
     result = _run_cli(
-        monkeypatch, tmp_path, agent_type, popen, completion_file_path="report.md"
+        monkeypatch, tmp_path, popen, completion_file_path="report.md"
     )
 
     assert popen.call_count == 2
@@ -110,13 +97,13 @@ def test_missing_report_resumes_even_if_legacy_answer_exists(
 
 
 def test_missing_report_after_resumes_is_left_to_contract_validation(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, agent_type: AgentType
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     (tmp_path / "finished.txt").write_text("done")
-    popen = Mock(side_effect=lambda *_, **__: _process(agent_type))
+    popen = Mock(side_effect=lambda *_, **__: _process())
 
     result = _run_cli(
-        monkeypatch, tmp_path, agent_type, popen, completion_file_path="report.md"
+        monkeypatch, tmp_path, popen, completion_file_path="report.md"
     )
 
     assert popen.call_count == 2
@@ -126,12 +113,12 @@ def test_missing_report_after_resumes_is_left_to_contract_validation(
 
 
 def test_unconfigured_report_preserves_legacy_completion_requirement(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, agent_type: AgentType
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     (tmp_path / "report.md").write_text("# Unrelated report\n")
-    popen = Mock(side_effect=lambda *_, **__: _process(agent_type))
+    popen = Mock(side_effect=lambda *_, **__: _process())
 
-    result = _run_cli(monkeypatch, tmp_path, agent_type, popen, completion=True)
+    result = _run_cli(monkeypatch, tmp_path, popen, completion=True)
 
     assert popen.call_count == 2
     assert result["answer"] is None
@@ -142,16 +129,14 @@ def test_unconfigured_report_preserves_legacy_completion_requirement(
 def test_legacy_answer_still_completes_without_configuration(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    agent_type: AgentType,
     legacy_file: str,
 ) -> None:
     (tmp_path / legacy_file).write_text("{}")
-    popen = Mock(side_effect=lambda *_, **__: _process(agent_type))
+    popen = Mock(side_effect=lambda *_, **__: _process())
 
     result = _run_cli(
         monkeypatch,
         tmp_path,
-        agent_type,
         popen,
         completion=legacy_file == "finished.txt",
     )
@@ -165,16 +150,14 @@ def test_legacy_answer_still_completes_without_configuration(
 def test_declared_finished_marker_preserves_legacy_answer(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    agent_type: AgentType,
     completion: bool,
 ) -> None:
     (tmp_path / "finished.txt").write_text("Task complete\n")
-    popen = Mock(side_effect=lambda *_, **__: _process(agent_type))
+    popen = Mock(side_effect=lambda *_, **__: _process())
 
     result = _run_cli(
         monkeypatch,
         tmp_path,
-        agent_type,
         popen,
         completion=completion,
         completion_file_path="finished.txt",
@@ -186,9 +169,9 @@ def test_declared_finished_marker_preserves_legacy_answer(
 
 
 def test_report_created_while_running_does_not_stop_agent(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, agent_type: AgentType
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    process = _process(agent_type, returncode=None)
+    process = _process(returncode=None)
 
     def poll() -> int | None:
         if process.poll.call_count == 1:
@@ -201,7 +184,7 @@ def test_report_created_while_running_does_not_stop_agent(
     process.poll.side_effect = poll
     popen = Mock(return_value=process)
     result = _run_cli(
-        monkeypatch, tmp_path, agent_type, popen, completion_file_path="report.md"
+        monkeypatch, tmp_path, popen, completion_file_path="report.md"
     )
 
     assert process.poll.call_count == 2
@@ -213,13 +196,13 @@ def test_report_created_while_running_does_not_stop_agent(
 
 
 def test_nonzero_exit_with_report_is_still_an_error(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, agent_type: AgentType
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     (tmp_path / "report.md").write_text("# Partial report\n")
-    popen = Mock(return_value=_process(agent_type, returncode=2))
+    popen = Mock(return_value=_process(returncode=2))
 
     result = _run_cli(
-        monkeypatch, tmp_path, agent_type, popen, completion_file_path="report.md"
+        monkeypatch, tmp_path, popen, completion_file_path="report.md"
     )
 
     assert popen.call_count == 1
@@ -228,12 +211,12 @@ def test_nonzero_exit_with_report_is_still_an_error(
 
 
 def test_timeout_with_report_is_still_an_error(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, agent_type: AgentType
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     (tmp_path / "report.md").write_text("# Partial report\n")
     now = 0.0
     monkeypatch.setattr(_cli_runner.time, "time", lambda: now)
-    process = _process(agent_type, returncode=None)
+    process = _process(returncode=None)
 
     def poll() -> None:
         nonlocal now
@@ -248,7 +231,6 @@ def test_timeout_with_report_is_still_an_error(
     result = _run_cli(
         monkeypatch,
         tmp_path,
-        agent_type,
         popen,
         completion_file_path="report.md",
         eval_timeout=60,
@@ -270,7 +252,7 @@ def test_provider_error_with_report_retries_and_remains_an_error(
     monkeypatch.setattr(_cli_runner, "provider_retry_delay_seconds", lambda *_: 0)
 
     def launch(*_: Any, **__: Any) -> Mock:
-        process = _process("claudecode")
+        process = _process()
         process.stdout = io.StringIO(
             json.dumps(
                 {
@@ -286,7 +268,7 @@ def test_provider_error_with_report_retries_and_remains_an_error(
 
     popen = Mock(side_effect=launch)
     result = _run_cli(
-        monkeypatch, tmp_path, "claudecode", popen, completion_file_path="report.md"
+        monkeypatch, tmp_path, popen, completion_file_path="report.md"
     )
 
     assert popen.call_count == 2
@@ -297,20 +279,13 @@ def test_provider_error_with_report_retries_and_remains_an_error(
 
 
 def test_public_wrapper_passes_declared_completion_file_to_runner(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, agent_type: AgentType
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    if agent_type == "claudecode":
-        module = claudecode
-        run = claudecode.run_claudecode_task
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    else:
-        module = grokbuild
-        run = grokbuild.run_grokbuild_task
-        monkeypatch.setenv("XAI_API_KEY", "test-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     runner = Mock(return_value={"answer": None, "metadata": {}})
-    monkeypatch.setattr(module, "_run_cli_agent", runner)
+    monkeypatch.setattr(claudecode, "_run_cli_agent", runner)
 
-    result = run(
+    result = claudecode.run_claudecode_task(
         "Write the report.",
         tmp_path,
         prompt_suffix="",
