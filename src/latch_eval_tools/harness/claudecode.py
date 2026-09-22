@@ -2,7 +2,12 @@ import json
 import os
 from pathlib import Path
 
-from latch_eval_tools.harness._cli_runner import EVAL_TIMEOUT, _run_cli_agent
+from latch_eval_tools.harness._cli_runner import (
+    EVAL_TIMEOUT,
+    CliChunkResult,
+    _run_cli_agent,
+    _run_cli_chunk,
+)
 from latch_eval_tools.harness.utils import DEFAULT_DOCKER_IMAGE, load_data_instructions
 
 MODEL_MAP = {
@@ -71,4 +76,31 @@ def run_claudecode_task(
         " synchronously and poll until the job finishes before returning.",
         completion=completion,
         benchmark=benchmark,
+    )
+
+
+def run_claudecode_chunk(
+    container_name: str,
+    prompt: str,
+    work_dir: Path,
+    max_turns: int,
+    model_name: str | None = None,
+    system_prompt: str | None = None,
+    resume_identifier: str | None = None,
+    fork: bool = False,
+    timeout: int = EVAL_TIMEOUT,
+) -> CliChunkResult:
+    return _run_cli_chunk(
+        agent_type="claudecode",
+        cli_command=["claude"],
+        container_name=container_name,
+        prompt=prompt,
+        work_dir=work_dir,
+        max_turns=max_turns,
+        model_name=model_name,
+        model_map=MODEL_MAP,
+        system_prompt=system_prompt,
+        resume_identifier=resume_identifier,
+        fork=fork,
+        timeout=timeout,
     )

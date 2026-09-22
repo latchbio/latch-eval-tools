@@ -12,11 +12,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from importlib.resources import files
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from latch_eval_tools.harness.run_summary import (
     CliHarnessAgentType,
     build_cli_run_summary,
+    is_pi_aborted_turn,
 )
 from latch_eval_tools.harness.utils import (
     DEFAULT_DOCKER_IMAGE,
@@ -200,6 +201,17 @@ def _write_pi_openrouter_models_json(work_dir: Path, model_name: str) -> None:
     models_path.write_text(json.dumps(models_json, indent=2), encoding="utf-8")
 
 
+def _write_pi_extension(work_dir: Path, name: str) -> None:
+    extension_path = work_dir / AGENT_STATE_DIRS["pi"] / name
+    extension_path.parent.mkdir(parents=True, exist_ok=True)
+    extension_source = (
+        files("latch_eval_tools")
+        .joinpath("pi_extensions", name)
+        .read_text(encoding="utf-8")
+    )
+    extension_path.write_text(extension_source, encoding="utf-8")
+
+
 OOM_EXIT_CODE = 137
 MAX_OOM_RESTARTS = 10
 
@@ -245,6 +257,7 @@ AGENT_IDENTIFIER_KEYS = {
 }
 PI_IGNORED_EVENT_TYPES = {"message_update", "tool_execution_update"}
 PI_TOOL_TIMEOUT_EXTENSION_CONTAINER_PATH = "/root/.pi/tool_timeout.js"
+PI_MAX_TURNS_EXTENSION_CONTAINER_PATH = "/root/.pi/max_turns.js"
 PROVIDER_RETRYABLE_STATUS_CODES = frozenset(
     {408, 409, 425, 429, 500, 502, 503, 504, 520, 529}
 )
@@ -571,11 +584,15 @@ def _build_agent_command(
     resume_identifier: str | None = None,
     system_prompt: str | None = None,
     prompt_text: str | None = None,
+    max_turns: int = 0,
+    fork: bool = False,
 ) -> list[str]:
     if agent_type == "claudecode":
         agent_cmd = list(cli_command)
         if resume_identifier is not None:
             agent_cmd.extend(["--resume", resume_identifier])
+            if fork:
+                agent_cmd.append("--fork-session")
         agent_cmd.extend(
             [
                 "--print",
@@ -590,6 +607,8 @@ def _build_agent_command(
                 "summarized",
             ]
         )
+        if max_turns > 0:
+            agent_cmd.extend(["--max-turns", str(max_turns)])
         if claude_code_extra_args:
             agent_cmd.extend(claude_code_extra_args)
         if system_prompt not in (None, ""):
@@ -619,9 +638,18 @@ def _build_agent_command(
         agent_cmd = list(cli_command)
         agent_cmd.extend(["--mode", "json", "--print"])
         if resume_identifier is not None:
-            agent_cmd.extend(["--session", resume_identifier])
+            agent_cmd.extend(["--fork" if fork else "--session", resume_identifier])
         agent_cmd.extend(["--thinking", "max"])
         agent_cmd.extend(["--extension", PI_TOOL_TIMEOUT_EXTENSION_CONTAINER_PATH])
+        if max_turns > 0:
+            agent_cmd.extend(
+                [
+                    "--extension",
+                    PI_MAX_TURNS_EXTENSION_CONTAINER_PATH,
+                    "--max-turns",
+                    str(max_turns),
+                ]
+            )
         if system_prompt not in (None, ""):
             agent_cmd.extend(["--system-prompt", system_prompt])
     elif agent_type == "grokbuild":
@@ -929,14 +957,7 @@ def _run_cli_agent(
     ensure_docker_image(docker_image)
     agent_dir = get_agent_workspace_dir(work_dir)
     if agent_type == "pi":
-        extension_path = work_dir / AGENT_STATE_DIRS["pi"] / "tool_timeout.js"
-        extension_path.parent.mkdir(parents=True, exist_ok=True)
-        extension_source = (
-            files("latch_eval_tools")
-            .joinpath("pi_extensions", "tool_timeout.js")
-            .read_text(encoding="utf-8")
-        )
-        extension_path.write_text(extension_source, encoding="utf-8")
+        _write_pi_extension(work_dir, "tool_timeout.js")
     env_flags: list[str] = ["-e", "NODE_DISABLE_COMPILE_CACHE=1"]
     ENV_KEYS = {}
     if agent_type == "claudecode":
@@ -1548,6 +1569,133 @@ def _run_cli_agent(
     )
 
     return {"answer": agent_answer, "metadata": metadata}
+
+
+@dataclass(frozen=True)
+class CliChunkResult:
+    session_id: str
+    session_path: str
+    turns: int
+    hit_turn_limit: bool
+    events: list[dict[str, Any]]
+
+
+def _run_cli_chunk(
+    agent_type: Literal["claudecode", "pi"],
+    cli_command: list[str],
+    container_name: str,
+    prompt: str,
+    work_dir: Path,
+    max_turns: int,
+    model_name: str | None,
+    model_map: dict[str, str] | None,
+    system_prompt: str | None,
+    resume_identifier: str | None,
+    fork: bool,
+    timeout: int,
+) -> CliChunkResult:
+    if agent_type == "pi":
+        _write_pi_extension(work_dir, "tool_timeout.js")
+        _write_pi_extension(work_dir, "max_turns.js")
+    agent_cmd = _build_agent_command(
+        agent_type=agent_type,
+        cli_command=cli_command,
+        model_name=model_name,
+        model_map=model_map,
+        claude_code_extra_args=None,
+        resume_identifier=resume_identifier,
+        system_prompt=system_prompt,
+        max_turns=max_turns,
+        fork=fork,
+    )
+    events: list[dict[str, Any]] = []
+    trajectory_file = work_dir / "trajectory.json"
+    agent_log_file = work_dir / "agent_output.log"
+
+    with open(agent_log_file, "w") as log_file:
+        process = subprocess.Popen(
+            ["docker", "exec", "-i", container_name, *agent_cmd],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=log_file,
+            text=True,
+        )
+
+        def stream_stdout() -> None:
+            if process.stdout is None:
+                return
+            last_snapshot_at = time.monotonic()
+            for line in process.stdout:
+                event = _json_object(line)
+                if event is None or (
+                    agent_type == "pi" and event.get("type") in PI_IGNORED_EVENT_TYPES
+                ):
+                    continue
+                events.append(event)
+                if (
+                    time.monotonic() - last_snapshot_at
+                    >= TRAJECTORY_SNAPSHOT_INTERVAL_SECONDS
+                ):
+                    trajectory_file.write_text(json.dumps(events, indent=2))
+                    last_snapshot_at = time.monotonic()
+
+        stdout_thread = threading.Thread(target=stream_stdout, daemon=True)
+        stdout_thread.start()
+        if process.stdin is not None:
+            process.stdin.write(prompt)
+            process.stdin.close()
+        try:
+            returncode = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            raise
+        stdout_thread.join()
+    trajectory_file.write_text(json.dumps(events, indent=2))
+
+    if agent_type == "claudecode":
+        result = next(
+            (event for event in reversed(events) if event.get("type") == "result"),
+            {},
+        )
+        session_id = result.get("session_id")
+        hit_turn_limit = result.get("subtype") == "error_max_turns"
+        turns = len(
+            {
+                event["message"]["id"]
+                for event in events
+                if event.get("type") == "assistant"
+                and event.get("parent_tool_use_id") is None
+            }
+        )
+        session_file_pattern = f"{session_id}.jsonl"
+    else:
+        session_id = next(
+            (event.get("id") for event in events if event.get("type") == "session"),
+            None,
+        )
+        hit_turn_limit = any(is_pi_aborted_turn(event) for event in events)
+        turns = sum(
+            1
+            for event in events
+            if event.get("type") == "turn_end" and not is_pi_aborted_turn(event)
+        )
+        session_file_pattern = f"*_{session_id}.jsonl"
+    if not isinstance(session_id, str) or (returncode != 0 and not hit_turn_limit):
+        raise RuntimeError(
+            f"{agent_type} chunk exited with code {returncode}: "
+            f"{agent_log_file.read_text()[-1000:]}"
+        )
+
+    state_dir = work_dir / AGENT_STATE_DIRS[agent_type]
+    session_file = next(state_dir.rglob(session_file_pattern))
+    return CliChunkResult(
+        session_id=session_id,
+        session_path=f"/root/{state_dir.name}/{session_file.relative_to(state_dir)}",
+        turns=turns,
+        hit_turn_limit=hit_turn_limit,
+        events=events,
+    )
 
 
 _UUID_RE = re.compile(

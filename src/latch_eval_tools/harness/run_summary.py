@@ -413,6 +413,16 @@ def _pi_step_count(trajectory: list[dict[str, Any]]) -> int:
     return len(tool_call_ids) + anonymous_tool_calls
 
 
+def is_pi_aborted_turn(event: dict[str, Any]) -> bool:
+    message = _dict_value(event.get("message"))
+    return (
+        event.get("type") == "turn_end"
+        and message is not None
+        and message.get("stopReason") == "aborted"
+        and not message.get("content")
+    )
+
+
 def _pi_metrics(
     trajectory: list[dict[str, Any]],
     duration_seconds: float,
@@ -441,7 +451,11 @@ def _pi_metrics(
     return HarnessRunMetrics(
         duration_seconds=duration_seconds,
         turn_count=(
-            sum(1 for event in trajectory if event.get("type") == "turn_end")
+            sum(
+                1
+                for event in trajectory
+                if event.get("type") == "turn_end" and not is_pi_aborted_turn(event)
+            )
             if trajectory
             else None
         ),
