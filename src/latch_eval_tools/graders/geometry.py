@@ -1,20 +1,25 @@
+from __future__ import annotations
+
+import importlib
 import math
 from dataclasses import dataclass
+from typing import Any
 
-import mapbox_earcut
 import numpy as np
-from numpy.random.mtrand import f
-import trimesh
 from shapely.errors import GEOSException
 from shapely.geometry import Point, Polygon
 from shapely.validation import explain_validity
 
 from .number_contract import is_finite_number
 
+mapbox_earcut = importlib.import_module("mapbox_earcut")
+trimesh = importlib.import_module("trimesh")
+
 # some def constants, maybe change
 _VOL_PLAN_TOL = 1e-6
 _VOL_MIN_RING_STEP = 1e-6
 _VOL_SAMPLES_PER_RING = 64
+
 
 @dataclass
 class LFrame:
@@ -63,6 +68,22 @@ def normalize_coords(loc: object, err_label: str) -> list[float]:
     return normed
 
 
+def normalize_coords_list(locs: object, err_label: str) -> list[list[float]]:
+
+    if not isinstance(locs, list):
+        raise ValueError(f"{err_label} location list has to be a list")
+
+    normed_cords: list[list[float]] = []
+
+    for i, v in enumerate(locs):
+        cname = f"{err_label}[{i}]"
+        cor = normalize_coords(v, cname)
+
+        normed_cords.append(cor)
+
+    return normed_cords
+
+
 def normalize_polygon_coords(polygon: object, err_label: str) -> Polygon:
 
     if not isinstance(polygon, list):
@@ -106,10 +127,17 @@ def normalize_polygon_coords(polygon: object, err_label: str) -> Polygon:
     return result
 
 
-def iou_polygon_to_polygon(ref_polygon: object, sub_polygon: object) -> float:
-    ref_p = normalize_polygon_coords(ref_polygon, "reference polygon")
-    sub_p = normalize_polygon_coords(sub_polygon, "submitted polygon")
+def normalize_polygon_list(polygons: object, err_label: str) -> list[Polygon]:
+    if not isinstance(polygons, list):
+        raise ValueError(f"{err_label} must be a list of polygons")
 
+    return [
+        normalize_polygon_coords(polygon, f"{err_label}[{index}]")
+        for index, polygon in enumerate(polygons)
+    ]
+
+
+def _polygon_iou(ref_p: Polygon, sub_p: Polygon) -> float:
     try:
         interse_ar = ref_p.intersection(sub_p).area
     except GEOSException as exc:
@@ -125,6 +153,13 @@ def iou_polygon_to_polygon(ref_polygon: object, sub_polygon: object) -> float:
 
     iou = interse_ar / union_area
     return min(1.0, max(0.0, iou))
+
+
+def iou_polygon_to_polygon(ref_polygon: object, sub_polygon: object) -> float:
+    ref_p = normalize_polygon_coords(ref_polygon, "reference polygon")
+    sub_p = normalize_polygon_coords(sub_polygon, "submitted polygon")
+    return _polygon_iou(ref_p, sub_p)
+
 
 # --------------------------------- VOLUMETRIC STUFF \/ \/ \/
 
@@ -147,12 +182,14 @@ def normalize_volume_coords(vol: object, err_label: str):
             raise ValueError(f"{ring_label} is not a polygon, ie list of vectors")
 
         if len(r) < 3:
-            raise ValueError(f"{ring_label} each ring polygon needs to have at least 3 vectors")
+            raise ValueError(
+                f"{ring_label} each ring polygon needs to have at least 3 vectors"
+            )
 
         normed_ring: list[list[float]] = []
 
         for vi, v in enumerate(r):
-            v_label = f"{ring_label}[{ri}]"
+            v_label = f"{ring_label}[{vi}]"
 
             point = normalize_coords(v, v_label)
 
@@ -177,7 +214,9 @@ def normalize_volume_coords(vol: object, err_label: str):
     centered_first_ring = first_ring - first_centroid
 
     try:
-        _, singular_vals, right_vecs = np.linalg.svd(centered_first_ring, full_matrices=False)
+        _, singular_vals, right_vecs = np.linalg.svd(
+            centered_first_ring, full_matrices=False
+        )
     except np.linalg.LinAlgError as exc:
         raise ValueError(f"{err_label} could not build loft axis!, err {exc}") from None
 
@@ -187,20 +226,32 @@ def normalize_volume_coords(vol: object, err_label: str):
     loft_axis = right_vecs[-1]
 
     last_centroid = np.mean(open_rings[-1], axis=0)
-    total_progress = float(np.dot(last_centroid - first_centroid, loft_axis))
+    try:
+        total_progress = float(np.dot(last_centroid - first_centroid, loft_axis))
+    except (TypeError, ValueError):
+        raise ValueError(f"{err_label} loft progress could not be computed") from None
 
     if not math.isfinite(total_progress) or total_progress == 0:
-        raise ValueError(f"{err_label} fors not progress away from the plane defined by the first ring!!!!!")
+        raise ValueError(
+            f"{err_label} fors not progress away from the plane defined by the first ring!!!!!"
+        )
 
     if total_progress < 0:
         loft_axis = -loft_axis
 
-    frame = build_lframe(axis = loft_axis.tolist(), origin=first_centroid.tolist())
+    frame = build_lframe(axis=loft_axis.tolist(), origin=first_centroid.tolist())
 
     try:
-        prepped_rings = prep_loft(normed_rings, frame=frame, plan_tol=_VOL_PLAN_TOL, min_ring_sep=_VOL_MIN_RING_STEP)
+        prepped_rings = prep_loft(
+            normed_rings,
+            frame=frame,
+            plan_tol=_VOL_PLAN_TOL,
+            min_ring_sep=_VOL_MIN_RING_STEP,
+        )
 
-        return build_loft_mesh(prepped_rings, frame=frame, smpls_per_ring=_VOL_SAMPLES_PER_RING)
+        return build_loft_mesh(
+            prepped_rings, frame=frame, smpls_per_ring=_VOL_SAMPLES_PER_RING
+        )
     except ValueError as exc:
         raise ValueError(f"{err_label} is invalid because of > {exc}") from None
 
@@ -440,7 +491,7 @@ def triang_cap(vertices_2d: np.ndarray) -> np.ndarray:
 
 def build_loft_mesh(
     prepped_rings: list[PreppedRing], *, frame: LFrame, smpls_per_ring: int
-) -> trimesh.Trimesh:
+) -> Any:
     if len(prepped_rings) < 2:
         raise ValueError("at least two rings are required")
 
@@ -505,7 +556,7 @@ def build_loft_mesh(
     return mesh
 
 
-def volume_iou(reference: trimesh.Trimesh, submitted: trimesh.Trimesh) -> float:
+def volume_iou(reference: Any, submitted: Any) -> float:
     intersection = trimesh.boolean.intersection(
         [reference, submitted], engine="manifold", check_volume=True
     )
@@ -645,8 +696,12 @@ def volume_in_volume_match(
     else:
         return 0.0
 
+
 def volume_in_volume_gradient(
-    reference_volume: object, submitted_volume: object, threshold_full: float, threshold_null
+    reference_volume: object,
+    submitted_volume: object,
+    threshold_full: float,
+    threshold_null,
 ) -> float:
 
     ref_v = normalize_volume_coords(reference_volume, "reference volume")
@@ -660,3 +715,135 @@ def volume_in_volume_gradient(
         return 0.0
 
     return (iou3d - threshold_null) / (threshold_full - threshold_null)
+
+
+def locations_list_to_locations_list_match(
+    reference_locations: object,
+    submitted_locations: object,
+    radius: float,
+) -> dict[str, object]:
+    if not is_finite_number(radius) or radius < 0:
+        raise ValueError("radius must be a finite non-negative number")
+
+    reference_locs = normalize_coords_list(
+        reference_locations,
+        "reference locations",
+    )
+    submitted_locs = normalize_coords_list(
+        submitted_locations,
+        "submitted locations",
+    )
+
+    if not reference_locs:
+        raise ValueError("reference locations must not be empty")
+
+    matched_reference_indices: set[int] = set()
+    matched_submitted_indices: set[int] = set()
+    matches: list[dict[str, object]] = []
+
+    for submitted_index, submitted in enumerate(submitted_locs):
+        for reference_index, reference in enumerate(reference_locs):
+            if reference_index in matched_reference_indices:
+                continue
+
+            distance = math.dist(submitted, reference)
+
+            if distance <= radius:
+                matched_reference_indices.add(reference_index)
+                matched_submitted_indices.add(submitted_index)
+                matches.append(
+                    {
+                        "reference_index": reference_index,
+                        "submitted_index": submitted_index,
+                        "distance": distance,
+                    }
+                )
+                break
+
+    reference_count = len(reference_locs)
+    submitted_count = len(submitted_locs)
+    matched_count = len(matches)
+
+    recall = matched_count / reference_count
+    precision = matched_count / submitted_count if submitted_count > 0 else 0.0
+    f1 = (
+        2 * precision * recall / (precision + recall) if precision + recall > 0 else 0.0
+    )
+
+    return {
+        "reference_count": reference_count,
+        "submitted_count": submitted_count,
+        "matched_count": matched_count,
+        "recall": recall,
+        "precision": precision,
+        "f1": f1,
+        "matches": matches,
+        "unmatched_reference_indices": sorted(
+            set(range(reference_count)) - matched_reference_indices
+        ),
+        "unmatched_submitted_indices": sorted(
+            set(range(submitted_count)) - matched_submitted_indices
+        ),
+        "tolerance_radius": radius,
+    }
+
+
+def polygons_list_to_polygons_list_match(
+    reference_polygons: object,
+    submitted_polygons: object,
+    iou_threshold: float,
+) -> dict[str, object]:
+    if not is_finite_number(iou_threshold) or not 0 <= iou_threshold <= 1:
+        raise ValueError("iou_threshold must be a finite number in [0, 1]")
+
+    references = normalize_polygon_list(reference_polygons, "reference polygons")
+    submissions = normalize_polygon_list(submitted_polygons, "submitted polygons")
+
+    if not references:
+        raise ValueError("reference polygons must not be empty")
+
+    matched_reference_indices: set[int] = set()
+    matched_submitted_indices: set[int] = set()
+    matches: list[dict[str, object]] = []
+
+    for submitted_index, submitted in enumerate(submissions):
+        for reference_index, reference in enumerate(references):
+            if reference_index in matched_reference_indices:
+                continue
+
+            iou = _polygon_iou(reference, submitted)
+            if iou >= iou_threshold:
+                matched_reference_indices.add(reference_index)
+                matched_submitted_indices.add(submitted_index)
+                matches.append(
+                    {
+                        "reference_index": reference_index,
+                        "submitted_index": submitted_index,
+                        "iou": iou,
+                    }
+                )
+                break
+
+    reference_count = len(references)
+    submitted_count = len(submissions)
+    matched_count = len(matches)
+    recall = matched_count / reference_count
+    precision = matched_count / submitted_count if submitted_count else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+
+    return {
+        "reference_count": reference_count,
+        "submitted_count": submitted_count,
+        "matched_count": matched_count,
+        "recall": recall,
+        "precision": precision,
+        "f1": f1,
+        "matches": matches,
+        "unmatched_reference_indices": sorted(
+            set(range(reference_count)) - matched_reference_indices
+        ),
+        "unmatched_submitted_indices": sorted(
+            set(range(submitted_count)) - matched_submitted_indices
+        ),
+        "iou_threshold": iou_threshold,
+    }
