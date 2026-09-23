@@ -2,8 +2,17 @@ import json
 import os
 from pathlib import Path
 
-from latch_eval_tools.harness._cli_runner import EVAL_TIMEOUT, _run_cli_agent
-from latch_eval_tools.harness.utils import DEFAULT_DOCKER_IMAGE, load_data_instructions
+from latch_eval_tools.harness._cli_runner import (
+    EVAL_TIMEOUT,
+    CliChunkResult,
+    _run_cli_agent,
+    _run_cli_chunk,
+)
+from latch_eval_tools.harness.utils import (
+    DEFAULT_DOCKER_IMAGE,
+    load_data_instructions,
+    prompt_with_suffix,
+)
 
 MODEL_MAP = {
     "anthropic/claude-opus-4-6": "claude-opus-4-6",
@@ -17,6 +26,12 @@ MODEL_MAP = {
     "anthropic/claude-fable-5": "claude-fable-5",
     "anthropic/claude-melon-lp-eap": "claude-melon-lp-eap",
 }
+BACKGROUND_PROCESS_NOTE = (
+    "\n\nNote: Do not end your turn while a background process is still"
+    " running. Nothing will alert you it is done. Ending your turn may"
+    " complete the session and kill the process; instead, block"
+    " synchronously and poll until the job finishes before returning."
+)
 
 
 def _switch_models_on_flag_args(value: bool | None) -> list[str] | None:
@@ -65,12 +80,41 @@ def run_claudecode_task(
         docker_image=docker_image,
         memory_limit_bytes=memory_limit_bytes,
         system_prompt=system_prompt,
-        prompt_suffix=prompt_suffix
-        + "\n\nNote: Do not end your turn while a background process is still"
-        " running. Nothing will alert you it is done. Ending your turn may"
-        " complete the session and kill the process; instead, block"
-        " synchronously and poll until the job finishes before returning.",
+        prompt_suffix=prompt_suffix + BACKGROUND_PROCESS_NOTE,
         completion=completion,
         benchmark=benchmark,
         completion_file_path=completion_file_path,
+    )
+
+
+def run_claudecode_chunk(
+    container_name: str,
+    prompt: str,
+    work_dir: Path,
+    max_turns: int,
+    model_name: str | None = None,
+    system_prompt: str | None = None,
+    resume_identifier: str | None = None,
+    fork: bool = False,
+    timeout: int = EVAL_TIMEOUT,
+    switch_models_on_flag: bool | None = None,
+) -> CliChunkResult:
+    return _run_cli_chunk(
+        agent_type="claudecode",
+        cli_command=["env", "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1", "claude"],
+        container_name=container_name,
+        prompt=(
+            prompt
+            if resume_identifier is not None
+            else prompt_with_suffix(prompt, BACKGROUND_PROCESS_NOTE)
+        ),
+        work_dir=work_dir,
+        max_turns=max_turns,
+        model_name=model_name,
+        model_map=MODEL_MAP,
+        claude_code_extra_args=_switch_models_on_flag_args(switch_models_on_flag),
+        system_prompt=system_prompt,
+        resume_identifier=resume_identifier,
+        fork=fork,
+        timeout=timeout,
     )

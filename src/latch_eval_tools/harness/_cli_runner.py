@@ -200,6 +200,17 @@ def _write_pi_openrouter_models_json(work_dir: Path, model_name: str) -> None:
     models_path.write_text(json.dumps(models_json, indent=2), encoding="utf-8")
 
 
+def _write_pi_extension(work_dir: Path, name: str) -> None:
+    extension_path = work_dir / AGENT_STATE_DIRS["pi"] / name
+    extension_path.parent.mkdir(parents=True, exist_ok=True)
+    extension_source = (
+        files("latch_eval_tools")
+        .joinpath("pi_extensions", name)
+        .read_text(encoding="utf-8")
+    )
+    extension_path.write_text(extension_source, encoding="utf-8")
+
+
 OOM_EXIT_CODE = 137
 MAX_OOM_RESTARTS = 10
 
@@ -245,6 +256,7 @@ AGENT_IDENTIFIER_KEYS = {
 }
 PI_IGNORED_EVENT_TYPES = {"message_update", "tool_execution_update"}
 PI_TOOL_TIMEOUT_EXTENSION_CONTAINER_PATH = "/root/.pi/tool_timeout.js"
+PI_MAX_TURNS_EXTENSION_CONTAINER_PATH = "/root/.pi/max_turns.js"
 PROVIDER_RETRYABLE_STATUS_CODES = frozenset(
     {408, 409, 425, 429, 500, 502, 503, 504, 520, 529}
 )
@@ -571,11 +583,15 @@ def _build_agent_command(
     resume_identifier: str | None = None,
     system_prompt: str | None = None,
     prompt_text: str | None = None,
+    max_turns: int = 0,
+    fork: bool = False,
 ) -> list[str]:
     if agent_type == "claudecode":
         agent_cmd = list(cli_command)
         if resume_identifier is not None:
             agent_cmd.extend(["--resume", resume_identifier])
+            if fork:
+                agent_cmd.append("--fork-session")
         agent_cmd.extend(
             [
                 "--print",
@@ -590,6 +606,8 @@ def _build_agent_command(
                 "summarized",
             ]
         )
+        if max_turns > 0:
+            agent_cmd.extend(["--max-turns", str(max_turns)])
         if claude_code_extra_args:
             agent_cmd.extend(claude_code_extra_args)
         if system_prompt not in (None, ""):
@@ -619,9 +637,18 @@ def _build_agent_command(
         agent_cmd = list(cli_command)
         agent_cmd.extend(["--mode", "json", "--print"])
         if resume_identifier is not None:
-            agent_cmd.extend(["--session", resume_identifier])
+            agent_cmd.extend(["--fork" if fork else "--session", resume_identifier])
         agent_cmd.extend(["--thinking", "max"])
         agent_cmd.extend(["--extension", PI_TOOL_TIMEOUT_EXTENSION_CONTAINER_PATH])
+        if max_turns > 0:
+            agent_cmd.extend(
+                [
+                    "--extension",
+                    PI_MAX_TURNS_EXTENSION_CONTAINER_PATH,
+                    "--max-turns",
+                    str(max_turns),
+                ]
+            )
         if system_prompt not in (None, ""):
             agent_cmd.extend(["--system-prompt", system_prompt])
     elif agent_type == "grokbuild":
@@ -656,6 +683,59 @@ def _build_agent_command(
     if agent_type == "openaicodex" and resume_identifier is not None:
         agent_cmd.append(resume_identifier)
     return agent_cmd
+
+
+def cli_container_env_flags(
+    agent_type: CliHarnessAgentType,
+    env: dict[str, str],
+    *,
+    eval_timeout: int,
+    operation_timeout: int,
+) -> list[str]:
+    env_flags: list[str] = ["-e", "NODE_DISABLE_COMPILE_CACHE=1"]
+    ENV_KEYS = {}
+    if agent_type == "claudecode":
+        ENV_KEYS = ANTHROPIC_ENV_KEYS
+    elif agent_type == "openaicodex":
+        ENV_KEYS = OPENAI_ENV_KEYS
+    elif agent_type == "pi":
+        ENV_KEYS = PI_ENV_KEYS
+    elif agent_type == "grokbuild":
+        ENV_KEYS = GROK_ENV_KEYS
+    else:
+        raise ValueError(f"Unknown agent type: {agent_type}")
+    extra_env_keys = set(json.loads(env.get("EXTRA_ENV_KEYS") or "[]"))
+    ENV_KEYS = ENV_KEYS | extra_env_keys
+    for key in ENV_KEYS:
+        value = env.get(key)
+        if value:
+            env_flags.extend(["-e", f"{key}={value}"])
+    if agent_type == "claudecode":
+        bash_timeout_ms = eval_timeout * 1000
+        env_flags.extend(
+            [
+                "-e",
+                f"BASH_DEFAULT_TIMEOUT_MS={bash_timeout_ms}",
+                "-e",
+                f"BASH_MAX_TIMEOUT_MS={bash_timeout_ms}",
+            ]
+        )
+    if agent_type == "pi":
+        env_flags.extend(
+            [
+                "-e",
+                "PI_SKIP_VERSION_CHECK=1",
+                "-e",
+                "PI_TELEMETRY=0",
+                "-e",
+                "NODE_OPTIONS=--max-old-space-size=8192",
+            ]
+        )
+        if operation_timeout > 0:
+            env_flags.extend(
+                ["-e", f"PI_BASH_DEFAULT_TIMEOUT_SECONDS={operation_timeout}"]
+            )
+    return env_flags
 
 
 def _create_cli_container(
@@ -935,57 +1015,13 @@ def _run_cli_agent(
         else None
     )
     if agent_type == "pi":
-        extension_path = work_dir / AGENT_STATE_DIRS["pi"] / "tool_timeout.js"
-        extension_path.parent.mkdir(parents=True, exist_ok=True)
-        extension_source = (
-            files("latch_eval_tools")
-            .joinpath("pi_extensions", "tool_timeout.js")
-            .read_text(encoding="utf-8")
-        )
-        extension_path.write_text(extension_source, encoding="utf-8")
-    env_flags: list[str] = ["-e", "NODE_DISABLE_COMPILE_CACHE=1"]
-    ENV_KEYS = {}
-    if agent_type == "claudecode":
-        ENV_KEYS = ANTHROPIC_ENV_KEYS
-    elif agent_type == "openaicodex":
-        ENV_KEYS = OPENAI_ENV_KEYS
-    elif agent_type == "pi":
-        ENV_KEYS = PI_ENV_KEYS
-    elif agent_type == "grokbuild":
-        ENV_KEYS = GROK_ENV_KEYS
-    else:
-        raise ValueError(f"Unknown agent type: {agent_type}")
-    extra_env_keys = set(json.loads(env.get("EXTRA_ENV_KEYS") or "[]"))
-    ENV_KEYS = ENV_KEYS | extra_env_keys
-    for key in ENV_KEYS:
-        value = env.get(key)
-        if value:
-            env_flags.extend(["-e", f"{key}={value}"])
-    if agent_type == "claudecode":
-        bash_timeout_ms = eval_timeout * 1000
-        env_flags.extend(
-            [
-                "-e",
-                f"BASH_DEFAULT_TIMEOUT_MS={bash_timeout_ms}",
-                "-e",
-                f"BASH_MAX_TIMEOUT_MS={bash_timeout_ms}",
-            ]
-        )
-    if agent_type == "pi":
-        env_flags.extend(
-            [
-                "-e",
-                "PI_SKIP_VERSION_CHECK=1",
-                "-e",
-                "PI_TELEMETRY=0",
-                "-e",
-                "NODE_OPTIONS=--max-old-space-size=8192",
-            ]
-        )
-        if operation_timeout > 0:
-            env_flags.extend(
-                ["-e", f"PI_BASH_DEFAULT_TIMEOUT_SECONDS={operation_timeout}"]
-            )
+        _write_pi_extension(work_dir, "tool_timeout.js")
+    env_flags = cli_container_env_flags(
+        agent_type,
+        env,
+        eval_timeout=eval_timeout,
+        operation_timeout=operation_timeout,
+    )
     if memory_limit_bytes is None:
         memory_limit_bytes = get_memory_limit_bytes()
     container_name = f"eval-{agent_type}-{uuid.uuid4().hex[:8]}"
@@ -1590,6 +1626,148 @@ def _run_cli_agent(
     )
 
     return {"answer": agent_answer, "metadata": metadata}
+
+
+@dataclass(frozen=True)
+class CliChunkResult:
+    session_id: str
+    session_file: Path
+    turns: int
+    hit_turn_limit: bool
+
+
+def _run_cli_chunk(
+    agent_type: CliHarnessAgentType,
+    cli_command: list[str],
+    container_name: str,
+    prompt: str,
+    work_dir: Path,
+    max_turns: int,
+    model_name: str | None,
+    system_prompt: str | None,
+    resume_identifier: str | None,
+    fork: bool,
+    timeout: int,
+    model_map: dict[str, str] | None = None,
+    claude_code_extra_args: list[str] | None = None,
+) -> CliChunkResult:
+    if agent_type == "pi":
+        _write_pi_extension(work_dir, "tool_timeout.js")
+        _write_pi_extension(work_dir, "max_turns.js")
+        if model_name and model_name.startswith("openrouter/"):
+            _write_pi_openrouter_models_json(work_dir, model_name)
+    agent_cmd = _build_agent_command(
+        agent_type=agent_type,
+        cli_command=cli_command,
+        model_name=model_name,
+        model_map=model_map,
+        claude_code_extra_args=claude_code_extra_args,
+        resume_identifier=resume_identifier,
+        system_prompt=system_prompt,
+        max_turns=max_turns,
+        fork=fork,
+    )
+    events: list[dict[str, Any]] = []
+    trajectory_file = work_dir / "trajectory.json"
+    agent_log_file = work_dir / "agent_output.log"
+
+    with open(agent_log_file, "w") as log_file:
+        process = subprocess.Popen(
+            ["docker", "exec", "-i", container_name, *agent_cmd],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=log_file,
+            text=True,
+        )
+
+        def stream_stdout() -> None:
+            if process.stdout is None:
+                return
+            last_snapshot_at = time.monotonic()
+            for line in process.stdout:
+                event = _json_object(line)
+                if event is None or (
+                    agent_type == "pi" and event.get("type") in PI_IGNORED_EVENT_TYPES
+                ):
+                    continue
+                events.append(event)
+                if (
+                    time.monotonic() - last_snapshot_at
+                    >= TRAJECTORY_SNAPSHOT_INTERVAL_SECONDS
+                ):
+                    trajectory_file.write_text(json.dumps(events, indent=2))
+                    last_snapshot_at = time.monotonic()
+
+        stdout_thread = threading.Thread(target=stream_stdout, daemon=True)
+        stdout_thread.start()
+        if process.stdin is not None:
+            process.stdin.write(prompt)
+            process.stdin.close()
+        try:
+            returncode = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            subprocess.run(
+                ["docker", "exec", container_name, "sh", "-c", "kill -9 -1"],
+                capture_output=True,
+            )
+            raise RuntimeError(f"{agent_type} chunk timed out after {timeout}s")
+        stdout_thread.join()
+    trajectory_file.write_text(json.dumps(events, indent=2))
+
+    if agent_type == "claudecode":
+        result = next(
+            (event for event in reversed(events) if event.get("type") == "result"),
+            {},
+        )
+        hit_turn_limit = result.get("subtype") == "error_max_turns"
+        failed = returncode != 0 and not hit_turn_limit
+        detail = result.get("result", "")
+        turns = len(
+            {
+                event["message"]["id"]
+                for event in events
+                if event.get("type") == "assistant"
+                and event.get("parent_tool_use_id") is None
+            }
+        )
+    else:
+        last_turn = next(
+            (
+                event["message"]
+                for event in reversed(events)
+                if event.get("type") == "turn_end"
+            ),
+            {},
+        )
+        hit_turn_limit = last_turn.get("stopReason") in ("aborted", "length")
+        failed = returncode != 0 or last_turn.get("stopReason") == "error"
+        detail = last_turn.get("errorMessage", "")
+        turns = sum(
+            1
+            for event in events
+            if event.get("type") == "turn_end"
+            and event["message"]["stopReason"] not in ("error", "aborted")
+        )
+    if failed:
+        raise RuntimeError(
+            f"{agent_type} chunk failed with exit code {returncode}: {detail}\n"
+            f"{agent_log_file.read_text()[-1000:]}"
+        )
+
+    identifier_key = AGENT_IDENTIFIER_KEYS[agent_type]
+    session_id = next(
+        event[identifier_key] for event in reversed(events) if event.get(identifier_key)
+    )
+    return CliChunkResult(
+        session_id=session_id,
+        session_file=next(
+            (work_dir / AGENT_STATE_DIRS[agent_type]).rglob(f"*{session_id}.jsonl")
+        ),
+        turns=turns,
+        hit_turn_limit=hit_turn_limit,
+    )
 
 
 _UUID_RE = re.compile(
