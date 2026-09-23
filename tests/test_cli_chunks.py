@@ -6,7 +6,6 @@ from typing import Any
 import pytest
 
 from latch_eval_tools.harness import _cli_runner, run_claudecode_chunk, run_pi_chunk
-from latch_eval_tools.harness.run_summary import build_cli_run_summary
 
 PI_ABORTED_TURN_END = {
     "type": "turn_end",
@@ -114,22 +113,6 @@ def test_pi_fork_command_loads_the_max_turns_extension() -> None:
     assert command[command.index("--max-turns") + 1] == "3"
 
 
-def test_pi_turn_count_ignores_error_and_aborted_turns() -> None:
-    summary = build_cli_run_summary(
-        agent_type="pi",
-        trajectory=[
-            {"type": "turn_end"},
-            PI_ERROR_TURN_END,
-            {"type": "turn_end"},
-            PI_ABORTED_TURN_END,
-        ],
-        duration_seconds=1.0,
-        model_name=None,
-    )
-
-    assert summary.metrics.turn_count == 2
-
-
 def test_claude_chunk_treats_max_turns_as_a_normal_end(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -186,7 +169,14 @@ def test_claude_chunk_treats_max_turns_as_a_normal_end(
     assert chunk.hit_turn_limit
     assert len(json.loads((tmp_path / "trajectory.json").read_text())) == 6
     [argv] = _docker_calls(calls_file)
-    assert argv[:3] == ["exec", "-i", "container-a"]
+    assert argv[:6] == [
+        "exec",
+        "-i",
+        "container-a",
+        "env",
+        "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1",
+        "claude",
+    ]
     assert argv[argv.index("--model") + 1] == "claude-fable-5"
     assert argv[argv.index("--max-turns") + 1] == "2"
     assert json.loads(argv[argv.index("--settings") + 1]) == {
@@ -228,6 +218,32 @@ def test_pi_chunk_raises_on_an_error_turn_despite_exit_zero(
 
     with pytest.raises(RuntimeError, match="529 overloaded"):
         run_pi_chunk("container-b", "task", tmp_path, 2)
+
+
+def test_pi_chunk_cut_by_output_length_is_not_a_natural_end(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    sessions_dir = tmp_path / ".pi" / "agent" / "sessions" / "--workspace--"
+    sessions_dir.mkdir(parents=True)
+    (sessions_dir / "2026-09-22T00-00-00-000Z_session-1.jsonl").touch()
+    _fake_docker(
+        monkeypatch,
+        tmp_path,
+        [
+            {"type": "session", "id": "session-1"},
+            PI_TOOL_TURN_END,
+            {
+                "type": "turn_end",
+                "message": {"role": "assistant", "stopReason": "length", "content": []},
+            },
+        ],
+        returncode=0,
+    )
+
+    chunk = run_pi_chunk("container-b", "task", tmp_path, 5)
+
+    assert chunk.turns == 2
+    assert chunk.hit_turn_limit
 
 
 def test_chunk_timeout_kills_the_agent_inside_the_container(

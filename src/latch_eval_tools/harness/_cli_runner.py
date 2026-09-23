@@ -1757,7 +1757,9 @@ def _run_cli_chunk(
         session_id = next(
             event["id"] for event in events if event.get("type") == "session"
         )
-        hit_turn_limit = any(is_pi_aborted_turn(event) for event in events)
+        hit_turn_limit = any(
+            is_pi_aborted_turn(event) for event in events
+        ) or _pi_clean_exit_needs_resume(events)
         turns = pi_turn_count(events)
         session_file_pattern = f"*_{session_id}.jsonl"
 

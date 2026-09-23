@@ -101,7 +101,7 @@ def run_claudecode_chunk(
 ) -> CliChunkResult:
     return _run_cli_chunk(
         agent_type="claudecode",
-        cli_command=["claude"],
+        cli_command=["env", "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1", "claude"],
         container_name=container_name,
         prompt=(
             prompt

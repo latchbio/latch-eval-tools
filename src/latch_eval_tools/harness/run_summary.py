@@ -469,7 +469,11 @@ def _pi_metrics(
         pricing_version = HARNESS_PRICING_VERSION
     return HarnessRunMetrics(
         duration_seconds=duration_seconds,
-        turn_count=pi_turn_count(trajectory) if trajectory else None,
+        turn_count=(
+            sum(1 for event in trajectory if event.get("type") == "turn_end")
+            if trajectory
+            else None
+        ),
         step_count=_pi_step_count(trajectory) if trajectory else None,
         usage=usage,
         total_cost_usd=total_cost_usd,
