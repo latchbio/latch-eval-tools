@@ -1,3 +1,4 @@
+from latch_eval_tools.harness._cli_runner import CliChunkResult
 from latch_eval_tools.harness.claude_model_routing import (
     ClaudeModelRouting,
     ClaudeModelUsage,
@@ -5,11 +6,14 @@ from latch_eval_tools.harness.claude_model_routing import (
     load_claude_model_routing,
     parse_claude_model_routing,
 )
-from latch_eval_tools.harness.claudecode import run_claudecode_task
+from latch_eval_tools.harness.claudecode import (
+    run_claudecode_chunk,
+    run_claudecode_task,
+)
 from latch_eval_tools.harness.grokbuild import run_grokbuild_task
 from latch_eval_tools.harness.minisweagent import run_minisweagent_task
 from latch_eval_tools.harness.openaicodex import run_openaicodex_task
-from latch_eval_tools.harness.pi import run_pi_task
+from latch_eval_tools.harness.pi import run_pi_chunk, run_pi_task
 from latch_eval_tools.harness.plotsagent import run_plotsagent_task
 from latch_eval_tools.harness.run_summary import (
     HarnessRefusalAssessment,
@@ -34,6 +38,7 @@ __all__ = [
     "ClaudeModelRouting",
     "ClaudeModelUsage",
     "ClaudeSafetyFallback",
+    "CliChunkResult",
     "EvalRunner",
     "HarnessRefusalAssessment",
     "HarnessRunMetrics",
@@ -49,10 +54,12 @@ __all__ = [
     "load_claude_model_routing",
     "load_trajectory_identifier",
     "parse_claude_model_routing",
+    "run_claudecode_chunk",
     "run_claudecode_task",
     "run_grokbuild_task",
     "run_minisweagent_task",
     "run_openaicodex_task",
+    "run_pi_chunk",
     "run_pi_task",
     "run_plotsagent_task",
     "setup_workspace",

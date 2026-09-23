@@ -1,6 +1,11 @@
 from pathlib import Path
 
-from latch_eval_tools.harness._cli_runner import _run_cli_agent, EVAL_TIMEOUT
+from latch_eval_tools.harness._cli_runner import (
+    EVAL_TIMEOUT,
+    CliChunkResult,
+    _run_cli_agent,
+    _run_cli_chunk,
+)
 from latch_eval_tools.harness.utils import DEFAULT_DOCKER_IMAGE, load_data_instructions
 
 
@@ -40,4 +45,30 @@ def run_pi_task(
         benchmark=benchmark,
         operation_timeout=operation_timeout,
         completion_file_path=completion_file_path,
+    )
+
+
+def run_pi_chunk(
+    container_name: str,
+    prompt: str,
+    work_dir: Path,
+    max_turns: int,
+    model_name: str | None = None,
+    system_prompt: str | None = None,
+    resume_identifier: str | None = None,
+    fork: bool = False,
+    timeout: int = EVAL_TIMEOUT,
+) -> CliChunkResult:
+    return _run_cli_chunk(
+        agent_type="pi",
+        cli_command=["pi"],
+        container_name=container_name,
+        prompt=prompt,
+        work_dir=work_dir,
+        max_turns=max_turns,
+        model_name=_map_model_name(model_name),
+        system_prompt=system_prompt,
+        resume_identifier=resume_identifier,
+        fork=fork,
+        timeout=timeout,
     )
