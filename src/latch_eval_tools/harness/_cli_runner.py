@@ -12,14 +12,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from importlib.resources import files
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from latch_eval_tools.harness.run_summary import (
     CliHarnessAgentType,
     build_cli_run_summary,
-    is_pi_aborted_turn,
-    is_pi_error_turn,
-    pi_turn_count,
 )
 from latch_eval_tools.harness.utils import (
     DEFAULT_DOCKER_IMAGE,
@@ -1634,25 +1631,25 @@ def _run_cli_agent(
 @dataclass(frozen=True)
 class CliChunkResult:
     session_id: str
-    session_path: str
+    session_file: Path
     turns: int
     hit_turn_limit: bool
 
 
 def _run_cli_chunk(
-    agent_type: Literal["claudecode", "pi"],
+    agent_type: CliHarnessAgentType,
     cli_command: list[str],
     container_name: str,
     prompt: str,
     work_dir: Path,
     max_turns: int,
     model_name: str | None,
-    model_map: dict[str, str] | None,
-    claude_code_extra_args: list[str] | None,
     system_prompt: str | None,
     resume_identifier: str | None,
     fork: bool,
     timeout: int,
+    model_map: dict[str, str] | None = None,
+    claude_code_extra_args: list[str] | None = None,
 ) -> CliChunkResult:
     if agent_type == "pi":
         _write_pi_extension(work_dir, "tool_timeout.js")
@@ -1714,11 +1711,8 @@ def _run_cli_chunk(
             subprocess.run(
                 ["docker", "exec", container_name, "sh", "-c", "kill -9 -1"],
                 capture_output=True,
-                check=False,
             )
-            raise RuntimeError(
-                f"{agent_type} chunk timed out after {timeout}s"
-            ) from None
+            raise RuntimeError(f"{agent_type} chunk timed out after {timeout}s")
         stdout_thread.join()
     trajectory_file.write_text(json.dumps(events, indent=2))
 
@@ -1728,12 +1722,8 @@ def _run_cli_chunk(
             {},
         )
         hit_turn_limit = result.get("subtype") == "error_max_turns"
-        if returncode != 0 and not hit_turn_limit:
-            raise RuntimeError(
-                f"claudecode chunk failed with exit code {returncode}: "
-                f"{result.get('result', '')}\n{agent_log_file.read_text()[-1000:]}"
-            )
-        session_id = result["session_id"]
+        failed = returncode != 0 and not hit_turn_limit
+        detail = result.get("result", "")
         turns = len(
             {
                 event["message"]["id"]
@@ -1742,32 +1732,39 @@ def _run_cli_chunk(
                 and event.get("parent_tool_use_id") is None
             }
         )
-        session_file_pattern = f"{session_id}.jsonl"
     else:
         last_turn = next(
-            (event for event in reversed(events) if event.get("type") == "turn_end"),
+            (
+                event["message"]
+                for event in reversed(events)
+                if event.get("type") == "turn_end"
+            ),
             {},
         )
-        if returncode != 0 or is_pi_error_turn(last_turn):
-            raise RuntimeError(
-                f"pi chunk failed with exit code {returncode}: "
-                f"{last_turn.get('message', {}).get('errorMessage', '')}"
-                f"\n{agent_log_file.read_text()[-1000:]}"
-            )
-        session_id = next(
-            event["id"] for event in events if event.get("type") == "session"
+        hit_turn_limit = last_turn.get("stopReason") in ("aborted", "length")
+        failed = returncode != 0 or last_turn.get("stopReason") == "error"
+        detail = last_turn.get("errorMessage", "")
+        turns = sum(
+            1
+            for event in events
+            if event.get("type") == "turn_end"
+            and event["message"]["stopReason"] not in ("error", "aborted")
         )
-        hit_turn_limit = any(
-            is_pi_aborted_turn(event) for event in events
-        ) or _pi_clean_exit_needs_resume(events)
-        turns = pi_turn_count(events)
-        session_file_pattern = f"*_{session_id}.jsonl"
+    if failed:
+        raise RuntimeError(
+            f"{agent_type} chunk failed with exit code {returncode}: {detail}\n"
+            f"{agent_log_file.read_text()[-1000:]}"
+        )
 
-    state_dir = work_dir / AGENT_STATE_DIRS[agent_type]
-    session_file = next(state_dir.rglob(session_file_pattern))
+    identifier_key = AGENT_IDENTIFIER_KEYS[agent_type]
+    session_id = next(
+        event[identifier_key] for event in reversed(events) if event.get(identifier_key)
+    )
     return CliChunkResult(
         session_id=session_id,
-        session_path=f"/root/{state_dir.name}/{session_file.relative_to(state_dir)}",
+        session_file=next(
+            (work_dir / AGENT_STATE_DIRS[agent_type]).rglob(f"*{session_id}.jsonl")
+        ),
         turns=turns,
         hit_turn_limit=hit_turn_limit,
     )

@@ -5,7 +5,12 @@ from typing import Any
 
 import pytest
 
-from latch_eval_tools.harness import _cli_runner, run_claudecode_chunk, run_pi_chunk
+from latch_eval_tools.harness import (
+    _cli_runner,
+    claudecode,
+    run_claudecode_chunk,
+    run_pi_chunk,
+)
 
 PI_ABORTED_TURN_END = {
     "type": "turn_end",
@@ -61,20 +66,12 @@ def _docker_calls(calls_file: Path) -> list[list[str]]:
     return [json.loads(line) for line in calls_file.read_text().splitlines()]
 
 
-def test_default_commands_have_no_chunk_flags() -> None:
-    claude = _cli_runner._build_agent_command(
-        "claudecode", ["claude"], None, None, None, resume_identifier="session-id"
-    )
-    pi = _cli_runner._build_agent_command(
+def test_pi_resume_command_keeps_the_session_flag() -> None:
+    command = _cli_runner._build_agent_command(
         "pi", ["pi"], None, None, None, resume_identifier="session-id"
     )
 
-    assert "--fork-session" not in claude
-    assert "--max-turns" not in claude
-    assert pi[pi.index("--session") + 1] == "session-id"
-    assert "--fork" not in pi
-    assert "--max-turns" not in pi
-    assert _cli_runner.PI_MAX_TURNS_EXTENSION_CONTAINER_PATH not in pi
+    assert command[command.index("--session") + 1] == "session-id"
 
 
 def test_claude_fork_command_resumes_into_a_new_session() -> None:
@@ -85,32 +82,33 @@ def test_claude_fork_command_resumes_into_a_new_session() -> None:
         None,
         None,
         resume_identifier="session-id",
-        max_turns=3,
         fork=True,
     )
 
     assert command[command.index("--resume") + 1] == "session-id"
     assert command[command.index("--resume") + 2] == "--fork-session"
-    assert command[command.index("--max-turns") + 1] == "3"
 
 
-def test_pi_fork_command_loads_the_max_turns_extension() -> None:
-    command = _cli_runner._build_agent_command(
-        "pi",
-        ["pi"],
-        None,
-        None,
-        None,
-        resume_identifier="session-id",
-        max_turns=3,
-        fork=True,
+@pytest.mark.parametrize(
+    ("resume_identifier", "expected_prompt"),
+    [(None, f"task\n{claudecode.BACKGROUND_PROCESS_NOTE}"), ("session-1", "task")],
+)
+def test_claude_chunk_adds_the_background_note_only_to_a_new_session(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    resume_identifier: str | None,
+    expected_prompt: str,
+) -> None:
+    observed: dict[str, Any] = {}
+    monkeypatch.setattr(
+        claudecode, "_run_cli_chunk", lambda **kwargs: observed.update(kwargs)
     )
 
-    assert command[command.index("--fork") + 1] == "session-id"
-    assert "--session" not in command
-    extension_index = command.index(_cli_runner.PI_MAX_TURNS_EXTENSION_CONTAINER_PATH)
-    assert command[extension_index - 1] == "--extension"
-    assert command[command.index("--max-turns") + 1] == "3"
+    run_claudecode_chunk(
+        "container-a", "task", tmp_path, 2, resume_identifier=resume_identifier
+    )
+
+    assert observed["prompt"] == expected_prompt
 
 
 def test_claude_chunk_treats_max_turns_as_a_normal_end(
@@ -164,7 +162,7 @@ def test_claude_chunk_treats_max_turns_as_a_normal_end(
     )
 
     assert chunk.session_id == "session-1"
-    assert chunk.session_path == "/root/.claude/projects/-workspace/session-1.jsonl"
+    assert chunk.session_file == session_file
     assert chunk.turns == 2
     assert chunk.hit_turn_limit
     assert len(json.loads((tmp_path / "trajectory.json").read_text())) == 6
@@ -268,7 +266,8 @@ def test_pi_chunk_forks_and_ignores_the_aborted_turn(
 ) -> None:
     sessions_dir = tmp_path / ".pi" / "agent" / "sessions" / "--workspace--"
     sessions_dir.mkdir(parents=True)
-    (sessions_dir / "2026-09-22T00-00-00-000Z_session-2.jsonl").touch()
+    session_file = sessions_dir / "2026-09-22T00-00-00-000Z_session-2.jsonl"
+    session_file.touch()
     calls_file = _fake_docker(
         monkeypatch,
         tmp_path,
@@ -293,9 +292,7 @@ def test_pi_chunk_forks_and_ignores_the_aborted_turn(
     )
 
     assert chunk.session_id == "session-2"
-    assert chunk.session_path == (
-        "/root/.pi/agent/sessions/--workspace--/2026-09-22T00-00-00-000Z_session-2.jsonl"
-    )
+    assert chunk.session_file == session_file
     assert chunk.turns == 2
     assert chunk.hit_turn_limit
     trajectory = json.loads((tmp_path / "trajectory.json").read_text())
@@ -304,4 +301,7 @@ def test_pi_chunk_forks_and_ignores_the_aborted_turn(
     assert (tmp_path / ".pi" / "tool_timeout.js").exists()
     [argv] = _docker_calls(calls_file)
     assert argv[argv.index("--fork") + 1] == "session-1"
+    assert "--session" not in argv
+    extension_index = argv.index(_cli_runner.PI_MAX_TURNS_EXTENSION_CONTAINER_PATH)
+    assert argv[extension_index - 1] == "--extension"
     assert argv[argv.index("--max-turns") + 1] == "1"
