@@ -372,7 +372,7 @@ def build_rubric_criterion_user_prompt(
 {criterion.description}
 </criterion>
 
-Judge whether this single rubric criterion is met by the response.
+Report met=true exactly when the condition stated in this criterion is true of the response. Report met=false when it is not true. The label describes whether the condition occurred, not whether the response is good overall.
 
 Keep the rationale under 256 characters."""
 
