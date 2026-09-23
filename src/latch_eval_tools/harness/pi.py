@@ -28,6 +28,7 @@ def run_pi_task(
     completion: bool = False,
     benchmark: bool = False,
     operation_timeout: int = 0,
+    completion_file_path: str | None = None,
 ) -> dict:
     return _run_cli_agent(
         agent_type="pi",
@@ -43,6 +44,7 @@ def run_pi_task(
         completion=completion,
         benchmark=benchmark,
         operation_timeout=operation_timeout,
+        completion_file_path=completion_file_path,
     )
 
 

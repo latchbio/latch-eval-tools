@@ -285,6 +285,7 @@ def run_minisweagent_task(
     prompt_suffix: str | None = load_data_instructions(),
     completion: bool = False,
     benchmark: bool = False,
+    completion_file_path: str | None = None,
 ) -> dict:
     """Run MiniSWE agent on a task.
 
@@ -297,6 +298,8 @@ def run_minisweagent_task(
         eval_timeout: Timeout for entire evaluation (seconds)
         completion: When True, completion is signaled by the agent writing the
             file ``finished.txt`` in its workspace
+        completion_file_path: Optional relative workspace output path required
+            alongside the submit marker. Output validation remains with the caller.
 
     Returns:
         dict with keys "answer" (parsed JSON or None) and "metadata"
@@ -309,6 +312,11 @@ def run_minisweagent_task(
     from minisweagent.exceptions import LimitsExceeded
 
     agent_dir = get_agent_workspace_dir(work_dir)
+    completion_file = (
+        agent_dir / completion_file_path
+        if completion_file_path is not None
+        else None
+    )
 
     class FlexibleAgent(DefaultAgent):
         def __init__(self, *args, **kwargs):
@@ -407,12 +415,13 @@ def run_minisweagent_task(
         def _check_finished(self, output: dict):
             """Raises Submitted when the agent has signaled completion.
 
-            With ``completion=True`` the agent signals completion by writing
-            ``finished.txt`` into its workspace. The marker-based protocol is
-            disabled in that mode.
+            Legacy ``completion=True`` uses ``finished.txt`` directly. A declared
+            report also requires the submit marker, so drafts do not end the run.
             """
-            if completion:
-                finished_file = find_finished_file(agent_dir)
+            finished_file = find_finished_file(agent_dir) if completion else None
+            if completion and (
+                completion_file is None or completion_file == finished_file
+            ):
                 if finished_file is None:
                     return
                 try:
@@ -434,7 +443,11 @@ def run_minisweagent_task(
                 and output["returncode"] == 0
             ):
                 submission = "".join(lines[1:])
-                if find_answer_file(agent_dir) is None:
+                if completion_file is not None:
+                    answer_present = completion_file.is_file()
+                else:
+                    answer_present = find_answer_file(agent_dir) is not None
+                if not answer_present:
                     return
                 raise Submitted(
                     {
@@ -547,10 +560,15 @@ def run_minisweagent_task(
 
         agent_started_at = time.monotonic()
         try:
-            agent.run(
+            agent_result = agent.run(
                 enhanced_prompt,
                 latch_system_prompt=system_prompt or "",
             )
+            if (
+                completion_file is not None
+                and agent_result["exit_status"] != "Submitted"
+            ):
+                raise RuntimeError(f"Agent exited with {agent_result['exit_status']}")
         except AgentTimeoutError:
             timed_out = True
             print(f"\nAgent timed out after {eval_timeout} seconds")
@@ -594,7 +612,35 @@ def run_minisweagent_task(
             return f"Agent had {len(agent.messages)} message exchanges."
 
         finished_file = find_finished_file(agent_dir)
-        if completion:
+        if completion_file is not None:
+            if timed_out:
+                error_msg = "Agent timed out"
+            elif agent_error is not None:
+                error_msg = f"{type(agent_error).__name__}: {agent_error}"
+            else:
+                error_msg = None
+            if error_msg is not None:
+                error_details = {
+                    "error": error_msg,
+                    "timed_out": timed_out,
+                    "trajectory_info": _trajectory_info(),
+                    "log_tail": _agent_log_tail(),
+                }
+                print(f"\nWarning: {error_msg}. {_trajectory_info()}")
+            elif completion_file == finished_file:
+                last_message = ""
+                for msg in reversed(agent.messages):
+                    if msg.get("role") != "assistant":
+                        continue
+                    content = msg.get("content")
+                    if isinstance(content, str) and content.strip() != "":
+                        last_message = content
+                        break
+                agent_answer = {
+                    "last_message": last_message,
+                    "finished_file_contents": completion_file.read_text(),
+                }
+        elif completion:
             # completion mode has no answer file. Surface the agent's last
             # assistant message as agent_answer so downstream consumers have
             # something more useful than ``null``.

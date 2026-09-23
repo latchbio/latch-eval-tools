@@ -932,6 +932,7 @@ def _run_cli_agent(
     completion: bool = False,
     benchmark: bool = False,
     operation_timeout: int = 0,
+    completion_file_path: str | None = None,
 ) -> dict:
     agent_log_file = work_dir / "agent_output.log"
     if agent_log_file.exists():
@@ -956,6 +957,11 @@ def _run_cli_agent(
 
     ensure_docker_image(docker_image)
     agent_dir = get_agent_workspace_dir(work_dir)
+    completion_file = (
+        agent_dir / completion_file_path
+        if completion_file_path is not None
+        else None
+    )
     if agent_type == "pi":
         _write_pi_extension(work_dir, "tool_timeout.js")
     env_flags: list[str] = ["-e", "NODE_DISABLE_COMPILE_CACHE=1"]
@@ -1171,12 +1177,18 @@ def _run_cli_agent(
 
                         try:
                             if agent_type == "pi":
-                                answer_file = _find_eval_answer_file()
-                                if completion and find_finished_file(agent_dir):
-                                    answer_submitted = True
-                                elif not completion and answer_file is not None:
-                                    json.loads(answer_file.read_text())
-                                    answer_submitted = True
+                                if completion_file is not None:
+                                    answer_submitted = (
+                                        completion
+                                        and completion_file == find_finished_file(agent_dir)
+                                    )
+                                else:
+                                    answer_file = _find_eval_answer_file()
+                                    if completion and find_finished_file(agent_dir):
+                                        answer_submitted = True
+                                    elif not completion and answer_file is not None:
+                                        json.loads(answer_file.read_text())
+                                        answer_submitted = True
                                 if answer_submitted:
                                     process.terminate()
                                     try:
@@ -1250,8 +1262,12 @@ def _run_cli_agent(
                     break
 
                 if last_return_code == 0 and (
-                    _find_eval_answer_file() is not None
-                    or find_finished_file(agent_dir)
+                    (completion_file.is_file() and provider_failure is None)
+                    if completion_file is not None
+                    else (
+                        _find_eval_answer_file() is not None
+                        or find_finished_file(agent_dir)
+                    )
                 ):
                     break
 
@@ -1292,7 +1308,11 @@ def _run_cli_agent(
                 if last_return_code == 0:
                     if (
                         agent_type == "pi"
-                        and _find_eval_answer_file() is None
+                        and (
+                            not completion_file.is_file()
+                            if completion_file is not None
+                            else _find_eval_answer_file() is None
+                        )
                         and _pi_clean_exit_needs_resume(attempt_events)
                     ):
                         persist_trajectory()
@@ -1317,11 +1337,12 @@ def _run_cli_agent(
                         continue
                     if agent_type in ("claudecode", "grokbuild"):
                         if benchmark:
-                            answer_present = (
-                                find_finished_file(agent_dir) is not None
-                                if completion
-                                else _find_eval_answer_file() is not None
-                            )
+                            if completion_file is not None:
+                                answer_present = completion_file.is_file()
+                            elif completion:
+                                answer_present = find_finished_file(agent_dir) is not None
+                            else:
+                                answer_present = _find_eval_answer_file() is not None
                             if (
                                 not answer_present
                                 and claudecode_answer_resumes
@@ -1468,7 +1489,28 @@ def _run_cli_agent(
             return ""
         return agent_log_file.read_text()[-1000:]
 
-    if completion:
+    if completion_file is not None:
+        if timed_out:
+            error_msg = "Agent timed out"
+        elif agent_error is not None:
+            error_msg = f"{type(agent_error).__name__}: {agent_error}"
+        elif last_provider_failure is not None:
+            error_msg = f"Provider error: {last_provider_failure.error_code}"
+        else:
+            error_msg = None
+        if error_msg is not None:
+            error_details = {
+                "error": error_msg,
+                "timed_out": timed_out,
+                "log_tail": _log_tail(),
+            }
+            print(f"\nWarning: {error_msg}")
+        elif completion_file == resolved_finished:
+            agent_answer = {
+                "last_message": _extract_last_message(trajectory, agent_type),
+                "finished_file_contents": completion_file.read_text(),
+            }
+    elif completion:
         # completion mode has no answer file. Surface the agent's last
         # message (extracted from the streamed trajectory) so downstream
         # consumers have something more useful than ``null``.
