@@ -13,6 +13,20 @@ PI_ABORTED_TURN_END = {
     "message": {"role": "assistant", "stopReason": "aborted", "content": []},
     "toolResults": [],
 }
+PI_ERROR_TURN_END = {
+    "type": "turn_end",
+    "message": {
+        "role": "assistant",
+        "stopReason": "error",
+        "content": [],
+        "errorMessage": "529 overloaded",
+    },
+    "toolResults": [],
+}
+PI_TOOL_TURN_END = {
+    "type": "turn_end",
+    "message": {"role": "assistant", "stopReason": "toolUse", "content": []},
+}
 
 
 def _fake_docker(
@@ -20,23 +34,32 @@ def _fake_docker(
     tmp_path: Path,
     events: list[dict[str, Any]],
     returncode: int,
+    sleep_seconds: int = 0,
 ) -> Path:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    argv_file = tmp_path / "argv.json"
+    calls_file = tmp_path / "docker_calls.jsonl"
     stdout = "".join(f"{json.dumps(event)}\n" for event in events)
     docker = bin_dir / "docker"
     docker.write_text(
         "#!/usr/bin/env python3\n"
-        "import json, sys\n"
-        f"open({str(argv_file)!r}, 'w').write(json.dumps(sys.argv[1:]))\n"
+        "import json, sys, time\n"
+        f"open({str(calls_file)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
+        "if sys.argv[-1] == 'kill -9 -1':\n"
+        "    sys.exit(0)\n"
         "sys.stdin.read()\n"
         f"sys.stdout.write({stdout!r})\n"
+        "sys.stdout.flush()\n"
+        f"time.sleep({sleep_seconds})\n"
         f"sys.exit({returncode})\n"
     )
     docker.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
-    return argv_file
+    return calls_file
+
+
+def _docker_calls(calls_file: Path) -> list[list[str]]:
+    return [json.loads(line) for line in calls_file.read_text().splitlines()]
 
 
 def test_default_commands_have_no_chunk_flags() -> None:
@@ -91,10 +114,15 @@ def test_pi_fork_command_loads_the_max_turns_extension() -> None:
     assert command[command.index("--max-turns") + 1] == "3"
 
 
-def test_pi_turn_count_ignores_the_aborted_turn() -> None:
+def test_pi_turn_count_ignores_error_and_aborted_turns() -> None:
     summary = build_cli_run_summary(
         agent_type="pi",
-        trajectory=[{"type": "turn_end"}, {"type": "turn_end"}, PI_ABORTED_TURN_END],
+        trajectory=[
+            {"type": "turn_end"},
+            PI_ERROR_TURN_END,
+            {"type": "turn_end"},
+            PI_ABORTED_TURN_END,
+        ],
         duration_seconds=1.0,
         model_name=None,
     )
@@ -108,7 +136,7 @@ def test_claude_chunk_treats_max_turns_as_a_normal_end(
     session_file = tmp_path / ".claude" / "projects" / "-workspace" / "session-1.jsonl"
     session_file.parent.mkdir(parents=True)
     session_file.touch()
-    argv_file = _fake_docker(
+    calls_file = _fake_docker(
         monkeypatch,
         tmp_path,
         [
@@ -149,18 +177,21 @@ def test_claude_chunk_treats_max_turns_as_a_normal_end(
         tmp_path,
         2,
         model_name="anthropic/claude-fable-5",
+        switch_models_on_flag=True,
     )
 
     assert chunk.session_id == "session-1"
     assert chunk.session_path == "/root/.claude/projects/-workspace/session-1.jsonl"
     assert chunk.turns == 2
     assert chunk.hit_turn_limit
-    assert len(chunk.events) == 6
-    assert json.loads((tmp_path / "trajectory.json").read_text()) == chunk.events
-    argv = json.loads(argv_file.read_text())
+    assert len(json.loads((tmp_path / "trajectory.json").read_text())) == 6
+    [argv] = _docker_calls(calls_file)
     assert argv[:3] == ["exec", "-i", "container-a"]
     assert argv[argv.index("--model") + 1] == "claude-fable-5"
     assert argv[argv.index("--max-turns") + 1] == "2"
+    assert json.loads(argv[argv.index("--settings") + 1]) == {
+        "switchModelsOnFlag": True
+    }
 
 
 def test_claude_chunk_raises_on_a_failed_run(
@@ -174,14 +205,46 @@ def test_claude_chunk_raises_on_a_failed_run(
                 "type": "result",
                 "subtype": "success",
                 "is_error": True,
+                "result": "API Error: 401",
                 "session_id": "session-1",
             }
         ],
         returncode=1,
     )
 
-    with pytest.raises(RuntimeError, match="exited with code 1"):
+    with pytest.raises(RuntimeError, match="exit code 1: API Error: 401"):
         run_claudecode_chunk("container-a", "task", tmp_path, 2)
+
+
+def test_pi_chunk_raises_on_an_error_turn_despite_exit_zero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _fake_docker(
+        monkeypatch,
+        tmp_path,
+        [{"type": "session", "id": "session-1"}, PI_ERROR_TURN_END],
+        returncode=0,
+    )
+
+    with pytest.raises(RuntimeError, match="529 overloaded"):
+        run_pi_chunk("container-b", "task", tmp_path, 2)
+
+
+def test_chunk_timeout_kills_the_agent_inside_the_container(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls_file = _fake_docker(monkeypatch, tmp_path, [], returncode=0, sleep_seconds=30)
+
+    with pytest.raises(RuntimeError, match="^pi chunk timed out after 1s$"):
+        run_pi_chunk("container-b", "task", tmp_path, 2, timeout=1)
+
+    assert _docker_calls(calls_file)[-1] == [
+        "exec",
+        "container-b",
+        "sh",
+        "-c",
+        "kill -9 -1",
+    ]
 
 
 def test_pi_chunk_forks_and_ignores_the_aborted_turn(
@@ -190,13 +253,15 @@ def test_pi_chunk_forks_and_ignores_the_aborted_turn(
     sessions_dir = tmp_path / ".pi" / "agent" / "sessions" / "--workspace--"
     sessions_dir.mkdir(parents=True)
     (sessions_dir / "2026-09-22T00-00-00-000Z_session-2.jsonl").touch()
-    argv_file = _fake_docker(
+    calls_file = _fake_docker(
         monkeypatch,
         tmp_path,
         [
             {"type": "session", "id": "session-2"},
             {"type": "message_update"},
-            {"type": "turn_end", "message": {"role": "assistant", "content": []}},
+            PI_TOOL_TURN_END,
+            PI_ERROR_TURN_END,
+            PI_TOOL_TURN_END,
             PI_ABORTED_TURN_END,
         ],
         returncode=0,
@@ -215,15 +280,12 @@ def test_pi_chunk_forks_and_ignores_the_aborted_turn(
     assert chunk.session_path == (
         "/root/.pi/agent/sessions/--workspace--/2026-09-22T00-00-00-000Z_session-2.jsonl"
     )
-    assert chunk.turns == 1
+    assert chunk.turns == 2
     assert chunk.hit_turn_limit
-    assert [event["type"] for event in chunk.events] == [
-        "session",
-        "turn_end",
-        "turn_end",
-    ]
+    trajectory = json.loads((tmp_path / "trajectory.json").read_text())
+    assert [event["type"] for event in trajectory] == ["session"] + ["turn_end"] * 4
     assert (tmp_path / ".pi" / "max_turns.js").exists()
     assert (tmp_path / ".pi" / "tool_timeout.js").exists()
-    argv = json.loads(argv_file.read_text())
+    [argv] = _docker_calls(calls_file)
     assert argv[argv.index("--fork") + 1] == "session-1"
     assert argv[argv.index("--max-turns") + 1] == "1"

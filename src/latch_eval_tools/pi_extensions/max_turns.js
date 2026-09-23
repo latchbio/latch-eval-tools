@@ -4,8 +4,10 @@ export default function(pi) {
   let turns = 0;
   let stopped = false;
 
-  pi.on("turn_end", async () => {
-    turns += 1;
+  pi.on("turn_end", async (event) => {
+    if (event.message.stopReason !== "error") {
+      turns += 1;
+    }
   });
 
   pi.on("before_provider_request", async (event, ctx) => {

@@ -68,6 +68,7 @@ def run_pi_chunk(
         max_turns=max_turns,
         model_name=_map_model_name(model_name),
         model_map=None,
+        claude_code_extra_args=None,
         system_prompt=system_prompt,
         resume_identifier=resume_identifier,
         fork=fork,

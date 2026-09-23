@@ -423,6 +423,25 @@ def is_pi_aborted_turn(event: dict[str, Any]) -> bool:
     )
 
 
+def is_pi_error_turn(event: dict[str, Any]) -> bool:
+    message = _dict_value(event.get("message"))
+    return (
+        event.get("type") == "turn_end"
+        and message is not None
+        and message.get("stopReason") == "error"
+    )
+
+
+def pi_turn_count(trajectory: list[dict[str, Any]]) -> int:
+    return sum(
+        1
+        for event in trajectory
+        if event.get("type") == "turn_end"
+        and not is_pi_aborted_turn(event)
+        and not is_pi_error_turn(event)
+    )
+
+
 def _pi_metrics(
     trajectory: list[dict[str, Any]],
     duration_seconds: float,
@@ -450,15 +469,7 @@ def _pi_metrics(
         pricing_version = HARNESS_PRICING_VERSION
     return HarnessRunMetrics(
         duration_seconds=duration_seconds,
-        turn_count=(
-            sum(
-                1
-                for event in trajectory
-                if event.get("type") == "turn_end" and not is_pi_aborted_turn(event)
-            )
-            if trajectory
-            else None
-        ),
+        turn_count=pi_turn_count(trajectory) if trajectory else None,
         step_count=_pi_step_count(trajectory) if trajectory else None,
         usage=usage,
         total_cost_usd=total_cost_usd,
