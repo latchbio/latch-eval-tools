@@ -58,6 +58,7 @@ def run_pi_chunk(
     resume_identifier: str | None = None,
     fork: bool = False,
     timeout: int = EVAL_TIMEOUT,
+    parallel_tool_calls: bool = True,
 ) -> CliChunkResult:
     return _run_cli_chunk(
         agent_type="pi",
@@ -71,4 +72,5 @@ def run_pi_chunk(
         resume_identifier=resume_identifier,
         fork=fork,
         timeout=timeout,
+        parallel_tool_calls=parallel_tool_calls,
     )

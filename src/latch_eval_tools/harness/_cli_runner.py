@@ -257,6 +257,7 @@ AGENT_IDENTIFIER_KEYS = {
 PI_IGNORED_EVENT_TYPES = {"message_update", "tool_execution_update"}
 PI_TOOL_TIMEOUT_EXTENSION_CONTAINER_PATH = "/root/.pi/tool_timeout.js"
 PI_MAX_TURNS_EXTENSION_CONTAINER_PATH = "/root/.pi/max_turns.js"
+PI_SINGLE_TOOL_CALL_EXTENSION_CONTAINER_PATH = "/root/.pi/single_tool_call.js"
 PROVIDER_RETRYABLE_STATUS_CODES = frozenset(
     {408, 409, 425, 429, 500, 502, 503, 504, 520, 529}
 )
@@ -1650,6 +1651,7 @@ def _run_cli_chunk(
     timeout: int,
     model_map: dict[str, str] | None = None,
     claude_code_extra_args: list[str] | None = None,
+    parallel_tool_calls: bool = True,
 ) -> CliChunkResult:
     if agent_type == "pi":
         _write_pi_extension(work_dir, "tool_timeout.js")
@@ -1667,6 +1669,9 @@ def _run_cli_chunk(
         max_turns=max_turns,
         fork=fork,
     )
+    if not parallel_tool_calls:
+        _write_pi_extension(work_dir, "single_tool_call.js")
+        agent_cmd += ["--extension", PI_SINGLE_TOOL_CALL_EXTENSION_CONTAINER_PATH]
     events: list[dict[str, Any]] = []
     trajectory_file = work_dir / "trajectory.json"
     agent_log_file = work_dir / "agent_output.log"
