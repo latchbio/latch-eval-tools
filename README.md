@@ -48,6 +48,37 @@ Available grader types:
 `jaccard_label_set` is a backward-compatible alias of `label_set_jaccard`.
 `composite` is a backward-compatible alias of `all_of`.
 
+### Optional rubric length penalty
+
+Rubric graders can deduct a bounded amount from the normalized reward when the
+configured answer field is long. The judge still sees only its first
+`truncation_length` characters; the penalty counts the full `str(answer_field)`.
+
+```json
+{
+  "truncation_length": 20000,
+  "length_penalty": {
+    "allowed_chars": 10000,
+    "ramp_percent": 50,
+    "max_penalty": 0.1,
+    "curve": "power_0_5"
+  }
+}
+```
+
+The deduction is zero through `allowed_chars` and reaches `max_penalty` after
+another `allowed_chars * ramp_percent / 100` characters. The optional `curve`
+is `linear` by default; `power_0_5` uses the square root of progress through
+the ramp, so the deduction rises faster near the start. Both curves reach the
+same cap. The final reward is
+`max(0, rubric_reward - deduction)`, and `passing_reward_threshold` is applied
+to that final reward. Without `length_penalty`, scoring is unchanged. The
+result metrics include the full answer length, deduction, and pre-penalty reward.
+Set `truncation_length` above `allowed_chars * (1 + ramp_percent / 100)` so
+the judge can read the response throughout the penalty ramp. Past the
+truncation limit, missing evidence may lower criterion scores in addition to
+the capped length deduction.
+
 `all_of` is a strict binary AND. Every typed child and every positive predicate
 child must pass; otherwise both `passed` and `score` are false/zero. A clean
 result scores `1`. On Eval Platform, use separate entries in the top-level
