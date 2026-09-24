@@ -16,6 +16,14 @@ HarnessRefusalStatus = Literal["detected", "not_detected", "not_evaluated"]
 
 RUN_SUMMARY_SCHEMA_VERSION = 1
 HARNESS_PRICING_VERSION = "1"
+# Codex rollout item types that represent one agent tool call. Models whose
+# codex `tool_mode` is `code_mode_only` (every gpt-5.6-* and gpt-6-*) drive the
+# freeform code-mode tool, so their calls land as `custom_tool_call` rather than
+# `function_call`; `local_shell_call` covers the models that use the hosted
+# shell tool. Counting only `function_call` reports 0 steps for those models.
+CODEX_TOOL_CALL_ITEM_TYPES = frozenset(
+    {"function_call", "custom_tool_call", "local_shell_call"}
+)
 _MILLION_TOKENS = 1_000_000
 _CODEX_MODEL_RATES: dict[str, dict[str, float]] = {
     "openai/gpt-6-astra": {
@@ -267,7 +275,7 @@ def _codex_step_count(
         if (
             event.get("type") == "response_item"
             and isinstance(event.get("payload"), dict)
-            and event["payload"].get("type") == "function_call"
+            and event["payload"].get("type") in CODEX_TOOL_CALL_ITEM_TYPES
         )
     )
 

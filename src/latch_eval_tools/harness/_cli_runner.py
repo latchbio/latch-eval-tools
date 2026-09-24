@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from latch_eval_tools.harness.run_summary import (
+    CODEX_TOOL_CALL_ITEM_TYPES,
     CliHarnessAgentType,
     build_cli_run_summary,
 )
@@ -236,6 +237,9 @@ AGENT_STATE_DIRS = {
     "pi": ".pi",
     "grokbuild": ".grok",
 }
+# Codex rollout `response_item` payloads worth keeping: every tool-call shape
+# (for the step count) plus reasoning (replayed back into the trajectory).
+_CODEX_SIDECAR_RESPONSE_ITEM_TYPES = CODEX_TOOL_CALL_ITEM_TYPES | {"reasoning"}
 # By default the host state dir is bind-mounted onto /root/<state_dir_name>.
 # grok is the exception: its ENTIRE install (binary in ~/.grok/downloads,
 # symlinked via ~/.grok/bin) lives under ~/.grok, so mounting the state dir onto
@@ -910,10 +914,10 @@ def _read_codex_sidecar_events(
             payload = event.get("payload")
             if not isinstance(payload, dict):
                 continue
-            if event_type == "response_item" and payload.get("type") in {
-                "function_call",
-                "reasoning",
-            }:
+            if (
+                event_type == "response_item"
+                and payload.get("type") in _CODEX_SIDECAR_RESPONSE_ITEM_TYPES
+            ):
                 events.append(event)
             elif event_type == "event_msg" and payload.get("type") == "token_count":
                 events.append(event)

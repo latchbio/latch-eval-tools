@@ -188,6 +188,48 @@ def test_codex_summary_reads_authoritative_local_sidecar(tmp_path) -> None:
     }
 
 
+def test_codex_summary_counts_code_mode_and_local_shell_tool_calls(tmp_path) -> None:
+    # gpt-5.6-* / gpt-6-* run codex in `code_mode_only`, so every tool call is a
+    # freeform `custom_tool_call` instead of a `function_call`.
+    thread_id = "019cafe0-2222-7333-8444-123456789abc"
+    trajectory = [
+        {"type": "thread.started", "thread_id": thread_id},
+        {
+            "type": "turn.completed",
+            "usage": {"input_tokens": 7, "output_tokens": 3},
+        },
+    ]
+    (tmp_path / "trajectory.json").write_text(json.dumps(trajectory))
+    codex_dir = tmp_path / ".codex" / "sessions"
+    codex_dir.mkdir(parents=True)
+    (codex_dir / f"rollout-2026-09-23T00-00-00-{thread_id}.jsonl").write_text(
+        "\n".join(
+            json.dumps({"type": "response_item", "payload": payload})
+            for payload in [
+                {"type": "custom_tool_call", "call_id": "call-1"},
+                {"type": "custom_tool_call", "call_id": "call-2"},
+                {"type": "local_shell_call", "call_id": "call-3"},
+                {"type": "function_call", "call_id": "call-4"},
+                {"type": "reasoning", "id": "reasoning-1"},
+                {"type": "message", "content": []},
+            ]
+        )
+    )
+
+    sidecar_events = _read_codex_sidecar_events(tmp_path, trajectory)
+    assert sidecar_events is not None
+
+    summary = build_cli_run_summary(
+        agent_type="openaicodex",
+        trajectory=trajectory,
+        duration_seconds=4.5,
+        model_name="openai/gpt-6-astra",
+        codex_sidecar_events=sidecar_events,
+    )
+
+    assert summary.metrics.step_count == 4
+
+
 def test_codex_stream_fallback_preserves_cached_input_usage() -> None:
     summary = build_cli_run_summary(
         agent_type="openaicodex",
