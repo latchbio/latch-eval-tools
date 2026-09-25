@@ -10,16 +10,34 @@ from .base import (
 from .number_contract import is_finite_number
 
 
-def _json_safe_metrics(metrics: dict) -> dict:
+# Consumers of persisted grader metrics reject numbers outside the IEEE-754
+# safe integer range, because nothing downstream can read them back exactly.
+MAX_INTEROPERABLE_MAGNITUDE = float((1 << 53) - 1)
+
+
+def _json_safe_number(value: object) -> object:
     # `error` metrics use `float("inf")` as a sentinel for "missing"/"undefined"
     # comparisons (e.g. relative error against a zero ground truth). `inf`/`nan`
-    # are not valid JSON and get rejected when the grader result is persisted,
-    # so swap them for `None` on the way out. The reasoning string is built from
-    # the raw (pre-sanitized) metrics above and is unaffected.
-    return {
-        key: (None if isinstance(value, float) and not math.isfinite(value) else value)
-        for key, value in metrics.items()
-    }
+    # are not valid JSON and get rejected when the grader result is persisted.
+    #
+    # A finite value can be just as unusable: a relative error is a ratio, so an
+    # answer that misses a ~1e-25 ground truth by any ordinary margin produces an
+    # error term above 1e20. That is a real double, but the persistence layer
+    # rejects it and the whole grading write fails, so it gets the same
+    # "undefined comparison" treatment as the sentinel.
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return value
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if abs(value) > MAX_INTEROPERABLE_MAGNITUDE:
+        return None
+    return value
+
+
+def _json_safe_metrics(metrics: dict) -> dict:
+    # The reasoning string is built from the raw (pre-sanitized) metrics above
+    # and is unaffected, so the real magnitude stays visible to a reader.
+    return {key: _json_safe_number(value) for key, value in metrics.items()}
 
 
 def _validate_ground_truth(ground_truth: object) -> str | None:
