@@ -176,25 +176,91 @@ OPENROUTER_MODEL_CONFIGS: dict[str, dict] = {
             "supportsUsageInStreaming": True,
         },
     },
+    "openrouter/nvidia/nemotron-3-super-120b-a12b": {
+        "id": "nvidia/nemotron-3-super-120b-a12b",
+        "name": "Nemotron 3 Super",
+        "reasoning": True,
+        "input": ["text"],
+        "contextWindow": 262144,
+        "maxTokens": 32768,
+        "cost": {"input": 0.08, "output": 0.45, "cacheRead": 0, "cacheWrite": 0},
+        "thinkingLevelMap": {"xhigh": "high", "max": "high"},
+        "compat": {
+            "thinkingFormat": "reasoning_effort",
+            "supportsReasoningEffort": True,
+            "supportsUsageInStreaming": True,
+        },
+    },
+}
+
+FIREWORKS_PROVIDER_NAME = "fireworks"
+FIREWORKS_PROVIDER_BASE_URL = "https://api.fireworks.ai/inference/v1"
+FIREWORKS_MODEL_CONFIGS: dict[str, dict] = {
+    # Fireworks has no shared reasoning effort knob. Pi parses reasoning output
+    # without sending the OpenAI reasoning_effort field to this provider.
+    "fireworks/accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b": {
+        "id": "accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b",
+        "name": "Nemotron Lightning 3.5",
+        "reasoning": True,
+        "input": ["text"],
+        "contextWindow": 262144,
+        "maxTokens": 32768,
+        "cost": {"input": 0.05, "output": 0.2, "cacheRead": 0.01, "cacheWrite": 0},
+        "compat": {
+            "supportsReasoningEffort": False,
+            "supportsUsageInStreaming": True,
+            "maxTokensField": "max_tokens",
+        },
+    },
+    "fireworks/accounts/fireworks/models/nemotron-3-ultra-nvfp4": {
+        "id": "accounts/fireworks/models/nemotron-3-ultra-nvfp4",
+        "name": "Nemotron 3 Ultra NVFP4",
+        "reasoning": True,
+        "input": ["text"],
+        "contextWindow": 262144,
+        "maxTokens": 32768,
+        "cost": {"input": 0.6, "output": 2.4, "cacheRead": 0.12, "cacheWrite": 0},
+        "compat": {
+            "supportsReasoningEffort": False,
+            "supportsUsageInStreaming": True,
+            "maxTokensField": "max_tokens",
+        },
+    },
+}
+
+PI_CUSTOM_PROVIDERS = {
+    OPENROUTER_PROVIDER_NAME: (
+        OPENROUTER_PROVIDER_BASE_URL,
+        "OPENROUTER_API_KEY",
+        OPENROUTER_MODEL_CONFIGS,
+    ),
+    FIREWORKS_PROVIDER_NAME: (
+        FIREWORKS_PROVIDER_BASE_URL,
+        "FIREWORKS_API_KEY",
+        FIREWORKS_MODEL_CONFIGS,
+    ),
 }
 
 
-def _write_pi_openrouter_models_json(work_dir: Path, model_name: str) -> None:
-    if model_name not in OPENROUTER_MODEL_CONFIGS:
-        raise ValueError(
-            f"No pi OpenRouter model config registered for {model_name!r}; "
-            "add it to OPENROUTER_MODEL_CONFIGS in _cli_runner.py"
-        )
-    models_json = {
-        "providers": {
-            OPENROUTER_PROVIDER_NAME: {
-                "baseUrl": OPENROUTER_PROVIDER_BASE_URL,
-                "apiKey": "$OPENROUTER_API_KEY",
-                "api": "openai-completions",
-                "models": [OPENROUTER_MODEL_CONFIGS[model_name]],
-            }
-        }
+def pi_custom_provider_config(model_name: str) -> dict:
+    provider = model_name.partition("/")[0]
+    if provider not in PI_CUSTOM_PROVIDERS:
+        raise ValueError(f"No custom Pi provider for {model_name!r}")
+    base_url, key, model_configs = PI_CUSTOM_PROVIDERS[provider]
+    model = model_configs.get(model_name)
+    if model is None:
+        raise ValueError(f"No pi {provider} model config registered for {model_name!r}")
+    return {
+        "baseUrl": base_url,
+        "apiKey": f"${key}",
+        "api": "openai-completions",
+        "models": [model],
     }
+
+
+def _write_pi_custom_models_json(work_dir: Path, model_name: str) -> None:
+    provider = model_name.partition("/")[0]
+    models_json = {"providers": {provider: pi_custom_provider_config(model_name)}}
     models_path = work_dir / AGENT_STATE_DIRS["pi"] / "agent" / "models.json"
     models_path.parent.mkdir(parents=True, exist_ok=True)
     models_path.write_text(json.dumps(models_json, indent=2), encoding="utf-8")
@@ -1059,10 +1125,14 @@ def _run_cli_agent(
             docker_image=docker_image,
             memory_limit_bytes=memory_limit_bytes,
         )
-        # Register the custom OpenRouter provider into the (bind-mounted) pi state
-        # dir. Written on the host so it survives container recreation on OOM.
-        if agent_type == "pi" and model_name and model_name.startswith("openrouter/"):
-            _write_pi_openrouter_models_json(work_dir, model_name)
+        # Register the custom provider into the (bind-mounted) pi state dir.
+        # Written on the host so it survives container recreation on OOM.
+        if (
+            agent_type == "pi"
+            and model_name
+            and model_name.startswith(("openrouter/", "fireworks/"))
+        ):
+            _write_pi_custom_models_json(work_dir, model_name)
         _start_cli_container(container_name)
         deadline = time.time() + eval_timeout
 
@@ -1667,8 +1737,8 @@ def _run_cli_chunk(
     if agent_type == "pi":
         _write_pi_extension(work_dir, "tool_timeout.js")
         _write_pi_extension(work_dir, "max_turns.js")
-        if model_name and model_name.startswith("openrouter/"):
-            _write_pi_openrouter_models_json(work_dir, model_name)
+        if model_name and model_name.startswith(("openrouter/", "fireworks/")):
+            _write_pi_custom_models_json(work_dir, model_name)
         if not parallel_tool_calls:
             _write_pi_extension(work_dir, "single_tool_call.js")
             agent_cmd.extend(
