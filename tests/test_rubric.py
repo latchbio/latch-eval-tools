@@ -469,6 +469,20 @@ def test_evaluate_answer_llm_penalizes_full_length_after_truncation(
 
     prompt = observed_requests[0]["messages"][0]["content"]
     assert "<response>\nabcdef\n</response>" in prompt
+    assert "abcdefgh" not in prompt
+    request_payload = json.dumps(observed_requests[0])
+    for penalty_detail in (
+        "length_penalty",
+        "allowed_chars",
+        "ramp_percent",
+        "max_penalty",
+        "power_0_5",
+        "answer_length_chars",
+        "length_penalty_applied",
+        "reward_before_length_penalty",
+        '"reward"',
+    ):
+        assert penalty_detail not in request_payload
     assert result.score == pytest.approx(1 - expected_penalty)
     assert result.passed is False
     assert result.metrics["raw_score"] == 1
