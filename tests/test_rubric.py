@@ -18,11 +18,13 @@ from latch_eval_tools.graders.rubric import (
     RubricCriterionGraderOutput,
     RubricGrader,
     RubricGraderConfig,
+    RubricLengthPenaltyConfig,
     RubricGraderOutput,
     RubricGraderOutputParseError,
     TransientRetryController,
     classify_transient_error,
     compute_rubric_reward,
+    compute_rubric_length_penalty,
     resolve_anthropic_model_name,
     retry_after_seconds_from_error,
     rubric_criterion_output_config,
@@ -41,6 +43,7 @@ def test_rubric_config_defaults_and_requires_positive_score_delta() -> None:
     assert config.model_params == DEFAULT_MODEL_PARAMS
     assert config.truncation_length == DEFAULT_TRUNCATION_LENGTH
     assert config.passing_reward_threshold == 1.0
+    assert config.length_penalty is None
 
     try:
         RubricGraderConfig.model_validate(
@@ -88,6 +91,57 @@ def test_compute_rubric_reward_normalizes_and_clamps() -> None:
         "criterion_1": 0.0,
         "criterion_2": -0.5,
     }
+
+
+def test_capped_length_penalty_ramps_by_percent_of_allowance() -> None:
+    config = RubricLengthPenaltyConfig(
+        allowed_chars=5, ramp_percent=80, max_penalty=0.2
+    )
+    assert compute_rubric_length_penalty(5, config) == 0.0
+    assert compute_rubric_length_penalty(7, config) == pytest.approx(0.1)
+    assert compute_rubric_length_penalty(9, config) == pytest.approx(0.2)
+    assert compute_rubric_length_penalty(100, config) == pytest.approx(0.2)
+    assert compute_rubric_length_penalty(100, None) == 0.0
+    scaled_allowance = RubricLengthPenaltyConfig(
+        allowed_chars=10, ramp_percent=80, max_penalty=0.2
+    )
+    assert compute_rubric_length_penalty(14, scaled_allowance) == pytest.approx(0.1)
+    longer_ramp = RubricLengthPenaltyConfig(
+        allowed_chars=5, ramp_percent=200, max_penalty=0.2
+    )
+    assert compute_rubric_length_penalty(10, longer_ramp) == pytest.approx(0.1)
+    power_curve = RubricLengthPenaltyConfig(
+        allowed_chars=5, ramp_percent=80, max_penalty=0.2, curve="power_0_5"
+    )
+    assert compute_rubric_length_penalty(5, power_curve) == 0.0
+    assert compute_rubric_length_penalty(7, power_curve) == pytest.approx(0.2 * 0.5**0.5)
+    assert compute_rubric_length_penalty(9, power_curve) == pytest.approx(0.2)
+    assert compute_rubric_length_penalty(100, power_curve) == pytest.approx(0.2)
+
+
+@pytest.mark.parametrize(
+    "penalty",
+    [
+        {"allowed_chars": 0, "ramp_percent": 80, "max_penalty": 0.2},
+        {"allowed_chars": 5, "ramp_percent": 0, "max_penalty": 0.2},
+        {"allowed_chars": 5, "ramp_percent": float("nan"), "max_penalty": 0.2},
+        {"allowed_chars": 5, "ramp_percent": 80, "max_penalty": -0.1},
+        {"allowed_chars": 5, "ramp_percent": 80, "max_penalty": 1.1},
+        {"allowed_chars": 5, "ramp_percent": 80, "max_penalty": float("nan")},
+        {"allowed_chars": 5, "ramp_percent": 80, "max_penalty": 0.2, "other": 1},
+        {"allowed_chars": 5, "ramp_chars": 4, "max_penalty": 0.2},
+        {"allowed_chars": 5, "ramp_percent": 80, "max_penalty": 0.2, "curve": "quadratic"},
+    ],
+)
+def test_length_penalty_config_rejects_invalid_values(penalty: dict) -> None:
+    with pytest.raises(ValidationError):
+        RubricGraderConfig.model_validate(
+            {
+                "answer_field": "rationale",
+                "criteria": [{"description": "correct", "score_delta": 1}],
+                "length_penalty": penalty,
+            }
+        )
 
 
 def test_llm_registry() -> None:
@@ -379,6 +433,64 @@ def test_evaluate_answer_llm_uses_anthropic_structured_output(monkeypatch: pytes
     assert observed_requests[0]["output_config"] == rubric_criterion_output_config()
     assert observed_requests[0]["thinking"] == {"type": "adaptive", "display": "omitted"}
     assert "temperature" not in observed_requests[0]
+
+
+@pytest.mark.parametrize(
+    ("curve", "expected_penalty"),
+    [
+        ("linear", 0.2 * 3 / 5),
+        ("power_0_5", 0.2 * (3 / 5) ** 0.5),
+    ],
+)
+def test_evaluate_answer_llm_penalizes_full_length_after_truncation(
+    monkeypatch: pytest.MonkeyPatch, curve: str, expected_penalty: float,
+) -> None:
+    judgment = json.dumps({"met": True, "rationale": "present"})
+    observed_requests: list[dict[str, object]] = []
+    _patch_anthropic(
+        monkeypatch, [_fake_message(judgment)], observed_requests=observed_requests
+    )
+    config = {
+        "answer_field": "rationale",
+        "criteria": [{"description": "correct", "score_delta": 1}],
+        "truncation_length": 6,
+        "length_penalty": {
+            "allowed_chars": 5,
+            "ramp_percent": 100,
+            "max_penalty": 0.2,
+            "curve": curve,
+        },
+    }
+    result = asyncio.run(
+        RubricGrader().evaluate_answer_llm(
+            {"rationale": "abcdefgh"}, config, api_key="k"
+        )
+    )
+
+    prompt = observed_requests[0]["messages"][0]["content"]
+    assert "<response>\nabcdef\n</response>" in prompt
+    assert "abcdefgh" not in prompt
+    request_payload = json.dumps(observed_requests[0])
+    for penalty_detail in (
+        "length_penalty",
+        "allowed_chars",
+        "ramp_percent",
+        "max_penalty",
+        "power_0_5",
+        "answer_length_chars",
+        "length_penalty_applied",
+        "reward_before_length_penalty",
+        '"reward"',
+    ):
+        assert penalty_detail not in request_payload
+    assert result.score == pytest.approx(1 - expected_penalty)
+    assert result.passed is False
+    assert result.metrics["raw_score"] == 1
+    assert result.metrics["answer_length_chars"] == 8
+    assert result.metrics["reward_before_length_penalty"] == 1.0
+    assert result.metrics["length_penalty_applied"] == pytest.approx(expected_penalty)
+    assert result.metrics["length_penalty_config"] == config["length_penalty"]
+    assert f"length penalty: {expected_penalty:.4f}" in result.reasoning
 
 
 def test_evaluate_answer_llm_grades_each_criterion_separately(monkeypatch: pytest.MonkeyPatch) -> None:

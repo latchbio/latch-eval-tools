@@ -2,7 +2,7 @@ import asyncio
 from copy import deepcopy
 from dataclasses import dataclass
 import random
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from anthropic import APIConnectionError, APIStatusError, AsyncAnthropic, RateLimitError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
@@ -247,6 +247,17 @@ class RubricCriterion(BaseModel):
         return stripped
 
 
+class RubricLengthPenaltyConfig(BaseModel):
+    """Optional capped penalty on the full answer-field length, in characters."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    allowed_chars: int = Field(gt=0)
+    ramp_percent: float = Field(gt=0.0, allow_inf_nan=False)
+    max_penalty: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    curve: Literal["linear", "power_0_5"] = "linear"
+
+
 class RubricGraderConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -256,6 +267,7 @@ class RubricGraderConfig(BaseModel):
     model_params: dict[str, Any] = Field(default_factory=default_model_params)
     truncation_length: int = Field(default=DEFAULT_TRUNCATION_LENGTH, gt=0)
     passing_reward_threshold: float = Field(default=1.0, ge=0.0, le=1.0)
+    length_penalty: RubricLengthPenaltyConfig | None = None
 
     @field_validator("answer_field", "model_id")
     @classmethod
@@ -335,6 +347,21 @@ def compute_rubric_reward(config: RubricGraderConfig, output: RubricGraderOutput
         passed=reward >= config.passing_reward_threshold,
         field_scores=field_scores,
     )
+
+
+def compute_rubric_length_penalty(
+    answer_length_chars: int, config: RubricLengthPenaltyConfig | None
+) -> float:
+    """Ramp over ``ramp_percent`` of the penalty-free ``allowed_chars``."""
+    if config is None or answer_length_chars <= config.allowed_chars:
+        return 0.0
+    ramp_chars = config.allowed_chars * config.ramp_percent / 100.0
+    overlong_fraction = min(
+        (answer_length_chars - config.allowed_chars) / ramp_chars, 1.0
+    )
+    if config.curve == "power_0_5":
+        overlong_fraction = overlong_fraction**0.5
+    return config.max_penalty * overlong_fraction
 
 
 def rubric_criterion_output_config(model_params: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -543,7 +570,8 @@ class RubricGrader:
                 field_scores={},
             )
 
-        response = str(answer)[: parsed_config.truncation_length]
+        full_response = str(answer)
+        response = full_response[: parsed_config.truncation_length]
         client_kwargs: dict[str, Any] = {}
         if api_key is not None:
             client_kwargs["api_key"] = api_key
@@ -578,6 +606,21 @@ class RubricGrader:
         validate_judgment_coverage(parsed_config, output)
 
         score_result = compute_rubric_reward(parsed_config, output)
+        base_reward = score_result.reward
+        length_penalty = compute_rubric_length_penalty(
+            len(full_response), parsed_config.length_penalty
+        )
+        if parsed_config.length_penalty is not None:
+            adjusted_reward = max(0.0, base_reward - length_penalty)
+            length_penalty_applied = base_reward - adjusted_reward
+            score_result = score_result.model_copy(
+                update={
+                    "reward": adjusted_reward,
+                    "passed": adjusted_reward >= parsed_config.passing_reward_threshold,
+                }
+            )
+        else:
+            length_penalty_applied = 0.0
 
         criterion_parse_attempts = {
             f"criterion_{result.judgment.index}": result.attempts_used for result in criterion_results
@@ -600,10 +643,25 @@ class RubricGrader:
             "grading_transport": "anthropic_api",
             "judgments": [judgment.model_dump(mode="json") for judgment in output.judgments],
         }
+        if parsed_config.length_penalty is not None:
+            metrics.update(
+                {
+                    "answer_length_chars": len(full_response),
+                    "length_penalty_config": parsed_config.length_penalty.model_dump(),
+                    "length_penalty_applied": length_penalty_applied,
+                    "reward_before_length_penalty": base_reward,
+                }
+            )
         return GraderResult(
             passed=score_result.passed,
             metrics=metrics,
-            reasoning=format_rubric_reasoning(parsed_config, output, score_result),
+            reasoning=format_rubric_reasoning(
+                parsed_config,
+                output,
+                score_result,
+                answer_length_chars=len(full_response),
+                length_penalty_applied=length_penalty_applied,
+            ),
             agent_answer=agent_answer,
             score=score_result.reward,
             field_scores=score_result.field_scores,
@@ -614,12 +672,20 @@ def format_rubric_reasoning(
     config: RubricGraderConfig,
     output: RubricGraderOutput,
     score_result: RubricScoreResult,
+    *,
+    answer_length_chars: int | None = None,
+    length_penalty_applied: float = 0.0,
 ) -> str:
     verdict = "PASS" if score_result.passed else "FAIL"
     lines = [
         f"Rubric: {verdict}",
         f"  reward: {score_result.reward:.4f} (raw_score={score_result.raw_score}, max_score={score_result.max_score})",
     ]
+    if config.length_penalty is not None:
+        lines.append(
+            f"  length penalty: {length_penalty_applied:.4f} "
+            f"(answer_length_chars={answer_length_chars})"
+        )
     judgments_by_index = {judgment.index: judgment for judgment in output.judgments}
     for index, criterion in enumerate(config.criteria):
         judgment = judgments_by_index.get(index)
