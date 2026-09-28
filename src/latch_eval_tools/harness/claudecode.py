@@ -15,6 +15,7 @@ from latch_eval_tools.harness.utils import (
 )
 
 MODEL_MAP = {
+    "anthropic/claude-sonnet-5-5": "claude-sonnet-5-5",
     "anthropic/claude-opus-4-6": "claude-opus-4-6",
     "anthropic/claude-opus-4-5": "claude-opus-4-5",
     "anthropic/claude-sonnet-4-6": "claude-sonnet-4-6",

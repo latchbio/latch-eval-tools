@@ -264,7 +264,37 @@ FIREWORKS_MODEL_CONFIGS: dict[str, dict] = {
     },
 }
 
+# Direct Anthropic Messages API, with adaptive thinking required by Sonnet 5.5.
+# https://platform.claude.com/docs/en/models/sonnet-5-5/overview
+ANTHROPIC_MODEL_CONFIGS: dict[str, dict] = {
+    "anthropic/claude-sonnet-5-5": {
+        "id": "claude-sonnet-5-5",
+        "name": "Claude Sonnet 5.5",
+        "reasoning": True,
+        "input": ["text", "image"],
+        "contextWindow": 1000000,
+        "maxTokens": 128000,
+        "cost": {"input": 2, "output": 10, "cacheRead": 0.2, "cacheWrite": 2.5},
+        "thinkingLevelMap": {
+            "low": "max",
+            "medium": "max",
+            "high": "max",
+            "xhigh": "max",
+            "max": "max",
+        },
+        "compat": {
+            "forceAdaptiveThinking": True,
+            "supportsTemperature": False,
+        },
+    },
+}
+
 PI_CUSTOM_PROVIDERS = {
+    "anthropic": (
+        "https://api.anthropic.com",
+        "ANTHROPIC_API_KEY",
+        ANTHROPIC_MODEL_CONFIGS,
+    ),
     OPENROUTER_PROVIDER_NAME: (
         OPENROUTER_PROVIDER_BASE_URL,
         "OPENROUTER_API_KEY",
@@ -289,7 +319,7 @@ def pi_custom_provider_config(model_name: str) -> dict:
     return {
         "baseUrl": base_url,
         "apiKey": f"${key}",
-        "api": "openai-completions",
+        "api": "anthropic-messages" if provider == "anthropic" else "openai-completions",
         "models": [model],
     }
 
@@ -1166,7 +1196,10 @@ def _run_cli_agent(
         if (
             agent_type == "pi"
             and model_name
-            and model_name.startswith(("openrouter/", "fireworks/"))
+            and (
+                model_name in ANTHROPIC_MODEL_CONFIGS
+                or model_name.startswith(("openrouter/", "fireworks/"))
+            )
         ):
             _write_pi_custom_models_json(work_dir, model_name)
         _start_cli_container(container_name)
@@ -1773,7 +1806,10 @@ def _run_cli_chunk(
     if agent_type == "pi":
         _write_pi_extension(work_dir, "tool_timeout.js")
         _write_pi_extension(work_dir, "max_turns.js")
-        if model_name and model_name.startswith(("openrouter/", "fireworks/")):
+        if model_name and (
+            model_name in ANTHROPIC_MODEL_CONFIGS
+            or model_name.startswith(("openrouter/", "fireworks/"))
+        ):
             _write_pi_custom_models_json(work_dir, model_name)
         if not parallel_tool_calls:
             _write_pi_extension(work_dir, "single_tool_call.js")
