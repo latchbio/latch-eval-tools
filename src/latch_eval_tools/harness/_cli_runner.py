@@ -184,11 +184,45 @@ OPENROUTER_MODEL_CONFIGS: dict[str, dict] = {
         "contextWindow": 262144,
         "maxTokens": 32768,
         "cost": {"input": 0.08, "output": 0.45, "cacheRead": 0, "cacheWrite": 0},
-        "thinkingLevelMap": {"xhigh": "high", "max": "high"},
+        # Pin enabled thinking levels to this model's highest configured effort.
+        "thinkingLevelMap": {
+            "low": "high",
+            "medium": "high",
+            "high": "high",
+            "xhigh": "high",
+            "max": "high",
+        },
         "compat": {
             "thinkingFormat": "reasoning_effort",
             "supportsReasoningEffort": True,
             "supportsUsageInStreaming": True,
+        },
+    },
+    # OpenRouter advertises reasoning_effort for Ultra; high is its top Pi level.
+    # https://openrouter.ai/api/v1/models/nvidia/nemotron-3-ultra-550b-a55b/endpoints
+    # Conservative limits fit every currently advertised endpoint. Costs use
+    # the lowest-priced endpoint; actual routing may cost more.
+    "openrouter/nvidia/nemotron-3-ultra-550b-a55b": {
+        "id": "nvidia/nemotron-3-ultra-550b-a55b",
+        "name": "Nemotron 3 Ultra",
+        "reasoning": True,
+        "input": ["text"],
+        "contextWindow": 202800,
+        "maxTokens": 16384,
+        "cost": {"input": 0.5, "output": 2.2, "cacheRead": 0.1, "cacheWrite": 0},
+        "thinkingLevelMap": {
+            "low": "high",
+            "medium": "high",
+            "high": "high",
+            "xhigh": "high",
+            "max": "high",
+        },
+        "compat": {
+            "supportsDeveloperRole": False,
+            "thinkingFormat": "openrouter",
+            "supportsReasoningEffort": True,
+            "supportsUsageInStreaming": True,
+            "maxTokensField": "max_tokens",
         },
     },
 }
@@ -212,6 +246,8 @@ FIREWORKS_MODEL_CONFIGS: dict[str, dict] = {
             "maxTokensField": "max_tokens",
         },
     },
+    # Keep the old ID usable for saved run profiles; prefer OpenRouter Ultra
+    # above for configurable reasoning effort.
     "fireworks/accounts/fireworks/models/nemotron-3-ultra-nvfp4": {
         "id": "accounts/fireworks/models/nemotron-3-ultra-nvfp4",
         "name": "Nemotron 3 Ultra NVFP4",

@@ -22,6 +22,11 @@ from latch_eval_tools.harness._cli_runner import (
             "OPENROUTER_API_KEY",
         ),
         (
+            "openrouter/nvidia/nemotron-3-ultra-550b-a55b",
+            "openrouter",
+            "OPENROUTER_API_KEY",
+        ),
+        (
             "fireworks/accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b",
             "fireworks",
             "FIREWORKS_API_KEY",
