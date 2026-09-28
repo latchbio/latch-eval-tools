@@ -64,6 +64,8 @@ def test_sonnet_55_uses_direct_anthropic_api_with_adaptive_thinking():
     assert config["api"] == "anthropic-messages"
     assert config["apiKey"] == "$ANTHROPIC_API_KEY"
     model = config["models"][0]
-    assert "thinkingLevelMap" not in model
+    assert model["thinkingLevelMap"] == dict.fromkeys(
+        ["minimal", "low", "medium", "high", "xhigh", "max"], "max"
+    )
     assert model["compat"]["forceAdaptiveThinking"] is True
     assert model["compat"]["supportsTemperature"] is False

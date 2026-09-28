@@ -312,3 +312,12 @@ def test_pi_chunk_forks_and_ignores_the_aborted_turn(
     extension_index = argv.index(_cli_runner.PI_MAX_TURNS_EXTENSION_CONTAINER_PATH)
     assert argv[extension_index - 1] == "--extension"
     assert argv[argv.index("--max-turns") + 1] == "1"
+
+
+def test_sonnet_55_claude_code_uses_max_effort():
+    command = _cli_runner._build_agent_command(
+        "claudecode", ["claude"], "anthropic/claude-sonnet-5-5",
+        claudecode.MODEL_MAP, None,
+    )
+    assert command[command.index("--model") + 1] == "claude-sonnet-5-5"
+    assert command[command.index("--effort") + 1] == "max"
