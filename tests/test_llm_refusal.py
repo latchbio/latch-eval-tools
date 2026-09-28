@@ -219,3 +219,72 @@ def test_biology_topic_and_network_errors_are_not_refusals():
         "Connection failed: error sending request",
     ):
         assert detect_llm_refusal(agent_output_data={"message": message}) is None
+
+
+def _pi_trajectory(*, error_message: str | None) -> list[dict[str, object]]:
+    # pi stamps a placeholder stop reason on every streamed message and only
+    # records the provider's verdict on the terminal one, under rawStopReason.
+    events: list[dict[str, object]] = [
+        {"type": "session", "id": "01a0ea18", "cwd": "/workspace"}
+    ]
+    for _ in range(10):
+        events.append({"type": "message_start", "message": {"stopReason": "pending"}})
+        events.append(
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "stopReason": "toolUse",
+                    "rawStopReason": "tool_use",
+                },
+            }
+        )
+    terminal: dict[str, object] = {
+        "role": "assistant",
+        "provider": "anthropic",
+        "model": "claude-opus-5-5",
+        "stopReason": "error",
+        "rawStopReason": "refusal",
+    }
+    if error_message is not None:
+        terminal["errorMessage"] = error_message
+    events.append({"type": "message_end", "message": terminal})
+    return events
+
+
+def test_detects_pi_raw_stop_reason_refusal_without_error_text() -> None:
+    refusal = detect_llm_refusal(trajectory_data=_pi_trajectory(error_message=None))
+
+    assert refusal is not None
+    assert refusal.provider == "anthropic"
+    assert refusal.code == "refusal"
+    assert refusal.source == "trajectory"
+
+
+def test_pi_refusal_code_is_not_the_first_streamed_stop_reason() -> None:
+    # Observed in production: the diagnostic came back with code "pending" (the
+    # placeholder on the first streamed message) instead of the refusal.
+    refusal = detect_llm_refusal(
+        trajectory_data=_pi_trajectory(
+            error_message=(
+                "API integrators: you can reduce refusals for your users by "
+                "configuring a fallback model — see https://platform.claude.com"
+                "/docs/en/build-with-claude/refusals-and-fallback"
+            )
+        )
+    )
+
+    assert refusal is not None
+    assert refusal.provider == "anthropic"
+    assert refusal.code == "refusal"
+
+
+def test_normal_pi_run_is_not_a_refusal() -> None:
+    events = [
+        {"type": "message_start", "message": {"stopReason": "pending"}},
+        {
+            "type": "message_end",
+            "message": {"stopReason": "endTurn", "rawStopReason": "end_turn"},
+        },
+    ]
+    assert detect_llm_refusal(trajectory_data=events) is None

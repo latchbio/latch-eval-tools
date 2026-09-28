@@ -130,6 +130,41 @@ def _find_string_field(value: Any, field_names: set[str]) -> str | None:
     return None
 
 
+def _find_string_field_value(
+    value: Any, field_names: set[str], accepted: frozenset[str]
+) -> str | None:
+    """First value of `field_names` anywhere in `value` that is in `accepted`.
+
+    `_find_string_field` returns the first match for the key whatever its value
+    is, which is wrong for streamed trajectories: pi writes
+    `"stopReason": "pending"` on every `message_start`, so the terminal
+    `"rawStopReason": "refusal"` at the end of the run was never the value that
+    got read. That both hid the refusal from the `stop_reason` check (detection
+    then relied on the provider's error text happening to carry a marker) and
+    labelled the diagnostic `code` "pending".
+    """
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in field_names and isinstance(item, str) and item in accepted:
+                return item
+        for item in value.values():
+            found = _find_string_field_value(item, field_names, accepted)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for item in value:
+            found = _find_string_field_value(item, field_names, accepted)
+            if found is not None:
+                return found
+    return None
+
+
+# `rawStopReason` is pi's provider-level stop reason; `stopReason` holds pi's
+# own status ("pending", "error", "toolUse"), so a refusal only ever shows up
+# under the raw field.
+_STOP_REASON_FIELDS = {"stop_reason", "stopReason", "rawStopReason"}
+_REFUSAL_STOP_REASONS = frozenset({"refusal", "sensitive"})
+
 _ANTHROPIC_FALLBACK_MARKERS: tuple[str, ...] = (
     "refusals-and-fallback",
     "configuring a fallback model",
@@ -238,8 +273,18 @@ def _detect_from_value(
     lowered_strings = [item.lower() for item in strings]
     lowered = "\n".join(lowered_strings)
     code = _find_string_field(value, {"code"})
-    stop_reason = _find_string_field(value, {"stop_reason", "stopReason"})
-    finish_reason = _find_string_field(value, {"finish_reason", "finishReason"})
+    refusal_stop_reason = _find_string_field_value(
+        value, _STOP_REASON_FIELDS, _REFUSAL_STOP_REASONS
+    )
+    cyber_policy_code = _find_string_field_value(
+        value, {"code"}, frozenset({"cyber_policy"})
+    )
+    content_filter_reason = _find_string_field_value(
+        value, {"finish_reason", "finishReason"}, frozenset({"content_filter"})
+    )
+    invalid_prompt_code = _find_string_field_value(
+        value, {"code"}, frozenset({"invalid_prompt"})
+    )
 
     anthropic_fallback_hit = any(
         marker in lowered for marker in _ANTHROPIC_FALLBACK_MARKERS
@@ -252,28 +297,28 @@ def _detect_from_value(
     )
 
     if (
-        stop_reason in {"refusal", "sensitive"}
+        refusal_stop_reason is not None
         or anthropic_policy_hit is not None
         or anthropic_fallback_hit
     ):
         return LLMRefusalDiagnostic(
             provider="anthropic",
-            code=code
-            or (stop_reason if stop_reason not in {None, "error"} else None)
-            or "refusal",
+            # The stop reason is the provider's own verdict, so it beats a
+            # `code` picked up from somewhere else in the payload.
+            code=refusal_stop_reason or code or "refusal",
             message=anthropic_policy_hit or _find_message(strings, "anthropic"),
             source=source,
             raw_excerpt=_excerpt(strings),
         )
 
     if (
-        code == "cyber_policy"
+        cyber_policy_code is not None
         or "cyber policy" in lowered
-        or finish_reason == "content_filter"
+        or content_filter_reason is not None
     ):
         return LLMRefusalDiagnostic(
             provider="openai",
-            code=code or finish_reason or "cyber_policy",
+            code=cyber_policy_code or code or content_filter_reason or "cyber_policy",
             message=_find_message(strings, "openai"),
             source=source,
             raw_excerpt=_excerpt(strings),
@@ -313,7 +358,7 @@ def _detect_from_value(
     ):
         return LLMRefusalDiagnostic(
             provider="openai",
-            code=code or "invalid_prompt",
+            code=invalid_prompt_code or code or "invalid_prompt",
             message=(
                 openai_prompt_hit
                 or openai_safety_hit
