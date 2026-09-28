@@ -261,8 +261,9 @@ def test_chunk_timeout_kills_the_agent_inside_the_container(
     ]
 
 
+@pytest.mark.parametrize("model_name", [None, "anthropic/claude-sonnet-5-5"])
 def test_pi_chunk_forks_and_ignores_the_aborted_turn(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, model_name: str | None
 ) -> None:
     sessions_dir = tmp_path / ".pi" / "agent" / "sessions" / "--workspace--"
     sessions_dir.mkdir(parents=True)
@@ -287,6 +288,7 @@ def test_pi_chunk_forks_and_ignores_the_aborted_turn(
         "Continue.",
         tmp_path,
         1,
+        model_name=model_name,
         resume_identifier="session-1",
         fork=True,
     )
@@ -299,9 +301,23 @@ def test_pi_chunk_forks_and_ignores_the_aborted_turn(
     assert [event["type"] for event in trajectory] == ["session"] + ["turn_end"] * 4
     assert (tmp_path / ".pi" / "max_turns.js").exists()
     assert (tmp_path / ".pi" / "tool_timeout.js").exists()
+    if model_name is not None:
+        config = json.loads((tmp_path / ".pi" / "agent" / "models.json").read_text())
+        assert config["providers"]["anthropic"]["api"] == "anthropic-messages"
+        assert config["providers"]["anthropic"]["models"][0]["id"] == "claude-sonnet-5-5"
     [argv] = _docker_calls(calls_file)
+    assert argv[argv.index("--thinking") + 1] == "max"
     assert argv[argv.index("--fork") + 1] == "session-1"
     assert "--session" not in argv
     extension_index = argv.index(_cli_runner.PI_MAX_TURNS_EXTENSION_CONTAINER_PATH)
     assert argv[extension_index - 1] == "--extension"
     assert argv[argv.index("--max-turns") + 1] == "1"
+
+
+def test_sonnet_55_claude_code_uses_max_effort():
+    command = _cli_runner._build_agent_command(
+        "claudecode", ["claude"], "anthropic/claude-sonnet-5-5",
+        claudecode.MODEL_MAP, None,
+    )
+    assert command[command.index("--model") + 1] == "claude-sonnet-5-5"
+    assert command[command.index("--effort") + 1] == "max"

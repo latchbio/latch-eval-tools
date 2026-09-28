@@ -191,6 +191,27 @@ OPENROUTER_MODEL_CONFIGS: dict[str, dict] = {
             "supportsUsageInStreaming": True,
         },
     },
+    # OpenRouter advertises reasoning_effort for Ultra; high is its top Pi level.
+    # https://openrouter.ai/api/v1/models/nvidia/nemotron-3-ultra-550b-a55b/endpoints
+    # Conservative limits fit every currently advertised endpoint. Costs use
+    # the lowest-priced endpoint; actual routing may cost more.
+    "openrouter/nvidia/nemotron-3-ultra-550b-a55b": {
+        "id": "nvidia/nemotron-3-ultra-550b-a55b",
+        "name": "Nemotron 3 Ultra",
+        "reasoning": True,
+        "input": ["text"],
+        "contextWindow": 202800,
+        "maxTokens": 16384,
+        "cost": {"input": 0.5, "output": 2.2, "cacheRead": 0.1, "cacheWrite": 0},
+        "thinkingLevelMap": {"xhigh": "high", "max": "high"},
+        "compat": {
+            "supportsDeveloperRole": False,
+            "thinkingFormat": "openrouter",
+            "supportsReasoningEffort": True,
+            "supportsUsageInStreaming": True,
+            "maxTokensField": "max_tokens",
+        },
+    },
 }
 
 FIREWORKS_PROVIDER_NAME = "fireworks"
@@ -212,6 +233,8 @@ FIREWORKS_MODEL_CONFIGS: dict[str, dict] = {
             "maxTokensField": "max_tokens",
         },
     },
+    # Keep the old ID usable for saved run profiles; prefer OpenRouter Ultra
+    # above for configurable reasoning effort.
     "fireworks/accounts/fireworks/models/nemotron-3-ultra-nvfp4": {
         "id": "accounts/fireworks/models/nemotron-3-ultra-nvfp4",
         "name": "Nemotron 3 Ultra NVFP4",
@@ -228,7 +251,38 @@ FIREWORKS_MODEL_CONFIGS: dict[str, dict] = {
     },
 }
 
+# Direct Anthropic Messages API, with adaptive thinking required by Sonnet 5.5.
+# https://platform.claude.com/docs/en/models/sonnet-5-5/overview
+ANTHROPIC_MODEL_CONFIGS: dict[str, dict] = {
+    "anthropic/claude-sonnet-5-5": {
+        "id": "claude-sonnet-5-5",
+        "name": "Claude Sonnet 5.5",
+        "reasoning": True,
+        "input": ["text", "image"],
+        "contextWindow": 1000000,
+        "maxTokens": 128000,
+        "cost": {"input": 2, "output": 10, "cacheRead": 0.2, "cacheWrite": 2.5},
+        "thinkingLevelMap": {
+            "minimal": "max",
+            "low": "max",
+            "medium": "max",
+            "high": "max",
+            "xhigh": "max",
+            "max": "max",
+        },
+        "compat": {
+            "forceAdaptiveThinking": True,
+            "supportsTemperature": False,
+        },
+    },
+}
+
 PI_CUSTOM_PROVIDERS = {
+    "anthropic": (
+        "https://api.anthropic.com",
+        "ANTHROPIC_API_KEY",
+        ANTHROPIC_MODEL_CONFIGS,
+    ),
     OPENROUTER_PROVIDER_NAME: (
         OPENROUTER_PROVIDER_BASE_URL,
         "OPENROUTER_API_KEY",
@@ -253,7 +307,7 @@ def pi_custom_provider_config(model_name: str) -> dict:
     return {
         "baseUrl": base_url,
         "apiKey": f"${key}",
-        "api": "openai-completions",
+        "api": "anthropic-messages" if provider == "anthropic" else "openai-completions",
         "models": [model],
     }
 
@@ -1130,7 +1184,10 @@ def _run_cli_agent(
         if (
             agent_type == "pi"
             and model_name
-            and model_name.startswith(("openrouter/", "fireworks/"))
+            and (
+                model_name in ANTHROPIC_MODEL_CONFIGS
+                or model_name.startswith(("openrouter/", "fireworks/"))
+            )
         ):
             _write_pi_custom_models_json(work_dir, model_name)
         _start_cli_container(container_name)
@@ -1737,7 +1794,10 @@ def _run_cli_chunk(
     if agent_type == "pi":
         _write_pi_extension(work_dir, "tool_timeout.js")
         _write_pi_extension(work_dir, "max_turns.js")
-        if model_name and model_name.startswith(("openrouter/", "fireworks/")):
+        if model_name and (
+            model_name in ANTHROPIC_MODEL_CONFIGS
+            or model_name.startswith(("openrouter/", "fireworks/"))
+        ):
             _write_pi_custom_models_json(work_dir, model_name)
         if not parallel_tool_calls:
             _write_pi_extension(work_dir, "single_tool_call.js")

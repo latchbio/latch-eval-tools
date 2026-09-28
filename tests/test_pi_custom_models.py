@@ -11,6 +11,7 @@ from latch_eval_tools.harness._cli_runner import (
 @pytest.mark.parametrize(
     ("model", "provider", "api_key"),
     [
+        ("anthropic/claude-sonnet-5-5", "anthropic", "ANTHROPIC_API_KEY"),
         (
             "openrouter/moonshotai/kimi-k3",
             "openrouter",
@@ -18,6 +19,11 @@ from latch_eval_tools.harness._cli_runner import (
         ),
         (
             "openrouter/nvidia/nemotron-3-super-120b-a12b",
+            "openrouter",
+            "OPENROUTER_API_KEY",
+        ),
+        (
+            "openrouter/nvidia/nemotron-3-ultra-550b-a55b",
             "openrouter",
             "OPENROUTER_API_KEY",
         ),
@@ -50,3 +56,16 @@ def test_pi_custom_model_config_written_for_provider(
 def test_pi_custom_model_rejects_unregistered_model(tmp_path):
     with pytest.raises(ValueError, match="No pi fireworks model config registered"):
         _write_pi_custom_models_json(tmp_path, "fireworks/unknown")
+
+
+def test_sonnet_55_uses_direct_anthropic_api_with_adaptive_thinking():
+    config = pi_custom_provider_config("anthropic/claude-sonnet-5-5")
+    assert config["baseUrl"] == "https://api.anthropic.com"
+    assert config["api"] == "anthropic-messages"
+    assert config["apiKey"] == "$ANTHROPIC_API_KEY"
+    model = config["models"][0]
+    assert model["thinkingLevelMap"] == dict.fromkeys(
+        ["minimal", "low", "medium", "high", "xhigh", "max"], "max"
+    )
+    assert model["compat"]["forceAdaptiveThinking"] is True
+    assert model["compat"]["supportsTemperature"] is False
