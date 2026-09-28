@@ -184,14 +184,7 @@ OPENROUTER_MODEL_CONFIGS: dict[str, dict] = {
         "contextWindow": 262144,
         "maxTokens": 32768,
         "cost": {"input": 0.08, "output": 0.45, "cacheRead": 0, "cacheWrite": 0},
-        # Pin enabled thinking levels to this model's highest configured effort.
-        "thinkingLevelMap": {
-            "low": "high",
-            "medium": "high",
-            "high": "high",
-            "xhigh": "high",
-            "max": "high",
-        },
+        "thinkingLevelMap": {"xhigh": "high", "max": "high"},
         "compat": {
             "thinkingFormat": "reasoning_effort",
             "supportsReasoningEffort": True,
@@ -210,13 +203,7 @@ OPENROUTER_MODEL_CONFIGS: dict[str, dict] = {
         "contextWindow": 202800,
         "maxTokens": 16384,
         "cost": {"input": 0.5, "output": 2.2, "cacheRead": 0.1, "cacheWrite": 0},
-        "thinkingLevelMap": {
-            "low": "high",
-            "medium": "high",
-            "high": "high",
-            "xhigh": "high",
-            "max": "high",
-        },
+        "thinkingLevelMap": {"xhigh": "high", "max": "high"},
         "compat": {
             "supportsDeveloperRole": False,
             "thinkingFormat": "openrouter",
@@ -275,13 +262,6 @@ ANTHROPIC_MODEL_CONFIGS: dict[str, dict] = {
         "contextWindow": 1000000,
         "maxTokens": 128000,
         "cost": {"input": 2, "output": 10, "cacheRead": 0.2, "cacheWrite": 2.5},
-        "thinkingLevelMap": {
-            "low": "max",
-            "medium": "max",
-            "high": "max",
-            "xhigh": "max",
-            "max": "max",
-        },
         "compat": {
             "forceAdaptiveThinking": True,
             "supportsTemperature": False,
