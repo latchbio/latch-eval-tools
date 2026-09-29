@@ -223,6 +223,53 @@ def test_classifies_terminal_openrouter_rate_limit(
     )
 
 
+@pytest.mark.parametrize(
+    ("error_message", "status_code", "retryable", "capacity_limited"),
+    [
+        (
+            '429: {"message":"Provider returned error","code":429,"metadata":'
+            '{"raw":"quota exhausted","previous_errors":[... [truncated 540 chars]'
+            '\n{"error":{"code":429,"status":"RESOURCE_EXHAUSTED"}}',
+            429,
+            True,
+            True,
+        ),
+        ('429: {"code":429}\n{"error":{"code":429}}', 429, True, True),
+        ("429: Too Many Requests", 429, True, True),
+        ("429: []", 429, True, True),
+        ('503 {"message":"upstream unavailable... [truncated]', 503, True, False),
+        ('402: {"message":"Insufficient credits... [truncated]', 402, False, False),
+    ],
+)
+def test_classifies_pi_http_status_without_a_valid_json_body(
+    error_message: str,
+    status_code: int,
+    retryable: bool,
+    capacity_limited: bool,
+) -> None:
+    failure = _cli_runner.classify_terminal_provider_failure(
+        "pi",
+        [
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "provider": "openrouter",
+                    "stopReason": "error",
+                    "errorMessage": error_message,
+                },
+            }
+        ],
+    )
+
+    assert failure is not None
+    assert failure.status_code == status_code
+    assert failure.retry_after_seconds is None
+    assert failure.retryable is retryable
+    assert failure.capacity_limited is capacity_limited
+    assert failure.message == error_message[: _cli_runner.PROVIDER_MESSAGE_MAX_CHARS]
+
+
 def test_status_wins_over_fireworks_error_type() -> None:
     provider_payload = {
         "error": {
@@ -368,7 +415,7 @@ def test_classifies_permanent_gemini_failure_by_status() -> None:
                 "message": {
                     "role": "assistant",
                     "stopReason": "error",
-                    "errorMessage": "429: []",
+                    "errorMessage": "4290: []",
                 },
             }
         ],
