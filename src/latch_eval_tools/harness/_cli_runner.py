@@ -459,15 +459,15 @@ def _json_object(value: str) -> dict[str, object] | None:
 def _provider_error_payload(
     error_message: str,
 ) -> tuple[int | None, dict[str, object]] | None:
+    # Pi can truncate long provider bodies or append a second JSON object.
+    # The explicit HTTP error status still controls retry/backoff in that case.
+    status = re.match(r"^\s*([45][0-9]{2})(?=[:\s])", error_message)
+    prefix_status = int(status[1]) if status is not None else None
     json_start = error_message.find("{")
-    if json_start < 0:
+    payload = _json_object(error_message[json_start:]) if json_start >= 0 else None
+    if payload is None and prefix_status is None:
         return None
-    prefix = error_message[:json_start].strip().removesuffix(":").strip()
-    prefix_status = int(prefix) if prefix.isdigit() else None
-    payload = _json_object(error_message[json_start:])
-    if payload is None:
-        return None
-    return prefix_status, payload
+    return prefix_status, payload or {}
 
 
 def _payload_error(payload: dict[str, object]) -> dict[str, object] | None:
