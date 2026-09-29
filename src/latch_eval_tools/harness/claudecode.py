@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 from latch_eval_tools.harness._cli_runner import (
+    DEFAULT_PROVIDER_RETRY_WAIT_SECONDS,
     EVAL_TIMEOUT,
     CliChunkResult,
     _run_cli_agent,
@@ -60,6 +61,7 @@ def run_claudecode_task(
     benchmark: bool = False,
     switch_models_on_flag: bool | None = None,
     completion_file_path: str | None = None,
+    provider_retry_wait_seconds: float = DEFAULT_PROVIDER_RETRY_WAIT_SECONDS,
 ) -> dict:
     if not os.environ.get("ANTHROPIC_API_KEY"):
         raise ValueError(
@@ -85,6 +87,7 @@ def run_claudecode_task(
         completion=completion,
         benchmark=benchmark,
         completion_file_path=completion_file_path,
+        provider_retry_wait_seconds=provider_retry_wait_seconds,
     )
 
 
