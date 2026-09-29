@@ -377,9 +377,7 @@ def _prepare_paths_for_distance(
         reference = translated_reference / coordinate_scale
         submitted = translated_submitted / coordinate_scale
     else:
-        coordinate_scale = np.max(
-            np.abs(np.vstack([reference, submitted]))
-        ).item()
+        coordinate_scale = np.max(np.abs(np.vstack([reference, submitted]))).item()
         if not math.isfinite(coordinate_scale) or coordinate_scale <= 0:
             raise ValueError("path scale must be finite and positive")
         reference = reference / coordinate_scale
@@ -1377,18 +1375,8 @@ def paths_list_to_paths_list_match(
         for submitted in submissions:
             submitted_segments = len(submitted) - 1
             submitted_pieces = 3 * submitted_segments
-            work += (
-                reference_segments
-                * submitted_pieces
-                * (submitted_pieces - 1)
-                // 2
-            )
-            work += (
-                submitted_segments
-                * reference_pieces
-                * (reference_pieces - 1)
-                // 2
-            )
+            work += reference_segments * submitted_pieces * (submitted_pieces - 1) // 2
+            work += submitted_segments * reference_pieces * (reference_pieces - 1) // 2
     if work > _MAX_PATH_LIST_WORK:
         raise ValueError("path list exceeds supported matching complexity")
 

@@ -187,9 +187,7 @@ class PathRadiusListGrader(BinaryGrader):
                     err_label=f"reference_paths[{index}]",
                 )
         except ValueError as exc:
-            return configuration_error_result(
-                agent_answer, _PATH_GRADER_NAME, str(exc)
-            )
+            return configuration_error_result(agent_answer, _PATH_GRADER_NAME, str(exc))
 
         radius = _finite_float(config.get("tolerance_radius"))
         if radius is None or radius < 0:
