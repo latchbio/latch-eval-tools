@@ -9,8 +9,10 @@ from .base import (
     get_nested_value,
 )
 from .geometry import (
+    GeometryBackendError,
     locations_list_to_locations_list_match,
     normalize_coords_list,
+    normalize_polygon_list,
     polygons_list_to_polygons_list_match,
 )
 from .number_contract import is_finite_number
@@ -42,6 +44,20 @@ def _failure(
         passed=False,
         metrics={},
         reasoning=f"{grader_name}: FAIL\n\n  x {reason}",
+        agent_answer=agent_answer if isinstance(agent_answer, dict) else None,
+        score=0.0,
+    )
+
+
+def _system_failure(
+    agent_answer: object,
+    reason: str,
+    grader_name: str,
+) -> GraderResult:
+    return GraderResult(
+        passed=False,
+        metrics={"grader_error": reason, "grader_system_error": True},
+        reasoning=f"{grader_name}: SYSTEM ERROR\n\n  x {reason}",
         agent_answer=agent_answer if isinstance(agent_answer, dict) else None,
         score=0.0,
     )
@@ -85,11 +101,11 @@ class LocationRadiusListGrader(BinaryGrader):
             )
 
         pass_threshold = _finite_float(config.get("pass_threshold", 1.0))
-        if pass_threshold is None or not 0 <= pass_threshold <= 1:
+        if pass_threshold is None or not 0 < pass_threshold <= 1:
             return configuration_error_result(
                 agent_answer,
                 _GRADER_NAME,
-                "pass_threshold must be a finite number in [0, 1]",
+                "pass_threshold must be a finite number in (0, 1]",
             )
 
         field = config.get("answer_field")
@@ -119,7 +135,7 @@ class LocationRadiusListGrader(BinaryGrader):
             )
 
         stats = locations_list_to_locations_list_match(references, submissions, radius)
-        score = cast(float, stats["recall"])
+        score = cast(float, stats["f1"])
         passed = score >= pass_threshold
         metrics = {
             **stats,
@@ -148,27 +164,28 @@ class PolygonIoUListGrader(BinaryGrader):
             )
 
         iou_threshold = _finite_float(config.get("iou_threshold"))
-        if iou_threshold is None or not 0 <= iou_threshold <= 1:
+        if iou_threshold is None or not 0 < iou_threshold <= 1:
             return configuration_error_result(
                 agent_answer,
                 _POLYGON_GRADER_NAME,
-                "iou_threshold must be a finite number in [0, 1]",
+                "iou_threshold must be a finite number in (0, 1]",
             )
 
         references = config.get("reference_polygons")
         try:
-            polygons_list_to_polygons_list_match(references, [], iou_threshold)
+            if not normalize_polygon_list(references, "reference polygons"):
+                raise ValueError("reference polygons must not be empty")
         except ValueError as exc:
             return configuration_error_result(
                 agent_answer, _POLYGON_GRADER_NAME, str(exc)
             )
 
         pass_threshold = _finite_float(config.get("pass_threshold", 1.0))
-        if pass_threshold is None or not 0 <= pass_threshold <= 1:
+        if pass_threshold is None or not 0 < pass_threshold <= 1:
             return configuration_error_result(
                 agent_answer,
                 _POLYGON_GRADER_NAME,
-                "pass_threshold must be a finite number in [0, 1]",
+                "pass_threshold must be a finite number in (0, 1]",
             )
 
         field = config.get("answer_field")
@@ -198,10 +215,12 @@ class PolygonIoUListGrader(BinaryGrader):
             stats = polygons_list_to_polygons_list_match(
                 references, submitted, iou_threshold
             )
+        except GeometryBackendError as exc:
+            return _system_failure(agent_answer, str(exc), _POLYGON_GRADER_NAME)
         except ValueError as exc:
             return _failure(agent_answer, str(exc), _POLYGON_GRADER_NAME)
 
-        score = cast(float, stats["recall"])
+        score = cast(float, stats["f1"])
         passed = score >= pass_threshold
         metrics = {
             **stats,

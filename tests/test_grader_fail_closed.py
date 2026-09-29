@@ -16,7 +16,7 @@ from __future__ import annotations
 import ast
 import pathlib
 
-import pytest
+import pytest  # pyright: ignore[reportMissingImports]
 
 from latch_eval_tools.graders import (
     GRADER_REGISTRY,
@@ -49,6 +49,16 @@ CONFIGS: dict[str, dict] = {
     },
     "marker_gene_separation": {"scoring": {"pass_thresholds": {}}},
     "spatial_adjacency": {"scoring": {"pass_thresholds": {}}},
+    "location_radius": {
+        "reference_locations": [[10.0, 20.0]],
+        "tolerance_radius": 5.0,
+        "answer_field": "locations",
+    },
+    "polygon_iou_list": {
+        "reference_polygons": [[[0, 0], [1, 0], [1, 1], [0, 1]]],
+        "iou_threshold": 0.5,
+        "answer_field": "polygons",
+    },
     "multiple_choice": {"correct_answer": "C"},
     "refusal_vocab": {"refusal_vocab": ["REFUSE"], "expected_decision": "REFUSE"},
     "predicate_leaf": {
@@ -129,6 +139,8 @@ CORRECT_ANSWERS: dict[str, dict] = {
         "pct_ic_mixed_within_55um": 70.0,
         "adjacency_pass": True,
     },
+    "location_radius": {"locations": [[13.0, 24.0]]},
+    "polygon_iou_list": {"polygons": [[[0, 0], [1, 0], [1, 1], [0, 1]]]},
     "multiple_choice": {"answer": "C"},
     "refusal_vocab": {"decision": "REFUSE"},
     "predicate_leaf": {"x": 1},
