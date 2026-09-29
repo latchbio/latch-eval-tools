@@ -1,0 +1,6 @@
+{
+  "id": "grok-smoke",
+  "task": "This is a harness smoke test. Do NOT analyze any data. Simply write the JSON object {\"answer\": 42} to /workspace/eval_answer.json, then issue the completion signal. There is no data to download.",
+  "data_node": null,
+  "grader": null
+}

@@ -3,6 +3,7 @@ return bool; scalar ops (f1, jaccard, weighted_label) return float."""
 
 import math
 import re
+import json
 from typing import Any
 
 from .base import MISSING, BinaryGrader, GraderResult
@@ -492,6 +493,8 @@ class PredicateLeafGrader(BinaryGrader):
                 threshold=threshold,
                 field_label=field_label,
                 name=name,
+                observed=value,
+                predicate=predicate,
             ),
             agent_answer=agent_answer,
             score=score,
@@ -520,6 +523,36 @@ def _resolve_field(agent_answer: Any, answer_field: Any) -> tuple[Any, str, str 
     return agent_answer.get(answer_field, MISSING), answer_field, None
 
 
+#: Agents write prose into fields that expect a token, so the observed value
+#: can be a paragraph. Long enough to see the mismatch, short enough to read.
+_MAX_REASONING_VALUE_CHARS = 200
+
+
+def _render_value(value: Any) -> str:
+    if value is MISSING:
+        return "<missing>"
+    text = value if isinstance(value, str) else json.dumps(value, default=str)
+    if len(text) <= _MAX_REASONING_VALUE_CHARS:
+        return text
+    return f"{text[:_MAX_REASONING_VALUE_CHARS]}… ({len(text)} chars)"
+
+
+def _expected_from_predicate(predicate: Any) -> str | None:
+    """What the predicate compares against, when it says so plainly.
+
+    Compound predicates (and/or/not) have no single expectation, so nothing
+    is claimed for them rather than something misleading.
+    """
+
+    if not isinstance(predicate, dict):
+        return None
+    if "arg" in predicate:
+        return _render_value(predicate["arg"])
+    if "args" in predicate:
+        return _render_value(predicate["args"])
+    return None
+
+
 def _format_reasoning(
     *,
     passed: bool,
@@ -530,12 +563,22 @@ def _format_reasoning(
     threshold: float,
     field_label: str,
     name: str | None,
+    observed: Any = MISSING,
+    predicate: Any = None,
 ) -> str:
     label = f"'{name}'" if name else "(unnamed)"
     verdict = "PASS" if passed else "FAIL"
     lines = [f"Predicate-leaf {label} [op={op}, role={role}]: {verdict}"]
     if field_label and field_label != "<root>":
         lines.append(f"  field: {field_label}")
+    # The two values the verdict is about. Without them a failure says only
+    # that something was wrong, which is not enough to tell a wrong answer
+    # from a wrong grader - the question a failing eval actually raises.
+    if observed is not MISSING:
+        lines.append(f"  observed: {_render_value(observed)}")
+    expected = _expected_from_predicate(predicate)
+    if expected is not None:
+        lines.append(f"  expected: {op} {expected}")
     if is_scalar:
         lines.append(f"  score: {float(raw_result):.4f} (threshold: {threshold})")
     else:

@@ -1,0 +1,14 @@
+# Minimal image for capturing grok-build's real streaming-json event schema.
+# Just the grok CLI on a slim base -- no R / bio stack. Build is seconds, not
+# minutes, so we can confirm the install line works and inspect the ACP events
+# BEFORE committing to the full agent_env build + a real eval.
+#
+#   docker build -f examples/Dockerfile.grok-smoke -t grok-smoke .
+#
+FROM python:3.12-slim-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates git jq && rm -rf /var/lib/apt/lists/*
+ENV IS_SANDBOX=1
+RUN curl -fsSL https://x.ai/cli/install.sh | bash -s 1.0.3
+ENV PATH="/root/.local/bin:$PATH"
+RUN grok --version
