@@ -14,8 +14,12 @@ from .geometry import (
     iou_volume_to_volume,
     location_within_radius_match,
     normalize_coords,
+    normalize_path_component_scales,
+    normalize_path_coords,
     normalize_polygon_coords,
     normalize_volume_coords,
+    path_within_radius_match,
+    validate_path_numeric_support,
 )
 from .number_contract import is_finite_number
 
@@ -37,6 +41,7 @@ SCALAR_OPS: set[str] = {"f1", "jaccard", "weighted_label"}
 
 VISUAL_OPS: set[str] = {
     "location_within_radius",
+    "path_within_radius",
     "polygon_iou",
     "volume_iou",
 }
@@ -317,6 +322,30 @@ def predicate_configuration_error(
             return f"{path}.tolerance_radius must be a finite non-negative number"
         return None
 
+    if op == "path_within_radius":
+        try:
+            reference_path = normalize_path_coords(
+                predicate.get("reference_path"),
+                f"{path}.reference_path",
+            )
+            scales = normalize_path_component_scales(
+                predicate.get("component_scales"),
+                len(reference_path[0]),
+                f"{path}.component_scales",
+            )
+            validate_path_numeric_support(
+                reference_path,
+                component_scales=scales,
+                err_label=f"{path}.reference_path",
+            )
+        except ValueError as exc:
+            return str(exc)
+
+        radius = _finite_float(predicate.get("tolerance_radius"))
+        if radius is None or radius < 0:
+            return f"{path}.tolerance_radius must be a finite non-negative number"
+        return None
+
     if op == "polygon_iou":
         try:
             normalize_polygon_coords(
@@ -439,6 +468,15 @@ def evaluate_predicate(pred: Any, value: Any) -> bool | float:
         return _require_finite_float(pred["table"].get(value, pred.get("default", 0)))
     if op == "polygon_iou":
         return iou_polygon_to_polygon(pred["reference_polygon"], value)
+    if op == "path_within_radius":
+        return bool(
+            path_within_radius_match(
+                pred["reference_path"],
+                value,
+                pred["tolerance_radius"],
+                component_scales=pred.get("component_scales"),
+            )
+        )
     if op == "volume_iou":
         return iou_volume_to_volume(pred["reference_volume"], value)
 

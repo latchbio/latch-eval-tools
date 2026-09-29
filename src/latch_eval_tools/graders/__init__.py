@@ -35,7 +35,11 @@ from .rubric import (
     rubric_criterion_output_config,
 )
 from .spatial import SpatialAdjacencyGrader
-from .visual import LocationRadiusListGrader, PolygonIoUListGrader
+from .visual import (
+    LocationRadiusListGrader,
+    PathRadiusListGrader,
+    PolygonIoUListGrader,
+)
 
 GRADER_REGISTRY = {
     "numeric_tolerance": NumericToleranceGrader,
@@ -47,6 +51,7 @@ GRADER_REGISTRY = {
     "marker_gene_separation": MarkerGeneSeparationGrader,
     "spatial_adjacency": SpatialAdjacencyGrader,
     "location_radius": LocationRadiusListGrader,
+    "path_radius_list": PathRadiusListGrader,
     "polygon_iou_list": PolygonIoUListGrader,
     "multiple_choice": MultipleChoiceGrader,
     "refusal_vocab": RefusalVocabGrader,
@@ -86,6 +91,7 @@ __all__ = [
     "DistributionComparisonGrader",
     "SpatialAdjacencyGrader",
     "LocationRadiusListGrader",
+    "PathRadiusListGrader",
     "PolygonIoUListGrader",
     "MultipleChoiceGrader",
     "RefusalVocabGrader",

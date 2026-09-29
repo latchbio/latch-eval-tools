@@ -14,6 +14,7 @@ from latch_eval_tools.graders import (
     MultipleChoiceGrader,
     NumericRangeGrader,
     NumericToleranceGrader,
+    PathRadiusListGrader,
     PolygonIoUListGrader,
     PredicateLeafGrader,
     RefusalVocabGrader,
@@ -90,6 +91,7 @@ __all__ = [
     "DistributionComparisonGrader",
     "SpatialAdjacencyGrader",
     "LocationRadiusListGrader",
+    "PathRadiusListGrader",
     "PolygonIoUListGrader",
     "MultipleChoiceGrader",
     "RefusalVocabGrader",
@@ -105,4 +107,4 @@ __all__ = [
     "detect_llm_refusal",
 ]
 
-__version__ = "0.4.40"
+__version__ = "0.4.52"

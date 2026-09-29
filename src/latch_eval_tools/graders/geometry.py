@@ -21,6 +21,13 @@ _VOL_PLAN_TOL = 1e-6
 _VOL_MIN_RING_STEP = 0.0
 _VOL_SAMPLES_PER_RING = 64
 _MAX_PATH_POINTS = 128
+_MAX_PATH_LIST_COUNT = 128
+_MAX_PATH_LIST_POINTS = 4096
+_MAX_PATH_LIST_WORK = 10_000_000
+_MAX_PATH_INTERSECTION_CHECKS = 3_000_000
+_MAX_PATH_DISTANCE_EVALUATIONS = 75_000_000
+_PATH_CANDIDATE_BATCH_SIZE = 4096
+_PATH_MIN_RELATIVE_SCALE = 1e-150
 
 
 class GeometryBackendError(RuntimeError):
@@ -104,9 +111,9 @@ def normalize_path_coords(path: object, err_label: str) -> list[list[float]]:
         raise ValueError(f"{err_label} must contain at most {_MAX_PATH_POINTS} points")
 
     dimension = len(points[0])
-    if dimension not in (2, 3):
+    if dimension not in (2, 3, 4):
         raise ValueError(
-            f"{err_label} points must have exactly two or three coordinates"
+            f"{err_label} points must have exactly two, three, or four coordinates"
         )
     if any(len(point) != dimension for point in points[1:]):
         raise ValueError(f"{err_label} points must have matching dimensions")
@@ -114,6 +121,42 @@ def normalize_path_coords(path: object, err_label: str) -> list[list[float]]:
         raise ValueError(f"{err_label} must have positive length")
 
     return points
+
+
+def normalize_path_list(paths: object, err_label: str) -> list[list[list[float]]]:
+    if not isinstance(paths, list):
+        raise ValueError(f"{err_label} must be a list of paths")
+    if len(paths) > _MAX_PATH_LIST_COUNT:
+        raise ValueError(
+            f"{err_label} must contain at most {_MAX_PATH_LIST_COUNT} paths"
+        )
+
+    normalized = [
+        normalize_path_coords(path, f"{err_label}[{index}]")
+        for index, path in enumerate(paths)
+    ]
+    if sum(len(path) for path in normalized) > _MAX_PATH_LIST_POINTS:
+        raise ValueError(
+            f"{err_label} must contain at most {_MAX_PATH_LIST_POINTS} total points"
+        )
+    return normalized
+
+
+def normalize_path_component_scales(
+    component_scales: object, dimension: int, err_label: str = "component_scales"
+) -> list[float]:
+    if component_scales is None:
+        return [1.0] * dimension
+
+    scales = normalize_coords(component_scales, err_label)
+    if len(scales) != dimension:
+        raise ValueError(f"{err_label} must contain exactly {dimension} values")
+    if any(scale <= 0 for scale in scales):
+        raise ValueError(f"{err_label} values must be positive")
+    maximum = max(scales)
+    if min(scale / maximum for scale in scales) < _PATH_MIN_RELATIVE_SCALE:
+        raise ValueError(f"{err_label} exceed supported numeric precision")
+    return scales
 
 
 def _point_to_path_distances(points: np.ndarray, path: np.ndarray) -> np.ndarray:
@@ -238,7 +281,13 @@ def _quadratic_intersections(
     a = first[2] - second[2]
     b = first[3] - second[3]
     c = first[4] - second[4]
-    tolerance = np.finfo(float).eps * 64 * max(abs(a), abs(b), abs(c), 1.0)
+    coefficient_scale = max(abs(a), abs(b), abs(c))
+    if coefficient_scale == 0:
+        return []
+    a /= coefficient_scale
+    b /= coefficient_scale
+    c /= coefficient_scale
+    tolerance = np.finfo(float).eps * 64
     if abs(a) <= tolerance:
         if abs(b) <= tolerance:
             return []
@@ -259,6 +308,8 @@ def _quadratic_intersections(
 
 def _directed_path_hausdorff(source: np.ndarray, target: np.ndarray) -> float:
     maximum = 0.0
+    intersection_checks = 0
+    distance_evaluations = 0
     for source_start, source_end in pairwise(source):
         source_delta = source_end - source_start
         pieces = [
@@ -274,13 +325,19 @@ def _directed_path_hausdorff(source: np.ndarray, target: np.ndarray) -> float:
         candidates = {0.0, 1.0}
         for piece in pieces:
             candidates.update((piece[0], piece[1]))
+        intersection_checks += len(pieces) * (len(pieces) - 1) // 2
+        if intersection_checks > _MAX_PATH_INTERSECTION_CHECKS:
+            raise ValueError("path comparison exceeds supported complexity")
         for index, first in enumerate(pieces):
             for second in pieces[index + 1 :]:
                 candidates.update(_quadratic_intersections(first, second))
 
         parameters = np.asarray(sorted(candidates), dtype=float)
-        for offset in range(0, len(parameters), 4096):
-            batch = parameters[offset : offset + 4096]
+        distance_evaluations += len(parameters) * (len(target) - 1)
+        if distance_evaluations > _MAX_PATH_DISTANCE_EVALUATIONS:
+            raise ValueError("path comparison exceeds supported complexity")
+        for offset in range(0, len(parameters), _PATH_CANDIDATE_BATCH_SIZE):
+            batch = parameters[offset : offset + _PATH_CANDIDATE_BATCH_SIZE]
             points = source_start + batch[:, np.newaxis] * source_delta
             maximum = max(
                 maximum,
@@ -289,20 +346,20 @@ def _directed_path_hausdorff(source: np.ndarray, target: np.ndarray) -> float:
     return maximum
 
 
-def path_hausdorff_distance(reference_path: object, submitted_path: object) -> float:
-    reference = np.asarray(
-        normalize_path_coords(reference_path, "reference path"), dtype=float
-    )
-    submitted = np.asarray(
-        normalize_path_coords(submitted_path, "submitted path"), dtype=float
-    )
-    if reference.shape[1] != submitted.shape[1]:
-        raise ValueError("reference path and submitted path dimensions must match")
-
+def _prepare_paths_for_distance(
+    reference: np.ndarray,
+    submitted: np.ndarray,
+    scales: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, float, float]:
+    maximum_component_scale = np.max(scales).item()
+    relative_scales = scales / maximum_component_scale
     nonzero_segments = [
         [not np.array_equal(start, end) for start, end in pairwise(path)]
         for path in (reference, submitted)
     ]
+
+    reference = reference * relative_scales
+    submitted = submitted * relative_scales
     origin = reference[0].copy()
     with np.errstate(over="ignore", invalid="ignore"):
         translated_reference = reference - origin
@@ -312,21 +369,24 @@ def path_hausdorff_distance(reference_path: object, submitted_path: object) -> f
         np.isfinite(translated_reference).all()
         and np.isfinite(translated_submitted).all()
     ):
-        scale = np.max(
+        coordinate_scale = np.max(
             np.abs(np.vstack([translated_reference, translated_submitted]))
         ).item()
-        reference = translated_reference / scale
-        submitted = translated_submitted / scale
+        if not math.isfinite(coordinate_scale) or coordinate_scale <= 0:
+            raise ValueError("path scale must be finite and positive")
+        reference = translated_reference / coordinate_scale
+        submitted = translated_submitted / coordinate_scale
     else:
-        scale = np.max(np.abs(np.vstack([reference, submitted]))).item()
-        reference = reference / scale
-        submitted = submitted / scale
+        coordinate_scale = np.max(
+            np.abs(np.vstack([reference, submitted]))
+        ).item()
+        if not math.isfinite(coordinate_scale) or coordinate_scale <= 0:
+            raise ValueError("path scale must be finite and positive")
+        reference = reference / coordinate_scale
+        submitted = submitted / coordinate_scale
         scaled_origin = reference[0].copy()
         reference -= scaled_origin
         submitted -= scaled_origin
-
-    if not math.isfinite(scale) or scale <= 0:
-        raise ValueError("path scale must be finite and positive")
 
     segment_lengths = []
     for path, path_nonzero_segments in zip(
@@ -345,28 +405,76 @@ def path_hausdorff_distance(reference_path: object, submitted_path: object) -> f
             segment_lengths.append(length)
 
     longest_segment = max(segment_lengths)
-    if min(segment_lengths) < longest_segment * 1e-150:
+    if min(segment_lengths) < longest_segment * _PATH_MIN_RELATIVE_SCALE:
         raise ValueError("path segment scales exceed supported numeric precision")
 
+    return reference, submitted, coordinate_scale, maximum_component_scale
+
+
+def validate_path_numeric_support(
+    path: object,
+    *,
+    component_scales: object = None,
+    err_label: str = "path",
+) -> None:
+    points = np.asarray(normalize_path_coords(path, err_label), dtype=float)
+    scales = np.asarray(
+        normalize_path_component_scales(component_scales, points.shape[1]),
+        dtype=float,
+    )
+    _prepare_paths_for_distance(points, points, scales)
+
+
+def path_hausdorff_distance(
+    reference_path: object,
+    submitted_path: object,
+    *,
+    component_scales: object = None,
+) -> float:
+    reference = np.asarray(
+        normalize_path_coords(reference_path, "reference path"), dtype=float
+    )
+    submitted = np.asarray(
+        normalize_path_coords(submitted_path, "submitted path"), dtype=float
+    )
+    if reference.shape[1] != submitted.shape[1]:
+        raise ValueError("reference path and submitted path dimensions must match")
+
+    scales = np.asarray(
+        normalize_path_component_scales(component_scales, reference.shape[1]),
+        dtype=float,
+    )
+    reference, submitted, coordinate_scale, maximum_component_scale = (
+        _prepare_paths_for_distance(reference, submitted, scales)
+    )
     normalized_distance = max(
         _directed_path_hausdorff(reference, submitted),
         _directed_path_hausdorff(submitted, reference),
     )
-    distance = normalized_distance * scale
+    distance = normalized_distance * coordinate_scale * maximum_component_scale
     if not math.isfinite(distance):
         raise ValueError("path distance must be finite")
     return distance
 
 
 def path_within_radius_match(
-    reference_path: object, submitted_path: object, radius: float
+    reference_path: object,
+    submitted_path: object,
+    radius: float,
+    *,
+    component_scales: object = None,
 ) -> float:
     if not is_finite_number(radius) or radius < 0:
         raise ValueError("radius must be a finite non-negative number")
 
     return (
         1.0
-        if path_hausdorff_distance(reference_path, submitted_path) <= radius
+        if path_hausdorff_distance(
+            reference_path,
+            submitted_path,
+            component_scales=component_scales,
+        )
+        <= radius
         else 0.0
     )
 
@@ -1237,6 +1345,103 @@ def volume_in_volume_gradient(
         return 0.0
 
     return (iou3d - threshold_null) / (threshold_full - threshold_null)
+
+
+def paths_list_to_paths_list_match(
+    reference_paths: object,
+    submitted_paths: object,
+    radius: float,
+    *,
+    component_scales: object = None,
+) -> dict[str, object]:
+    if not is_finite_number(radius) or radius < 0:
+        raise ValueError("radius must be a finite non-negative number")
+
+    references = normalize_path_list(reference_paths, "reference paths")
+    submissions = normalize_path_list(submitted_paths, "submitted paths")
+    if not references:
+        raise ValueError("reference paths must not be empty")
+
+    dimension = len(references[0][0])
+    if any(len(path[0]) != dimension for path in references):
+        raise ValueError("reference paths must have matching dimensions")
+    if any(len(path[0]) != dimension for path in submissions):
+        raise ValueError(
+            f"submitted paths must contain exactly {dimension} coordinates per point"
+        )
+    scales = normalize_path_component_scales(component_scales, dimension)
+    work = 0
+    for reference in references:
+        reference_segments = len(reference) - 1
+        reference_pieces = 3 * reference_segments
+        for submitted in submissions:
+            submitted_segments = len(submitted) - 1
+            submitted_pieces = 3 * submitted_segments
+            work += (
+                reference_segments
+                * submitted_pieces
+                * (submitted_pieces - 1)
+                // 2
+            )
+            work += (
+                submitted_segments
+                * reference_pieces
+                * (reference_pieces - 1)
+                // 2
+            )
+    if work > _MAX_PATH_LIST_WORK:
+        raise ValueError("path list exceeds supported matching complexity")
+
+    matched_reference_indices: set[int] = set()
+    matched_submitted_indices: set[int] = set()
+    matches: list[dict[str, object]] = []
+
+    for submitted_index, submitted in enumerate(submissions):
+        for reference_index, reference in enumerate(references):
+            if reference_index in matched_reference_indices:
+                continue
+
+            distance = path_hausdorff_distance(
+                reference,
+                submitted,
+                component_scales=scales,
+            )
+            if distance <= radius:
+                matched_reference_indices.add(reference_index)
+                matched_submitted_indices.add(submitted_index)
+                matches.append(
+                    {
+                        "reference_index": reference_index,
+                        "submitted_index": submitted_index,
+                        "distance": distance,
+                    }
+                )
+                break
+
+    reference_count = len(references)
+    submitted_count = len(submissions)
+    matched_count = len(matches)
+    recall = matched_count / reference_count
+    precision = matched_count / submitted_count if submitted_count else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+
+    return {
+        "reference_count": reference_count,
+        "submitted_count": submitted_count,
+        "matched_count": matched_count,
+        "recall": recall,
+        "precision": precision,
+        "f1": f1,
+        "matches": matches,
+        "unmatched_reference_indices": sorted(
+            set(range(reference_count)) - matched_reference_indices
+        ),
+        "unmatched_submitted_indices": sorted(
+            set(range(submitted_count)) - matched_submitted_indices
+        ),
+        "tolerance_radius": radius,
+        "component_scales": scales,
+    }
 
 
 def locations_list_to_locations_list_match(

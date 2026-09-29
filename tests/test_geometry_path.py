@@ -18,6 +18,53 @@ def test_path_distance_supports_2d_and_3d_paths() -> None:
     )
 
 
+def test_path_distance_supports_scaled_4d_time() -> None:
+    reference = [[0, 0, 0, 0], [10, 0, 0, 10]]
+    submitted = [[0, 0, 0, 2], [10, 0, 0, 12]]
+
+    assert math.isclose(path_hausdorff_distance(reference, submitted), 2.0)
+    assert math.isclose(
+        path_hausdorff_distance(
+            reference,
+            submitted,
+            component_scales=[1, 1, 1, 0.25],
+        ),
+        0.5,
+    )
+    assert (
+        path_within_radius_match(
+            reference,
+            submitted,
+            0.5,
+            component_scales=[1, 1, 1, 0.25],
+        )
+        == 1.0
+    )
+
+
+def test_component_scales_match_explicit_coordinate_scaling() -> None:
+    reference = [[0, 0, 0, 0], [2, 1, 3, 4], [4, 3, 5, 8]]
+    submitted = [[0, 1, 0, 1], [2, 2, 2, 5], [5, 3, 6, 9]]
+    scales = [2, 0.5, 3, 0.25]
+    scaled_reference = [
+        [value * scale for value, scale in zip(point, scales, strict=True)]
+        for point in reference
+    ]
+    scaled_submitted = [
+        [value * scale for value, scale in zip(point, scales, strict=True)]
+        for point in submitted
+    ]
+
+    assert math.isclose(
+        path_hausdorff_distance(
+            reference,
+            submitted,
+            component_scales=scales,
+        ),
+        path_hausdorff_distance(scaled_reference, scaled_submitted),
+    )
+
+
 def test_path_radius_is_symmetric() -> None:
     reference = [[0, 0], [10, 0]]
 
@@ -74,6 +121,10 @@ def test_path_validation_rejects_invalid_paths() -> None:
         lambda: normalize_path_coords([[0, 0], [1, 1, 1]], "path"),
     )
     _assert_value_error(
+        "two, three, or four coordinates",
+        lambda: normalize_path_coords([[0, 0, 0, 0, 0], [1, 1, 1, 1, 1]], "path"),
+    )
+    _assert_value_error(
         "positive length", lambda: normalize_path_coords([[0, 0], [0, 0]], "path")
     )
     _assert_value_error(
@@ -92,5 +143,29 @@ def test_path_validation_rejects_invalid_paths() -> None:
         lambda: path_hausdorff_distance(
             [[0, 0], [0, 1e-320], [1e308, 0]],
             [[0, 0], [1e308, 0]],
+        ),
+    )
+    _assert_value_error(
+        "exactly 4 values",
+        lambda: path_hausdorff_distance(
+            [[0, 0, 0, 0], [1, 1, 1, 1]],
+            [[0, 0, 0, 0], [1, 1, 1, 1]],
+            component_scales=[1, 1, 1],
+        ),
+    )
+    _assert_value_error(
+        "must be positive",
+        lambda: path_hausdorff_distance(
+            [[0, 0], [1, 1]],
+            [[0, 0], [1, 1]],
+            component_scales=[1, 0],
+        ),
+    )
+    _assert_value_error(
+        "numeric precision",
+        lambda: path_hausdorff_distance(
+            [[0, 0], [0, 1]],
+            [[1, 0], [1, 1]],
+            component_scales=[1, 1e200],
         ),
     )

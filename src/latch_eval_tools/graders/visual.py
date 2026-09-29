@@ -12,12 +12,17 @@ from .geometry import (
     GeometryBackendError,
     locations_list_to_locations_list_match,
     normalize_coords_list,
+    normalize_path_component_scales,
+    normalize_path_list,
     normalize_polygon_list,
+    paths_list_to_paths_list_match,
     polygons_list_to_polygons_list_match,
+    validate_path_numeric_support,
 )
 from .number_contract import is_finite_number
 
 _GRADER_NAME = "Location Radius List"
+_PATH_GRADER_NAME = "Path Radius List"
 _POLYGON_GRADER_NAME = "Polygon IoU List"
 
 
@@ -150,6 +155,106 @@ class LocationRadiusListGrader(BinaryGrader):
                 f"{_GRADER_NAME}: {'PASS' if passed else 'FAIL'}\n\n"
                 f"  Matched {stats['matched_count']}/{stats['reference_count']} "
                 f"reference locations"
+            ),
+            agent_answer=agent_answer,
+            score=score,
+        )
+
+
+class PathRadiusListGrader(BinaryGrader):
+    def evaluate_answer(self, agent_answer: dict, config: dict) -> GraderResult:
+        if not isinstance(config, dict):
+            return configuration_error_result(
+                agent_answer, _PATH_GRADER_NAME, "config must be an object"
+            )
+
+        try:
+            references = normalize_path_list(
+                config.get("reference_paths"), "reference_paths"
+            )
+            if not references:
+                raise ValueError("reference_paths must not be empty")
+            dimension = len(references[0][0])
+            if any(len(path[0]) != dimension for path in references):
+                raise ValueError("reference paths must have matching dimensions")
+            scales = normalize_path_component_scales(
+                config.get("component_scales"), dimension
+            )
+            for index, reference in enumerate(references):
+                validate_path_numeric_support(
+                    reference,
+                    component_scales=scales,
+                    err_label=f"reference_paths[{index}]",
+                )
+        except ValueError as exc:
+            return configuration_error_result(
+                agent_answer, _PATH_GRADER_NAME, str(exc)
+            )
+
+        radius = _finite_float(config.get("tolerance_radius"))
+        if radius is None or radius < 0:
+            return configuration_error_result(
+                agent_answer,
+                _PATH_GRADER_NAME,
+                "tolerance_radius must be a finite non-negative number",
+            )
+
+        pass_threshold = _finite_float(config.get("pass_threshold", 1.0))
+        if pass_threshold is None or not 0 < pass_threshold <= 1:
+            return configuration_error_result(
+                agent_answer,
+                _PATH_GRADER_NAME,
+                "pass_threshold must be a finite number in (0, 1]",
+            )
+
+        field = config.get("answer_field")
+        if not isinstance(field, str) or not field:
+            return configuration_error_result(
+                agent_answer,
+                _PATH_GRADER_NAME,
+                "answer_field must be a non-empty string",
+            )
+
+        if not isinstance(agent_answer, dict):
+            return _failure(
+                agent_answer,
+                "agent answer must be an object",
+                _PATH_GRADER_NAME,
+            )
+
+        submitted, found = get_nested_value(agent_answer, field)
+        if not found:
+            return _failure(
+                agent_answer,
+                f"missing required field: {field}",
+                _PATH_GRADER_NAME,
+            )
+
+        try:
+            stats = paths_list_to_paths_list_match(
+                references,
+                submitted,
+                radius,
+                component_scales=scales,
+            )
+        except ValueError as exc:
+            return _failure(agent_answer, str(exc), _PATH_GRADER_NAME)
+
+        score = cast(float, stats["f1"])
+        passed = score >= pass_threshold
+        metrics = {
+            **stats,
+            "answer_field": field,
+            "pass_threshold": pass_threshold,
+        }
+
+        return GraderResult(
+            passed=passed,
+            metrics=metrics,
+            reasoning=(
+                f"{_PATH_GRADER_NAME}: {'PASS' if passed else 'FAIL'}\n\n"
+                f"  Matched {stats['matched_count']}/{stats['reference_count']} "
+                f"reference paths"
             ),
             agent_answer=agent_answer,
             score=score,

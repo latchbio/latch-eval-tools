@@ -11,6 +11,15 @@ LOCATION_CONFIG = {
     "pass_threshold": 0.75,
 }
 
+PATH_A = [[0, 0], [10, 0]]
+PATH_B = [[0, 10], [10, 10]]
+PATH_CONFIG = {
+    "reference_paths": [PATH_A, PATH_B],
+    "tolerance_radius": 0.5,
+    "answer_field": "paths",
+    "pass_threshold": 0.75,
+}
+
 SQUARE_A = [[0, 0], [2, 0], [2, 2], [0, 2]]
 SQUARE_B = [[10, 0], [12, 0], [12, 2], [10, 2]]
 POLYGON_CONFIG = {
@@ -44,6 +53,76 @@ def test_location_radius_list_grader_fails_below_f1_threshold() -> None:
     assert result.metrics["unmatched_reference_indices"] == [1]
 
 
+def test_path_radius_list_grader_matches_one_to_one() -> None:
+    result = get_grader("path_radius_list").evaluate_answer(
+        {"paths": [PATH_A, PATH_A, PATH_B]}, PATH_CONFIG
+    )
+
+    assert result.passed is True
+    assert math.isclose(result.score, 0.8)
+    assert result.metrics["matched_count"] == 2
+    assert math.isclose(result.metrics["precision"], 2 / 3)
+    assert result.metrics["unmatched_submitted_indices"] == [1]
+
+
+def test_path_radius_list_grader_supports_scaled_4d_time() -> None:
+    reference = [[0, 0, 0, 0], [10, 0, 0, 10]]
+    submitted = [[0, 0, 0, 2], [10, 0, 0, 12]]
+    config = {
+        "reference_paths": [reference],
+        "tolerance_radius": 0.5,
+        "component_scales": [1, 1, 1, 0.25],
+        "answer_field": "paths",
+        "pass_threshold": 1.0,
+    }
+
+    result = get_grader("path_radius_list").evaluate_answer(
+        {"paths": [submitted]}, config
+    )
+
+    assert result.passed is True
+    assert result.score == 1.0
+    assert result.metrics["component_scales"] == [1.0, 1.0, 1.0, 0.25]
+    assert math.isclose(result.metrics["matches"][0]["distance"], 0.5)
+
+
+def test_path_radius_list_grader_rejects_invalid_component_scales() -> None:
+    result = get_grader("path_radius_list").evaluate_answer(
+        {"paths": [PATH_A]},
+        {**PATH_CONFIG, "component_scales": [1, 1, 1]},
+    )
+
+    assert result.passed is False
+    assert result.metrics.get("configuration_error")
+
+
+def test_path_radius_list_grader_rejects_unsupported_reference_precision() -> None:
+    result = get_grader("path_radius_list").evaluate_answer(
+        {"paths": [PATH_A]},
+        {
+            **PATH_CONFIG,
+            "reference_paths": [[[0, 0], [1e-200, 0], [1, 0]]],
+        },
+    )
+
+    assert result.passed is False
+    assert result.metrics.get("configuration_error")
+
+
+def test_path_radius_list_grader_rejects_excessive_matching_work() -> None:
+    path = [[index, 0] for index in range(128)]
+    result = get_grader("path_radius_list").evaluate_answer(
+        {"paths": [path]},
+        {
+            **PATH_CONFIG,
+            "reference_paths": [path],
+        },
+    )
+
+    assert result.passed is False
+    assert "matching complexity" in result.reasoning
+
+
 def test_polygon_iou_list_grader_matches_one_to_one() -> None:
     grader = get_grader("polygon_iou_list")
     result = grader.evaluate_answer(
@@ -69,10 +148,14 @@ def test_polygon_iou_list_grader_fails_below_f1_threshold() -> None:
 
 def test_visual_list_graders_reject_zero_pass_threshold() -> None:
     location_config = {**LOCATION_CONFIG, "pass_threshold": 0}
+    path_config = {**PATH_CONFIG, "pass_threshold": 0}
     polygon_config = {**POLYGON_CONFIG, "pass_threshold": 0}
 
     location_result = get_grader("location_radius").evaluate_answer(
         {"locations": []}, location_config
+    )
+    path_result = get_grader("path_radius_list").evaluate_answer(
+        {"paths": []}, path_config
     )
     polygon_result = get_grader("polygon_iou_list").evaluate_answer(
         {"polygons": []}, polygon_config
@@ -80,6 +163,8 @@ def test_visual_list_graders_reject_zero_pass_threshold() -> None:
 
     assert location_result.passed is False
     assert location_result.metrics.get("configuration_error")
+    assert path_result.passed is False
+    assert path_result.metrics.get("configuration_error")
     assert polygon_result.passed is False
     assert polygon_result.metrics.get("configuration_error")
 

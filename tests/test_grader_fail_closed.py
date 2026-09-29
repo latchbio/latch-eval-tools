@@ -54,6 +54,11 @@ CONFIGS: dict[str, dict] = {
         "tolerance_radius": 5.0,
         "answer_field": "locations",
     },
+    "path_radius_list": {
+        "reference_paths": [[[0.0, 0.0], [10.0, 0.0]]],
+        "tolerance_radius": 1.0,
+        "answer_field": "paths",
+    },
     "polygon_iou_list": {
         "reference_polygons": [[[0, 0], [1, 0], [1, 1], [0, 1]]],
         "iou_threshold": 0.5,
@@ -140,6 +145,7 @@ CORRECT_ANSWERS: dict[str, dict] = {
         "adjacency_pass": True,
     },
     "location_radius": {"locations": [[13.0, 24.0]]},
+    "path_radius_list": {"paths": [[[0.0, 0.0], [10.0, 0.0]]]},
     "polygon_iou_list": {"polygons": [[[0, 0], [1, 0], [1, 1], [0, 1]]]},
     "multiple_choice": {"answer": "C"},
     "refusal_vocab": {"decision": "REFUSE"},
