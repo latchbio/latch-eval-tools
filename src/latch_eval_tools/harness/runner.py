@@ -14,7 +14,7 @@ from latch_eval_tools.harness.utils import (
 
 class EvalRunner:
     """Main evaluation runner for executing benchmarks with various agents."""
-
+    
     def __init__(
         self,
         eval_path: str | Path,
@@ -22,10 +22,10 @@ class EvalRunner:
         run_id: str | None = None,
         cache_name: str = ".eval_cache",
         workspace_name: str = ".eval_workspace",
-        benchmark_name: str = "Eval",
+        benchmark_name: str = "Eval"
     ):
         """Initialize evaluation runner.
-
+        
         Args:
             eval_path: Path to eval JSON file
             keep_workspace: Whether to preserve workspace after completion
@@ -49,11 +49,11 @@ class EvalRunner:
 
     def run(self, agent_function=None):
         """Run evaluation with specified agent function.
-
+        
         Args:
             agent_function: Callable that takes (task_prompt: str, work_dir: Path)
                           and returns dict with keys "answer" and optionally "metadata".
-
+        
         Returns:
             dict with test results including test_id, agent_answer, grader_result, passed
         """
@@ -85,17 +85,13 @@ class EvalRunner:
         agent_metadata = {}
 
         if agent_function is None:
-            print(
-                "\nNo agent function provided. To run this eval, pass an agent_function that:"
-            )
+            print("\nNo agent function provided. To run this eval, pass an agent_function that:")
             print("  Takes (task_prompt: str, work_dir: Path) as arguments")
             print("  Returns dict with 'answer' key containing the parsed JSON answer")
             print("\nExample:")
             print("  def my_agent(task, work_dir):")
             print("      # Run your agent which writes eval_answer.json to /workspace")
-            print(
-                "      answer_file = work_dir / 'agent_workspace' / 'eval_answer.json'"
-            )
+            print("      answer_file = work_dir / 'agent_workspace' / 'eval_answer.json'")
             print("      return json.loads(answer_file.read_text())")
             print("\n  runner = EvalRunner(eval_path)")
             print("  runner.run(agent_function=my_agent)")
@@ -113,7 +109,6 @@ class EvalRunner:
             except Exception as e:
                 print(f"\nAgent error: {e}")
                 import traceback
-
                 traceback.print_exc()
 
         eval_answer_path = find_answer_file(get_agent_workspace_dir(work_dir))
@@ -140,7 +135,6 @@ class EvalRunner:
                     grader_result = grader.evaluate_answer(agent_answer, grader_config)
                 except Exception as e:
                     import traceback
-
                     grader_result = GraderResult(
                         passed=False,
                         metrics={"grader_error": str(e)},
@@ -149,9 +143,7 @@ class EvalRunner:
                         score=0.0,
                     )
 
-                print(
-                    f"\n{'✓ EVAL PASSED' if grader_result.passed else '✗ EVAL FAILED'}"
-                )
+                print(f"\n{'✓ EVAL PASSED' if grader_result.passed else '✗ EVAL FAILED'}")
                 print("\nGrader reasoning:")
                 print("-" * 80)
                 print(grader_result.reasoning)
