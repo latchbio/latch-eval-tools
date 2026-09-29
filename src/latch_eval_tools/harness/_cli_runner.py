@@ -9,7 +9,7 @@ import time
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from importlib.resources import files
 from pathlib import Path
 from typing import Any
@@ -307,7 +307,9 @@ def pi_custom_provider_config(model_name: str) -> dict:
     return {
         "baseUrl": base_url,
         "apiKey": f"${key}",
-        "api": "anthropic-messages" if provider == "anthropic" else "openai-completions",
+        "api": "anthropic-messages"
+        if provider == "anthropic"
+        else "openai-completions",
         "models": [model],
     }
 
@@ -383,7 +385,7 @@ PROVIDER_RETRYABLE_STATUS_CODES = frozenset(
 )
 PROVIDER_CAPACITY_STATUS_CODES = frozenset({429, 529})
 PROVIDER_MESSAGE_MAX_CHARS = 500
-PROVIDER_MAX_RESUMES = 5
+DEFAULT_PROVIDER_RETRY_WAIT_SECONDS = 30 * 60.0
 PROVIDER_RETRY_BACKOFF_MULTIPLIER = 2.0
 PROVIDER_RETRY_MAX_DELAY_SECONDS = 300.0
 PROVIDER_CAPACITY_FALLBACK_SECONDS = 60.0
@@ -661,6 +663,8 @@ def classify_terminal_provider_failure(
 def provider_retry_delay_seconds(failure: ProviderFailure, attempt: int) -> float:
     if not failure.retryable:
         raise ValueError("provider failure is not retryable")
+    if attempt < 1:
+        raise ValueError("provider retry attempt must be positive")
     if failure.retry_after_seconds is not None:
         base = failure.retry_after_seconds + random.uniform(
             0.0, PROVIDER_HINT_JITTER_SECONDS
@@ -673,10 +677,37 @@ def provider_retry_delay_seconds(failure: ProviderFailure, attempt: int) -> floa
         base = PROVIDER_TRANSPORT_FALLBACK_SECONDS + random.uniform(
             0.0, PROVIDER_TRANSPORT_JITTER_SECONDS
         )
-    return min(
-        base * PROVIDER_RETRY_BACKOFF_MULTIPLIER ** (attempt - 1),
+    # A zero provider hint must not create an unbounded tight retry loop. With
+    # a minimum one-second base, ten doublings already exceed the local cap.
+    delay = min(
+        max(base, 1.0) * PROVIDER_RETRY_BACKOFF_MULTIPLIER ** min(attempt - 1, 10),
         PROVIDER_RETRY_MAX_DELAY_SECONDS,
     )
+    # The cap bounds our backoff, never the provider's minimum wait.
+    return max(delay, failure.retry_after_seconds or 0.0)
+
+
+def _made_provider_progress(
+    agent_type: CliHarnessAgentType, attempt_events: list[dict]
+) -> bool:
+    """Only a completed successful model response resets consecutive backoff."""
+    for event in attempt_events:
+        message = event.get("message")
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        if (
+            agent_type == "pi"
+            and event.get("type") in PI_ASSISTANT_EVENT_TYPES
+            and message.get("stopReason") in {"stop", "toolUse", "length"}
+        ):
+            return True
+        if (
+            agent_type == "claudecode"
+            and event.get("type") == "assistant"
+            and message.get("stop_reason") in {"end_turn", "tool_use", "max_tokens"}
+        ):
+            return True
+    return False
 
 
 def teardown_container(container_name: str) -> None:
@@ -1106,7 +1137,15 @@ def _run_cli_agent(
     benchmark: bool = False,
     operation_timeout: int = 0,
     completion_file_path: str | None = None,
+    provider_retry_wait_seconds: float = DEFAULT_PROVIDER_RETRY_WAIT_SECONDS,
 ) -> dict:
+    if (
+        isinstance(provider_retry_wait_seconds, bool)
+        or not isinstance(provider_retry_wait_seconds, (int, float))
+        or not math.isfinite(provider_retry_wait_seconds)
+        or provider_retry_wait_seconds < 0
+    ):
+        raise ValueError("provider_retry_wait_seconds must be finite and nonnegative")
     agent_log_file = work_dir / "agent_output.log"
     if agent_log_file.exists():
         agent_log_file.unlink()
@@ -1131,9 +1170,7 @@ def _run_cli_agent(
     ensure_docker_image(docker_image)
     agent_dir = get_agent_workspace_dir(work_dir)
     completion_file = (
-        agent_dir / completion_file_path
-        if completion_file_path is not None
-        else None
+        agent_dir / completion_file_path if completion_file_path is not None else None
     )
     if agent_type == "pi":
         _write_pi_extension(work_dir, "tool_timeout.js")
@@ -1161,6 +1198,9 @@ def _run_cli_agent(
     oom_detected = False
     oom_restarts = 0
     provider_resumes = 0
+    consecutive_provider_failures = 0
+    provider_wait_seconds = 0.0
+    provider_retry_stop_reason: str | None = None
     last_provider_failure: ProviderFailure | None = None
 
     trajectory_lock = threading.Lock()
@@ -1191,7 +1231,7 @@ def _run_cli_agent(
         ):
             _write_pi_custom_models_json(work_dir, model_name)
         _start_cli_container(container_name)
-        deadline = time.time() + eval_timeout
+        deadline = time.monotonic() + eval_timeout
 
         with open(agent_log_file, "w") as log_file:
             agent_start_time = time.time()
@@ -1201,7 +1241,7 @@ def _run_cli_agent(
             claudecode_answer_resumes = 0
 
             while True:
-                remaining_timeout = deadline - time.time()
+                remaining_timeout = deadline - time.monotonic()
                 if remaining_timeout <= 0:
                     timed_out = True
                     log_file.write(
@@ -1311,7 +1351,7 @@ def _run_cli_agent(
                 answer_submitted = False
                 try:
                     while process.poll() is None:
-                        now = time.time()
+                        now = time.monotonic()
                         remaining_timeout = deadline - now
                         if remaining_timeout <= 0:
                             raise subprocess.TimeoutExpired(
@@ -1323,7 +1363,8 @@ def _run_cli_agent(
                                 if completion_file is not None:
                                     answer_submitted = (
                                         completion
-                                        and completion_file == find_finished_file(agent_dir)
+                                        and completion_file
+                                        == find_finished_file(agent_dir)
                                     )
                                 else:
                                     answer_file = _find_eval_answer_file()
@@ -1414,36 +1455,64 @@ def _run_cli_agent(
                 ):
                     break
 
+                if _made_provider_progress(agent_type, attempt_events):
+                    consecutive_provider_failures = 0
+
                 if provider_failure is not None:
                     last_provider_failure = provider_failure
                     if provider_failure.retryable:
+                        consecutive_provider_failures += 1
                         persist_trajectory()
                         candidate_resume_identifier = load_trajectory_identifier(
                             trajectory_file,
                             AGENT_IDENTIFIER_KEYS[agent_type],
                         )
                         delay = provider_retry_delay_seconds(
-                            provider_failure, provider_resumes + 1
+                            provider_failure, consecutive_provider_failures
                         )
-                        retry_fits_deadline = delay < deadline - time.time()
-                        if (
-                            provider_resumes < PROVIDER_MAX_RESUMES
-                            and candidate_resume_identifier is not None
-                            and retry_fits_deadline
-                            and is_docker_container_running(container_name)
+                        if candidate_resume_identifier is None:
+                            provider_retry_stop_reason = "missing_session"
+                        elif (
+                            delay > provider_retry_wait_seconds - provider_wait_seconds
                         ):
+                            provider_retry_stop_reason = "wait_budget_exhausted"
+                        elif delay >= deadline - time.monotonic():
+                            provider_retry_stop_reason = "run_deadline"
+                        elif not is_docker_container_running(container_name):
+                            provider_retry_stop_reason = "sandbox_stopped"
+                        else:
                             provider_resumes += 1
                             resume_identifier = candidate_resume_identifier
-                            log_file.write(
-                                "\n\n[Provider retry "
-                                f"{provider_resumes}/{PROVIDER_MAX_RESUMES}] "
-                                f"waiting {delay:.1f}s before resuming session "
-                                f"{resume_identifier}\n"
+                            retry_at = datetime.fromtimestamp(
+                                time.time() + delay, tz=timezone.utc
                             )
+                            retry_message = (
+                                f"[Provider retry {provider_resumes}] waiting for provider "
+                                f"HTTP {provider_failure.status_code}; resuming session "
+                                f"{resume_identifier} at {retry_at.isoformat()} "
+                                f"after {delay:.1f}s "
+                                f"({provider_wait_seconds:.1f}/{provider_retry_wait_seconds:.1f}s "
+                                "wait budget used)"
+                            )
+                            log_file.write(f"\n\n{retry_message}\n")
                             log_file.flush()
+                            print(retry_message, flush=True)
+                            wait_started = time.monotonic()
                             time.sleep(delay)
+                            provider_wait_seconds += max(
+                                delay, time.monotonic() - wait_started
+                            )
+                            # A cancelled/stopped sandbox must not be relaunched by
+                            # provider recovery after a long cooldown.
+                            if not is_docker_container_running(container_name):
+                                provider_retry_stop_reason = "sandbox_stopped"
+                                break
                             prompt_text = "Continue."
                             continue
+                        log_file.write(
+                            f"\n\nProvider recovery stopped: {provider_retry_stop_reason}\n"
+                        )
+                        log_file.flush()
                     # Do not bypass provider retry limits through the generic
                     # clean-exit or OOM resume paths below.
                     break
@@ -1483,7 +1552,9 @@ def _run_cli_agent(
                             if completion_file is not None:
                                 answer_present = completion_file.is_file()
                             elif completion:
-                                answer_present = find_finished_file(agent_dir) is not None
+                                answer_present = (
+                                    find_finished_file(agent_dir) is not None
+                                )
                             else:
                                 answer_present = _find_eval_answer_file() is not None
                             if (
@@ -1718,6 +1789,9 @@ def _run_cli_agent(
                 last_provider_failure.retry_after_seconds
             )
         error_details["provider_retry_count"] = provider_resumes
+        error_details["provider_retry_wait_seconds"] = provider_wait_seconds
+        if provider_retry_stop_reason is not None:
+            error_details["provider_retry_stop_reason"] = provider_retry_stop_reason
 
     structured_agent_error = None
     if error_details is not None:
@@ -1745,6 +1819,9 @@ def _run_cli_agent(
         refusal_trajectory=refusal_trajectory,
     )
     metadata["refusal_fallback_count"] = refusal_fallback_count
+    if agent_type in {"pi", "claudecode"}:
+        metadata["provider_retry_count"] = provider_resumes
+        metadata["provider_retry_wait_seconds"] = provider_wait_seconds
 
     _write_refusal_verdict(
         work_dir,

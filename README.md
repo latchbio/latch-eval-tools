@@ -188,7 +188,22 @@ Built-in harness helpers:
 - `run_minisweagent_task`
 - `run_claudecode_task` (requires `ANTHROPIC_API_KEY` and `claude` CLI)
 - `run_openaicodex_task` (requires `OPENAI_API_KEY` or `CODEX_API_KEY` and `codex` CLI)
+- `run_pi_task` (requires `pi` CLI and the selected provider's API key)
 - `run_plotsagent_task` (experimental latch-plots harness)
+
+`run_pi_task` and `run_claudecode_task` resume the existing session in the running
+sandbox after recognized transient provider errors. `provider_retry_wait_seconds`
+sets the cumulative runner cooldown budget (default: 1800 seconds; `0` disables
+these resumes). Successful model responses reset consecutive backoff, but never
+replenish this budget. Provider retry hints are minimum delays, including hints
+longer than the runner's five-minute backoff cap.
+
+Cooldowns and the CLI's own retries remain inside the original `eval_timeout`;
+resuming does not grant additional execution time. Recovery requires a session ID
+and a live sandbox. Exhaustion returns the existing provider failure metadata;
+it does not recreate the container or restart the task. Logs report the next
+retry time, and metadata includes `provider_retry_count` and
+`provider_retry_wait_seconds`, including on successful runs.
 
 ## Eval JSON shape
 
