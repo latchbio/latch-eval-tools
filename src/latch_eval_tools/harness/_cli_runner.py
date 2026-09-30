@@ -262,14 +262,6 @@ ANTHROPIC_MODEL_CONFIGS: dict[str, dict] = {
         "contextWindow": 1000000,
         "maxTokens": 128000,
         "cost": {"input": 2, "output": 10, "cacheRead": 0.2, "cacheWrite": 2.5},
-        "thinkingLevelMap": {
-            "minimal": "max",
-            "low": "max",
-            "medium": "max",
-            "high": "max",
-            "xhigh": "max",
-            "max": "max",
-        },
         "compat": {
             "forceAdaptiveThinking": True,
             "supportsTemperature": False,

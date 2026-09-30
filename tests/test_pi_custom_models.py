@@ -58,14 +58,12 @@ def test_pi_custom_model_rejects_unregistered_model(tmp_path):
         _write_pi_custom_models_json(tmp_path, "fireworks/unknown")
 
 
-def test_sonnet_55_uses_direct_anthropic_api_with_adaptive_thinking():
+def test_sonnet_55_uses_direct_anthropic_api_without_overriding_effort():
     config = pi_custom_provider_config("anthropic/claude-sonnet-5-5")
     assert config["baseUrl"] == "https://api.anthropic.com"
     assert config["api"] == "anthropic-messages"
     assert config["apiKey"] == "$ANTHROPIC_API_KEY"
     model = config["models"][0]
-    assert model["thinkingLevelMap"] == dict.fromkeys(
-        ["minimal", "low", "medium", "high", "xhigh", "max"], "max"
-    )
+    assert "thinkingLevelMap" not in model
     assert model["compat"]["forceAdaptiveThinking"] is True
     assert model["compat"]["supportsTemperature"] is False
