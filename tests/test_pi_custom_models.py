@@ -18,6 +18,16 @@ from latch_eval_tools.harness._cli_runner import (
             "OPENROUTER_API_KEY",
         ),
         (
+            "openrouter/deepseek/deepseek-v4-flash-0731",
+            "openrouter",
+            "OPENROUTER_API_KEY",
+        ),
+        (
+            "openrouter/qwen/qwen3.8-27b",
+            "openrouter",
+            "OPENROUTER_API_KEY",
+        ),
+        (
             "openrouter/nvidia/nemotron-3-super-120b-a12b",
             "openrouter",
             "OPENROUTER_API_KEY",
@@ -51,6 +61,8 @@ def test_pi_custom_model_config_written_for_provider(
     assert actual["providers"][provider]["models"][0]["id"] == model.removeprefix(
         f"{provider}/"
     )
+    # Custom registration must not silently remap the runner's requested effort.
+    assert "thinkingLevelMap" not in actual["providers"][provider]["models"][0]
 
 
 def test_pi_custom_model_rejects_unregistered_model(tmp_path):

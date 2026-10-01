@@ -98,8 +98,7 @@ GROK_ENV_KEYS = {"XAI_API_KEY"}
 #     otherwise truncate K3's 1M window and long reasoning. (maxTokens passthrough
 #     for openai-completions requires pi >= 0.80.3, issue #5595.)
 #   - compat.thinkingFormat "reasoning_effort" sends the top-level reasoning_effort
-#     field Moonshot documents for K3; K3 only supports the "max" level, so every
-#     pi thinking level maps to "max".
+#     field. Leave effort selection to the runner and Pi's provider handling.
 #   - compat.supportsUsageInStreaming keeps stream_options.include_usage on so
 #     usage (input/output/cache tokens) and cost are reported back.
 OPENROUTER_PROVIDER_NAME = "openrouter"
@@ -113,23 +112,13 @@ OPENROUTER_MODEL_CONFIGS: dict[str, dict] = {
         "contextWindow": 1048576,
         "maxTokens": 131072,
         "cost": {"input": 3, "output": 15, "cacheRead": 0.3, "cacheWrite": 0},
-        "thinkingLevelMap": {
-            "low": "max",
-            "medium": "max",
-            "high": "max",
-            "xhigh": "max",
-            "max": "max",
-        },
         "compat": {
             "thinkingFormat": "reasoning_effort",
             "supportsReasoningEffort": True,
             "supportsUsageInStreaming": True,
         },
     },
-    # DeepSeek-V4-Flash-0731: 1M context, reasoning_effort supports low/high/max
-    # (no medium/xhigh at the API), and DeepSeek recommends max output 384K tokens
-    # at the high/max effort levels. We pin every pi thinking level to "max" via
-    # thinkingLevelMap so the model always runs at its top reasoning effort.
+    # DeepSeek-V4-Flash-0731: 1M context and 384K maximum output tokens.
     # Cost is OpenRouter list price ($0.14 / $0.28 per 1M, $0.028 cache read;
     # Cloudflare provider).
     "openrouter/deepseek/deepseek-v4-flash-0731": {
@@ -140,20 +129,13 @@ OPENROUTER_MODEL_CONFIGS: dict[str, dict] = {
         "contextWindow": 1048576,
         "maxTokens": 393216,
         "cost": {"input": 0.14, "output": 0.28, "cacheRead": 0.028, "cacheWrite": 0},
-        "thinkingLevelMap": {
-            "low": "max",
-            "medium": "max",
-            "high": "max",
-            "xhigh": "max",
-            "max": "max",
-        },
         "compat": {
             "thinkingFormat": "reasoning_effort",
             "supportsReasoningEffort": True,
             "supportsUsageInStreaming": True,
         },
     },
-    # Qwen3.8-27B: dense VL model, all pi thinking levels pinned to "xhigh".
+    # Qwen3.8-27B: dense VL model.
     # https://openrouter.ai/qwen/qwen3.8-27b
     "openrouter/qwen/qwen3.8-27b": {
         "id": "qwen/qwen3.8-27b",
@@ -163,13 +145,6 @@ OPENROUTER_MODEL_CONFIGS: dict[str, dict] = {
         "contextWindow": 262144,
         "maxTokens": 131072,
         "cost": {"input": 0.45, "output": 3.2, "cacheRead": 0, "cacheWrite": 0},
-        "thinkingLevelMap": {
-            "low": "xhigh",
-            "medium": "xhigh",
-            "high": "xhigh",
-            "xhigh": "xhigh",
-            "max": "xhigh",
-        },
         "compat": {
             "thinkingFormat": "reasoning_effort",
             "supportsReasoningEffort": True,
@@ -184,14 +159,13 @@ OPENROUTER_MODEL_CONFIGS: dict[str, dict] = {
         "contextWindow": 262144,
         "maxTokens": 32768,
         "cost": {"input": 0.08, "output": 0.45, "cacheRead": 0, "cacheWrite": 0},
-        "thinkingLevelMap": {"xhigh": "high", "max": "high"},
         "compat": {
             "thinkingFormat": "reasoning_effort",
             "supportsReasoningEffort": True,
             "supportsUsageInStreaming": True,
         },
     },
-    # OpenRouter advertises reasoning_effort for Ultra; high is its top Pi level.
+    # OpenRouter advertises reasoning_effort for Ultra.
     # https://openrouter.ai/api/v1/models/nvidia/nemotron-3-ultra-550b-a55b/endpoints
     # Conservative limits fit every currently advertised endpoint. Costs use
     # the lowest-priced endpoint; actual routing may cost more.
@@ -203,7 +177,6 @@ OPENROUTER_MODEL_CONFIGS: dict[str, dict] = {
         "contextWindow": 202800,
         "maxTokens": 16384,
         "cost": {"input": 0.5, "output": 2.2, "cacheRead": 0.1, "cacheWrite": 0},
-        "thinkingLevelMap": {"xhigh": "high", "max": "high"},
         "compat": {
             "supportsDeveloperRole": False,
             "thinkingFormat": "openrouter",
