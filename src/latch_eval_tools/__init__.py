@@ -8,11 +8,14 @@ from latch_eval_tools.graders import (
     GraderResult,
     LabelSetJaccardGrader,
     ListMatchGrader,
+    LocationRadiusListGrader,
     MarkerGenePrecisionRecallGrader,
     MarkerGeneSeparationGrader,
     MultipleChoiceGrader,
     NumericRangeGrader,
     NumericToleranceGrader,
+    PathRadiusListGrader,
+    PolygonIoUListGrader,
     PredicateLeafGrader,
     RefusalVocabGrader,
     SpatialAdjacencyGrader,
@@ -87,6 +90,9 @@ __all__ = [
     "LabelSetJaccardGrader",
     "DistributionComparisonGrader",
     "SpatialAdjacencyGrader",
+    "LocationRadiusListGrader",
+    "PathRadiusListGrader",
+    "PolygonIoUListGrader",
     "MultipleChoiceGrader",
     "RefusalVocabGrader",
     "PredicateLeafGrader",
@@ -101,4 +107,4 @@ __all__ = [
     "detect_llm_refusal",
 ]
 
-__version__ = "0.4.15"
+__version__ = "0.4.52"

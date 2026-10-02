@@ -1,14 +1,18 @@
 """Composite graders: all_of, average_of, list_match, dict_match. Recursive over
 predicate-leaves and nested composites."""
 
+from __future__ import annotations
+
 import math
 from typing import Any
 
 from .base import MISSING, BinaryGrader, GraderResult, normalize_score
+from .geometry import GeometryBackendError
 from .number_contract import is_finite_number
 from .predicate import (
-    SCALAR_OPS,
     _apply_role,
+    _is_scalar_op,
+    _threshold_capacity_error,
     _threshold_configuration_error,
     evaluate_predicate,
     predicate_configuration_error,
@@ -123,9 +127,14 @@ def _child_payload_configuration_error(
         return "child grader metrics must be an object"
     if not is_finite_number(score):
         return "child grader score must be a finite number"
-    if not is_finite_number(score_max) or float(score_max) < 0.0:
+    if (
+        isinstance(score_max, bool)
+        or not isinstance(score_max, (int, float))
+        or not is_finite_number(score_max)
+        or score_max < 0.0
+    ):
         return "child grader score_max must be a finite non-negative number"
-    if require_positive_score_max and float(score_max) <= 0.0:
+    if require_positive_score_max and score_max <= 0.0:
         return "average_of scoring child must have positive score capacity"
     return None
 
@@ -140,11 +149,11 @@ def _child_info_has_configuration_error(info: dict[str, Any]) -> bool:
 
 
 def _child_info_has_system_error(info: dict[str, Any]) -> bool:
-    if info.get("grader_system_error") is True or info.get("grader_error") is not None:
+    if info.get("grader_system_error") or info.get("grader_error") is not None:
         return True
     sub_metrics = info.get("sub_metrics")
-    return isinstance(sub_metrics, dict) and (
-        sub_metrics.get("grader_system_error") is True
+    return isinstance(sub_metrics, dict) and bool(
+        sub_metrics.get("grader_system_error")
         or sub_metrics.get("grader_error") is not None
     )
 
@@ -294,10 +303,20 @@ def _evaluate_leaf(leaf: dict, value: Any) -> tuple[str, bool, float, float, str
     predicate = leaf.get("predicate")
     threshold = leaf.get("threshold", 1.0)
     op = predicate.get("op") if isinstance(predicate, dict) else None
-    is_scalar = isinstance(op, str) and op in SCALAR_OPS
-    label = leaf.get("name") or (f"{op}-leaf" if op else "(unnamed)")
+    is_scalar = _is_scalar_op(op)
     kind = "hard_fail" if role == "hard_fail" else "scoring"
     score_max = _leaf_score_max(leaf)
+    name = leaf.get("name")
+    if name is not None and (not isinstance(name, str) or not name):
+        return (
+            kind,
+            False,
+            0.0,
+            score_max,
+            "(invalid name)",
+            {"configuration_error": "name must be a non-empty string when configured"},
+        )
+    label = name or (f"{op}-leaf" if op else "(unnamed)")
 
     answer_field = leaf.get("answer_field")
     if answer_field is not None:
@@ -363,6 +382,17 @@ def _evaluate_leaf(leaf: dict, value: Any) -> tuple[str, bool, float, float, str
             {"configuration_error": threshold_error, "role": role, "op": op},
         )
 
+    capacity_error = _threshold_capacity_error(predicate, role, threshold)
+    if capacity_error is not None:
+        return (
+            kind,
+            False,
+            0.0,
+            score_max,
+            label,
+            {"configuration_error": capacity_error, "role": role, "op": op},
+        )
+
     if role in {"gate", "additive"} and score_max <= 0.0:
         return (
             kind,
@@ -393,6 +423,20 @@ def _evaluate_leaf(leaf: dict, value: Any) -> tuple[str, bool, float, float, str
 
     try:
         raw = evaluate_predicate(predicate, value)
+    except GeometryBackendError as exc:
+        return (
+            kind,
+            False,
+            0.0,
+            score_max,
+            label,
+            {
+                "grader_error": str(exc),
+                "grader_system_error": True,
+                "role": role,
+                "op": op,
+            },
+        )
     except (KeyError, TypeError, ValueError) as exc:
         return (
             kind,
@@ -733,13 +777,18 @@ def _evaluate_average_of_pass_rule(
                 "min_passing_children is invalid with pass_rule='score_threshold'",
             )
         threshold = config.get("score_threshold")
-        if not is_finite_number(threshold) or threshold < 0:
+        if (
+            isinstance(threshold, bool)
+            or not isinstance(threshold, (int, float))
+            or not is_finite_number(threshold)
+            or threshold < 0
+        ):
             return (
                 pass_rule,
                 False,
                 "score_threshold must be a finite non-negative number",
             )
-        return pass_rule, scoring_total_score >= float(threshold), None
+        return pass_rule, scoring_total_score >= threshold, None
 
     return (
         str(pass_rule),
@@ -768,16 +817,19 @@ def _list_match_configuration_error(config: object) -> str | None:
         return "list_match match_key must be a non-empty string"
 
     normalize_mode = config.get("match_key_normalize", "none")
-    if not isinstance(normalize_mode, str):
-        return "list_match match_key_normalize must be a string"
+    if not isinstance(normalize_mode, str) or normalize_mode not in {"none", "sort"}:
+        return "list_match match_key_normalize must be one of none/sort"
     deduplicate_by = config.get("deduplicate_by")
     if deduplicate_by is not None and (
         not isinstance(deduplicate_by, str) or deduplicate_by == ""
     ):
         return "list_match deduplicate_by must be a non-empty string when configured"
     per_tuple_rule = config.get("per_tuple_rule", "gates_all_pass")
-    if not isinstance(per_tuple_rule, str) or per_tuple_rule == "":
-        return "list_match per_tuple_rule must be a non-empty string"
+    if not isinstance(per_tuple_rule, str) or per_tuple_rule not in {
+        "gates_all_pass",
+        "all_pass",
+    }:
+        return "list_match per_tuple_rule must be one of gates_all_pass/all_pass"
 
     k = config.get("k")
     if k is not None and (isinstance(k, bool) or not isinstance(k, int) or k <= 0):
@@ -792,7 +844,12 @@ def _list_match_configuration_error(config: object) -> str | None:
     if isinstance(k, int) and tuple_pass_min > k:
         return "list_match tuple_pass_min cannot exceed k"
     additive_score_min = config.get("additive_score_min", 0)
-    if not is_finite_number(additive_score_min) or float(additive_score_min) < 0.0:
+    if (
+        isinstance(additive_score_min, bool)
+        or not isinstance(additive_score_min, (int, float))
+        or not is_finite_number(additive_score_min)
+        or additive_score_min < 0.0
+    ):
         return "list_match additive_score_min must be a finite non-negative number"
 
     ground_truth = config.get("ground_truth")
@@ -843,8 +900,11 @@ def _dict_match_configuration_error(config: object) -> str | None:
     if not isinstance(answer_field, str) or answer_field == "":
         return "dict_match answer_field must be a non-empty string"
     per_entry_rule = config.get("per_entry_rule", "gates_all_pass")
-    if not isinstance(per_entry_rule, str) or per_entry_rule == "":
-        return "dict_match per_entry_rule must be a non-empty string"
+    if not isinstance(per_entry_rule, str) or per_entry_rule not in {
+        "gates_all_pass",
+        "all_pass",
+    }:
+        return "dict_match per_entry_rule must be one of gates_all_pass/all_pass"
     all_keys_required = config.get("all_keys_required", True)
     if not isinstance(all_keys_required, bool):
         return "dict_match all_keys_required must be a boolean"
@@ -1313,6 +1373,8 @@ class ListMatchGrader(BinaryGrader):
         field_scores: dict = {}
         consumed_gt_keys: set[Any] = set()
         hard_fail_triggered: list[str] = []
+        system_error_fields: list[str] = []
+        system_errors: dict[str, str] = {}
 
         for i, tup in enumerate(agent_list):
             if not isinstance(tup, dict):
@@ -1350,13 +1412,23 @@ class ListMatchGrader(BinaryGrader):
             gate_pass = True
             for fname, leaf in gt.get("fields", {}).items():
                 fvalue = tup.get(fname, MISSING)
-                kind, passed, score, _, _, _ = _evaluate_leaf(leaf, fvalue)
+                kind, passed, score, _, _, info = _evaluate_leaf(leaf, fvalue)
                 role = leaf.get("role") if isinstance(leaf, dict) else None
-                per_field[fname] = {"passed": passed, "score": score, "role": role}
-                field_scores[f"{key_val}.{fname}"] = score
+                per_field[fname] = {
+                    "passed": passed,
+                    "score": score,
+                    "role": role,
+                    "info": info,
+                }
+                field_label = f"{key_val}.{fname}"
+                field_scores[field_label] = score
+                has_system_error = _child_info_has_system_error(info)
+                if has_system_error:
+                    system_error_fields.append(field_label)
+                    system_errors[field_label] = str(info.get("grader_error"))
                 if kind == "hard_fail":
-                    if not passed:
-                        hard_fail_triggered.append(f"{key_val}.{fname}")
+                    if not passed and not has_system_error:
+                        hard_fail_triggered.append(field_label)
                     continue
                 if role == "gate" and not passed:
                     gate_pass = False
@@ -1378,6 +1450,7 @@ class ListMatchGrader(BinaryGrader):
             )
 
         veto = len(hard_fail_triggered) > 0
+        system_error = len(system_error_fields) > 0
         # An answer that matched no ground-truth entry graded nothing, so it must
         # not report a pass: `tuple_pass_min`/`additive_score_min` of 0 would
         # otherwise mark an empty list as passing, and that verdict propagates
@@ -1387,12 +1460,17 @@ class ListMatchGrader(BinaryGrader):
             (tuple_pass_count >= tuple_pass_min)
             and (additive_score >= additive_score_min)
             and not veto
+            and not system_error
             and not nothing_graded
         )
         score_denominator = _list_match_additive_score_denominator(
             list(gt_by_key.values()), k
         )
-        score = 0.0 if veto else normalize_score(additive_score, score_denominator)
+        score = (
+            0.0
+            if veto or system_error
+            else normalize_score(additive_score, score_denominator)
+        )
 
         return GraderResult(
             passed=passed,
@@ -1406,6 +1484,18 @@ class ListMatchGrader(BinaryGrader):
                 "additive_score_denominator": score_denominator,
                 "n_tuples_evaluated": len(agent_list),
                 "hard_fail_triggered": hard_fail_triggered,
+                "system_error_fields": system_error_fields,
+                **(
+                    {
+                        "grader_system_error": True,
+                        "grader_error": "; ".join(
+                            f"{field}: {error}"
+                            for field, error in system_errors.items()
+                        ),
+                    }
+                    if system_error
+                    else {}
+                ),
                 **(
                     {
                         "composite_error": "answer matched none of the ground-truth entries"
@@ -1458,6 +1548,8 @@ class DictMatchGrader(BinaryGrader):
         raw_score = 0.0
         score_denominator = 0.0
         hard_fail_triggered: list[str] = []
+        system_error_fields: list[str] = []
+        system_errors: dict[str, str] = {}
 
         for gt_key, gt_entry in gt.items():
             entry_score_denominator = _dict_match_entry_score_denominator(gt_entry)
@@ -1485,9 +1577,14 @@ class DictMatchGrader(BinaryGrader):
                     {"key": gt_key, "passed": passed, "shape": "scalar", "info": info}
                 )
                 field_scores[gt_key] = score
+                has_system_error = _child_info_has_system_error(info)
+                if has_system_error:
+                    field_label = str(gt_key)
+                    system_error_fields.append(field_label)
+                    system_errors[field_label] = str(info.get("grader_error"))
                 if kind != "hard_fail":
                     raw_score += score
-                elif not passed:
+                elif not passed and not has_system_error:
                     hard_fail_triggered.append(gt_key)
                 if not passed:
                     all_pass = False
@@ -1503,14 +1600,24 @@ class DictMatchGrader(BinaryGrader):
                         if isinstance(agent_val, dict)
                         else MISSING
                     )
-                    kind, passed, score, _, _, _ = _evaluate_leaf(leaf, fvalue)
+                    kind, passed, score, _, _, info = _evaluate_leaf(leaf, fvalue)
                     role = leaf.get("role") if isinstance(leaf, dict) else None
-                    per_field[fname] = {"passed": passed, "score": score, "role": role}
-                    field_scores[f"{gt_key}.{fname}"] = score
+                    per_field[fname] = {
+                        "passed": passed,
+                        "score": score,
+                        "role": role,
+                        "info": info,
+                    }
+                    field_label = f"{gt_key}.{fname}"
+                    field_scores[field_label] = score
+                    has_system_error = _child_info_has_system_error(info)
+                    if has_system_error:
+                        system_error_fields.append(field_label)
+                        system_errors[field_label] = str(info.get("grader_error"))
                     if kind != "hard_fail":
                         raw_score += score
-                    elif not passed:
-                        hard_fail_triggered.append(f"{gt_key}.{fname}")
+                    elif not passed and not has_system_error:
+                        hard_fail_triggered.append(field_label)
                     if not passed:
                         ok = False
                     if role == "gate" and not passed:
@@ -1537,15 +1644,16 @@ class DictMatchGrader(BinaryGrader):
         entries_total = len(entry_results)
         entries_passed = sum(1 for r in entry_results if r.get("passed"))
         veto = len(hard_fail_triggered) > 0
+        system_error = len(system_error_fields) > 0
         # score_denominator is 0 only when the answer supplied none of the graded
         # keys (every entry was an omitted optional key). That is a non-answer, so
         # fail closed rather than paying full credit for ungraded work.
         nothing_graded = score_denominator <= 0.0
-        if veto or nothing_graded:
+        if veto or system_error or nothing_graded:
             score = 0.0
         else:
             score = normalize_score(raw_score, score_denominator)
-        passed = all_pass and not veto and not nothing_graded
+        passed = all_pass and not veto and not system_error and not nothing_graded
 
         return GraderResult(
             passed=passed,
@@ -1556,6 +1664,18 @@ class DictMatchGrader(BinaryGrader):
                 "raw_score": raw_score,
                 "score_denominator": score_denominator,
                 "hard_fail_triggered": hard_fail_triggered,
+                "system_error_fields": system_error_fields,
+                **(
+                    {
+                        "grader_system_error": True,
+                        "grader_error": "; ".join(
+                            f"{field}: {error}"
+                            for field, error in system_errors.items()
+                        ),
+                    }
+                    if system_error
+                    else {}
+                ),
                 "failing_keys": [
                     r["key"] for r in entry_results if not r.get("passed")
                 ],

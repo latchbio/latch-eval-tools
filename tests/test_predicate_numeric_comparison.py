@@ -1,28 +1,22 @@
-import pytest
-
 from latch_eval_tools.graders.predicate import (
     PredicateLeafGrader,
     evaluate_predicate,
 )
 
 
-@pytest.mark.parametrize(
-    ("value", "predicate"),
-    [
+def test_numeric_config_values_match_numeric_strings() -> None:
+    cases = [
         ("0.5", {"op": "equals", "arg": 0.5}),
         (" -0.5 ", {"op": "in", "args": [0, -0.5, 1]}),
         ("1e3", {"op": "in", "args": [10, 100, 1000]}),
-    ],
-)
-def test_numeric_config_values_match_numeric_strings(
-    value: str, predicate: dict
-) -> None:
-    assert evaluate_predicate(predicate, value) is True
+    ]
+    for value, predicate in cases:
+        assert evaluate_predicate(predicate, value) is True
 
 
-@pytest.mark.parametrize("value", ["not-a-number", "nan", "inf", "-inf"])
-def test_invalid_or_nonfinite_numeric_strings_do_not_match(value: str) -> None:
-    assert evaluate_predicate({"op": "equals", "arg": 0.5}, value) is False
+def test_invalid_or_nonfinite_numeric_strings_do_not_match() -> None:
+    for value in ["not-a-number", "nan", "inf", "-inf"]:
+        assert evaluate_predicate({"op": "equals", "arg": 0.5}, value) is False
 
 
 def test_string_config_values_keep_exact_string_semantics() -> None:
@@ -75,3 +69,50 @@ def test_in_does_not_coerce_against_boolean_candidates() -> None:
 def test_in_never_matches_nan() -> None:
     nan = float("nan")
     assert evaluate_predicate({"op": "in", "args": [nan]}, nan) is False
+
+
+def test_location_within_radius_predicate() -> None:
+    predicate = {
+        "op": "location_within_radius",
+        "reference_location": [0, 0],
+        "tolerance_radius": 5,
+    }
+
+    assert evaluate_predicate(predicate, [3, 4]) is True
+    assert evaluate_predicate(predicate, [6, 0]) is False
+
+
+def test_location_within_radius_predicate_leaf() -> None:
+    result = PredicateLeafGrader().evaluate_answer(
+        {"location": [3, 4]},
+        {
+            "role": "gate",
+            "answer_field": "location",
+            "predicate": {
+                "op": "location_within_radius",
+                "reference_location": [0, 0],
+                "tolerance_radius": 5,
+            },
+        },
+    )
+
+    assert result.passed is True
+    assert result.score == 1.0
+
+
+def test_location_within_radius_rejects_invalid_config() -> None:
+    result = PredicateLeafGrader().evaluate_answer(
+        {"location": [0, 0]},
+        {
+            "role": "gate",
+            "answer_field": "location",
+            "predicate": {
+                "op": "location_within_radius",
+                "reference_location": [0, 0],
+                "tolerance_radius": -1,
+            },
+        },
+    )
+
+    assert result.passed is False
+    assert result.metrics.get("configuration_error")

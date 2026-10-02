@@ -1,11 +1,26 @@
 """Predicate AST evaluator + restricted JSONPath resolver. Boolean ops
-return bool; scalar ops (f1, jaccard, weighted_label) return float."""
+return bool; scalar ops return float."""
+
+from __future__ import annotations
 
 import math
 import re
 from typing import Any
 
 from .base import MISSING, BinaryGrader, GraderResult
+from .geometry import (
+    GeometryBackendError,
+    iou_polygon_to_polygon,
+    iou_volume_to_volume,
+    location_within_radius_match,
+    normalize_coords,
+    normalize_path_component_scales,
+    normalize_path_coords,
+    normalize_polygon_coords,
+    normalize_volume_coords,
+    path_within_radius_match,
+    validate_path_numeric_support,
+)
 from .number_contract import is_finite_number
 
 BOOLEAN_OPS: set[str] = {
@@ -24,10 +39,38 @@ BOOLEAN_OPS: set[str] = {
 
 SCALAR_OPS: set[str] = {"f1", "jaccard", "weighted_label"}
 
-KNOWN_OPS: set[str] = BOOLEAN_OPS | SCALAR_OPS
+VISUAL_OPS: set[str] = {
+    "location_within_radius",
+    "path_within_radius",
+    "polygon_iou",
+    "volume_iou",
+}
+
+KNOWN_OPS: set[str] = BOOLEAN_OPS | SCALAR_OPS | VISUAL_OPS
+
+
+def _is_scalar_op(op: object) -> bool:
+    return isinstance(op, str) and (
+        op in SCALAR_OPS or op in {"polygon_iou", "volume_iou"}
+    )
 
 
 _JSONPATH_TOKEN_RE = re.compile(r"\.([A-Za-z_][A-Za-z_0-9]*)|\[\*\]")
+
+
+def _finite_float(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if not is_finite_number(value):
+        return None
+    return value * 1.0
+
+
+def _require_finite_float(value: Any) -> float:
+    result = _finite_float(value)
+    if result is None:
+        raise ValueError("expected a finite number")
+    return result
 
 
 def predicate_score_max(predicate: Any) -> float:
@@ -44,10 +87,8 @@ def predicate_score_max(predicate: Any) -> float:
 
     scores: list[float] = []
     for raw_score in raw_scores:
-        if not is_finite_number(raw_score):
-            continue
-        score = float(raw_score)
-        if score > 0.0:
+        score = _finite_float(raw_score)
+        if score is not None and score > 0.0:
             scores.append(score)
     return max(scores, default=0.0)
 
@@ -160,6 +201,8 @@ def predicate_configuration_error(
     op = predicate.get("op")
     if not isinstance(op, str) or op not in KNOWN_OPS:
         return f"{path}.op must be one of {sorted(KNOWN_OPS)}, got {op!r}"
+    if depth > 0 and _is_scalar_op(op):
+        return f"{path}.op {op!r} is scalar and cannot be nested under a boolean op"
 
     if op == "equals":
         return None if "arg" in predicate else f"{path} requires 'arg'"
@@ -233,8 +276,8 @@ def predicate_configuration_error(
             except (TypeError, ValueError) as exc:
                 return f"{path}.possible_sets[{index}] is invalid: {exc}"
         if op == "jaccard_ge":
-            threshold = predicate.get("threshold")
-            if not is_finite_number(threshold) or not 0.0 <= float(threshold) <= 1.0:
+            threshold = _finite_float(predicate.get("threshold"))
+            if threshold is None or not 0.0 <= threshold <= 1.0:
                 return f"{path}.threshold must be a finite number in [0, 1]"
         return None
 
@@ -260,6 +303,69 @@ def predicate_configuration_error(
             return f"{path}.default must be a finite number"
         return None
 
+    if op == "location_within_radius":
+        try:
+            normalize_coords(
+                predicate.get("reference_location"),
+                f"{path}.reference_location",
+            )
+        except ValueError as exc:
+            return str(exc)
+
+        radius = predicate.get("tolerance_radius")
+        if (
+            isinstance(radius, bool)
+            or not isinstance(radius, (int, float))
+            or not is_finite_number(radius)
+            or radius < 0
+        ):
+            return f"{path}.tolerance_radius must be a finite non-negative number"
+        return None
+
+    if op == "path_within_radius":
+        try:
+            reference_path = normalize_path_coords(
+                predicate.get("reference_path"),
+                f"{path}.reference_path",
+            )
+            scales = normalize_path_component_scales(
+                predicate.get("component_scales"),
+                len(reference_path[0]),
+                f"{path}.component_scales",
+            )
+            validate_path_numeric_support(
+                reference_path,
+                component_scales=scales,
+                err_label=f"{path}.reference_path",
+            )
+        except ValueError as exc:
+            return str(exc)
+
+        radius = _finite_float(predicate.get("tolerance_radius"))
+        if radius is None or radius < 0:
+            return f"{path}.tolerance_radius must be a finite non-negative number"
+        return None
+
+    if op == "polygon_iou":
+        try:
+            normalize_polygon_coords(
+                predicate.get("reference_polygon"),
+                f"{path}.reference_polygon",
+            )
+        except ValueError as exc:
+            return str(exc)
+        return None
+
+    if op == "volume_iou":
+        try:
+            normalize_volume_coords(
+                predicate.get("reference_volume"),
+                f"{path}.reference_volume",
+            )
+        except ValueError as exc:
+            return str(exc)
+        return None
+
     return f"{path}.op is unsupported: {op!r}"
 
 
@@ -267,10 +373,30 @@ def _threshold_configuration_error(
     predicate: Any, threshold: Any, *, path: str = "threshold"
 ) -> str | None:
     op = predicate.get("op") if isinstance(predicate, dict) else None
-    if op not in SCALAR_OPS:
+    if not _is_scalar_op(op):
         return None
-    if not is_finite_number(threshold) or float(threshold) < 0.0:
+    normalized = _finite_float(threshold)
+    if normalized is None or normalized < 0.0:
         return f"{path} must be a finite non-negative number for scalar predicates"
+    if op in {"f1", "jaccard"} and normalized > 1.0:
+        return f"{path} must be in [0, 1] for {op}"
+    if op in {"polygon_iou", "volume_iou"} and not 0.0 < normalized <= 1.0:
+        return f"{path} must be in (0, 1] for {op}"
+    return None
+
+
+def _threshold_capacity_error(
+    predicate: Any, role: Any, threshold: Any, *, path: str = "threshold"
+) -> str | None:
+    op = predicate.get("op") if isinstance(predicate, dict) else None
+    if role not in {"gate", "hard_fail"} or not _is_scalar_op(op):
+        return None
+    normalized = _finite_float(threshold)
+    if normalized is None:
+        return None
+    maximum = predicate_score_max(predicate)
+    if normalized > maximum:
+        return f"{path} cannot exceed the predicate maximum score {maximum}"
     return None
 
 
@@ -339,7 +465,29 @@ def evaluate_predicate(pred: Any, value: Any) -> bool | float:
     if op == "jaccard":
         return _max_jaccard(_as_set(value), pred["possible_sets"])
     if op == "weighted_label":
-        return float(pred["table"].get(value, pred.get("default", 0)))
+        return _require_finite_float(pred["table"].get(value, pred.get("default", 0)))
+    if op == "polygon_iou":
+        return iou_polygon_to_polygon(pred["reference_polygon"], value)
+    if op == "path_within_radius":
+        return bool(
+            path_within_radius_match(
+                pred["reference_path"],
+                value,
+                pred["tolerance_radius"],
+                component_scales=pred.get("component_scales"),
+            )
+        )
+    if op == "volume_iou":
+        return iou_volume_to_volume(pred["reference_volume"], value)
+
+    if op == "location_within_radius":
+        return bool(
+            location_within_radius_match(
+                pred["reference_location"],
+                value,
+                pred["tolerance_radius"],
+            )
+        )
 
     raise ValueError(f"unknown predicate op: {op!r}")
 
@@ -353,17 +501,17 @@ def _apply_role(
     through to ('scoring', False, 0.0) as a defensive default.
     """
     if role == "hard_fail":
-        triggered = float(raw) >= threshold if is_scalar else bool(raw)
-        score = float(raw) if is_scalar else (0.0 if triggered else 1.0)
-        return "hard_fail", not triggered, score
+        scalar = _require_finite_float(raw) if is_scalar else 0.0
+        triggered = scalar >= threshold if is_scalar else bool(raw)
+        return "hard_fail", not triggered, 0.0 if triggered else 1.0
     if role == "additive":
         if is_scalar:
-            return "scoring", True, float(raw)
+            return "scoring", True, _require_finite_float(raw)
         passed = bool(raw)
         return "scoring", passed, 1.0 if passed else 0.0
     if role == "gate":
         if is_scalar:
-            score = float(raw)
+            score = _require_finite_float(raw)
             return "scoring", score >= threshold, score
         passed = bool(raw)
         return "scoring", passed, 1.0 if passed else 0.0
@@ -397,7 +545,15 @@ class PredicateLeafGrader(BinaryGrader):
         answer_field = config.get("answer_field")
         threshold = config.get("threshold", 1.0)
         name = config.get("name")
-        score_max = predicate_score_max(predicate)
+        score_capacity = predicate_score_max(predicate)
+        score_max = 1.0 if role == "hard_fail" else score_capacity
+
+        if name is not None and (not isinstance(name, str) or not name):
+            return _configuration_fail_grade(
+                agent_answer,
+                "name must be a non-empty string when configured",
+                score_max=score_max,
+            )
 
         predicate_error = predicate_configuration_error(predicate)
         if predicate_error is not None:
@@ -441,8 +597,17 @@ class PredicateLeafGrader(BinaryGrader):
                 score_max=score_max,
             )
 
+        capacity_error = _threshold_capacity_error(predicate, role, threshold)
+        if capacity_error is not None:
+            return _configuration_fail_grade(
+                agent_answer,
+                capacity_error,
+                name=name,
+                score_max=score_max,
+            )
+
         op = predicate.get("op") if isinstance(predicate, dict) else None
-        is_scalar = op in SCALAR_OPS
+        is_scalar = _is_scalar_op(op)
 
         # A field the agent never supplied is a failure, not something to hand
         # to the predicate. This applies to `hard_fail` too: at the root the
@@ -461,6 +626,13 @@ class PredicateLeafGrader(BinaryGrader):
 
         try:
             raw_result = evaluate_predicate(predicate, value)
+        except GeometryBackendError as exc:
+            return _system_error_grade(
+                agent_answer,
+                str(exc),
+                name=name,
+                score_max=score_max,
+            )
         except (ValueError, KeyError, TypeError) as exc:
             return _invalid_answer_grade(
                 agent_answer,
@@ -537,7 +709,9 @@ def _format_reasoning(
     if field_label and field_label != "<root>":
         lines.append(f"  field: {field_label}")
     if is_scalar:
-        lines.append(f"  score: {float(raw_result):.4f} (threshold: {threshold})")
+        lines.append(
+            f"  score: {_require_finite_float(raw_result):.4f} (threshold: {threshold})"
+        )
     else:
         lines.append(f"  predicate result: {raw_result}")
     if role == "hard_fail":
@@ -587,6 +761,29 @@ def _configuration_fail_grade(
         passed=False,
         metrics={"configuration_error": reason, "name": name},
         reasoning=f"Predicate-leaf {label}: CONFIGURATION ERROR \u2014 {reason}",
+        agent_answer=agent_answer if isinstance(agent_answer, dict) else None,
+        score=0.0,
+        field_scores={},
+        score_max=score_max,
+    )
+
+
+def _system_error_grade(
+    agent_answer: Any,
+    reason: str,
+    *,
+    name: str | None = None,
+    score_max: float = 1.0,
+) -> GraderResult:
+    label = f"'{name}'" if name else "(unnamed)"
+    return GraderResult(
+        passed=False,
+        metrics={
+            "grader_error": reason,
+            "grader_system_error": True,
+            "name": name,
+        },
+        reasoning=f"Predicate-leaf {label}: SYSTEM ERROR — {reason}",
         agent_answer=agent_answer if isinstance(agent_answer, dict) else None,
         score=0.0,
         field_scores={},
