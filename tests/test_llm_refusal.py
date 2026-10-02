@@ -70,6 +70,9 @@ def test_diagnostic_bounds_large_trajectory_fields_for_agent_completion() -> Non
     hostile_text = ("\x01" * 20_000) + ('"\\🧪' * 20_000)
     result = detect_llm_refusal(
         trajectory_data={
+            # `code` is read off the refusing record, so the record has to carry
+            # the refusal stop reason for this to exercise the bounding path.
+            "stop_reason": "refusal",
             "code": hostile_text,
             "message": (
                 f"I am unable to respond due to Anthropic usage policy. {hostile_text}"
@@ -219,3 +222,91 @@ def test_biology_topic_and_network_errors_are_not_refusals():
         "Connection failed: error sending request",
     ):
         assert detect_llm_refusal(agent_output_data={"message": message}) is None
+
+
+# The shape pi-ai writes to trajectory.json: every `message_start` carries a
+# placeholder `stopReason` of "pending" and the provider's real stop reason
+# lands in `rawStopReason` on the turn that was actually refused.
+PI_AI_REFUSED_TRAJECTORY = [
+    {"type": "session", "id": "00000000-0000-0000-0000-000000000000"},
+    {
+        "type": "message_start",
+        "role": "assistant",
+        "message": {
+            "api": "anthropic-messages",
+            "provider": "anthropic",
+            "model": "claude-opus-5-5",
+            "stopReason": "pending",
+        },
+    },
+    {
+        "type": "message_end",
+        "role": "assistant",
+        "message": {
+            "provider": "anthropic",
+            "model": "claude-opus-5-5",
+            "stopReason": "error",
+            "rawStopReason": "refusal",
+            "errorMessage": (
+                "API integrators: you can reduce refusals for your users by "
+                "configuring a fallback model — see "
+                "https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback"
+            ),
+        },
+    },
+]
+
+
+def test_refusal_code_comes_from_the_refused_turn_not_the_first_message() -> None:
+    # Regression: the code was read from the first `stopReason` anywhere in the
+    # flattened trajectory, so every refusal was reported as `pending` (or
+    # `tool_use` / `stop_sequence`, whichever message happened to come first).
+    result = detect_llm_refusal(trajectory_data=PI_AI_REFUSED_TRAJECTORY)
+
+    assert result is not None
+    assert result.provider == "anthropic"
+    assert result.code == "refusal"
+
+
+def test_integrator_fallback_notice_is_not_used_as_the_refusal_message() -> None:
+    # Regression: eval reviewers saw "you can reduce refusals for your users by
+    # configuring a fallback model" as the refusal reason. It is boilerplate
+    # Anthropic attaches to refused requests, so it belongs in the excerpt.
+    result = detect_llm_refusal(trajectory_data=PI_AI_REFUSED_TRAJECTORY)
+
+    assert result is not None
+    assert "configuring a fallback model" not in result.message
+    assert result.raw_excerpt is not None
+    assert "configuring a fallback model" in result.raw_excerpt
+
+
+def test_raw_stop_reason_alone_detects_a_refusal() -> None:
+    # Without the fallback notice the run used to fall through to "unexpected
+    # error" - `rawStopReason` was never inspected.
+    result = detect_llm_refusal(
+        trajectory_data=[
+            {"message": {"stopReason": "pending"}},
+            {"message": {"stopReason": "error", "rawStopReason": "refusal"}},
+        ]
+    )
+
+    assert result is not None
+    assert result.provider == "anthropic"
+    assert result.code == "refusal"
+
+
+def test_refusal_explanation_is_preferred_over_markers() -> None:
+    result = detect_llm_refusal(
+        trajectory_data=[
+            {"message": {"stopReason": "pending"}},
+            {
+                "message": {
+                    "stopReason": "refusal",
+                    "explanation": "Declined: request matched the cyber classifier.",
+                }
+            },
+        ]
+    )
+
+    assert result is not None
+    assert result.message == "Declined: request matched the cyber classifier."

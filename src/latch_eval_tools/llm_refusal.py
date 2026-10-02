@@ -136,8 +136,65 @@ _ANTHROPIC_FALLBACK_MARKERS: tuple[str, ...] = (
     "reduce refusals for your users",
 )
 
+# The integrator-facing notice above is boilerplate Anthropic attaches to a
+# refused request, not a reason for the refusal. It is evidence that a refusal
+# happened, so it stays a detection marker, but surfacing it as the refusal
+# *message* told eval reviewers to "configure a fallback model" instead of
+# telling them what was refused.
+_ANTHROPIC_DEFAULT_MESSAGE = (
+    "Anthropic refused this request. The API returned no explanation."
+)
 
-def _find_message(strings: list[str], provider: LLMRefusalProvider) -> str:
+# Ordered most-authoritative first: the harness maps the provider's stop reason
+# onto its own vocabulary, so the raw field is the one that still says
+# "refusal".
+_STOP_REASON_FIELDS: tuple[str, ...] = (
+    "rawStopReason",
+    "raw_stop_reason",
+    "stop_reason",
+    "stopReason",
+)
+_REFUSAL_STOP_REASONS = frozenset({"refusal", "sensitive"})
+_EXPLANATION_FIELDS = {"explanation", "refusal_explanation", "refusalExplanation"}
+
+
+def _refusal_stop_reason(record: dict[str, Any]) -> str | None:
+    for key in _STOP_REASON_FIELDS:
+        value = record.get(key)
+        if isinstance(value, str) and value.lower() in _REFUSAL_STOP_REASONS:
+            return value.lower()
+    return None
+
+
+def _find_refusal_record(value: Any) -> dict[str, Any] | None:
+    """Return the record whose own stop reason marks it as the refused turn.
+
+    A trajectory holds one stop reason per message, so searching the whole
+    flattened blob for a `stop_reason`/`stopReason` field returns whichever
+    message comes first. On a pi-ai trajectory that is the `message_start`
+    placeholder (`stopReason: "pending"`), which is how refusals came to be
+    reported with codes like `pending`, `tool_use` and `stop_sequence`.
+    Anchoring on the refusing record keeps the code and the explanation
+    together with the event they describe.
+    """
+    if isinstance(value, dict):
+        if _refusal_stop_reason(value) is not None:
+            return value
+        for item in value.values():
+            found = _find_refusal_record(item)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for item in value:
+            found = _find_refusal_record(item)
+            if found is not None:
+                return found
+    return None
+
+
+def _find_marker_message(
+    strings: list[str], provider: LLMRefusalProvider
+) -> str | None:
     provider_markers: tuple[str, ...]
     if provider == "openai":
         provider_markers = (
@@ -152,7 +209,7 @@ def _find_message(strings: list[str], provider: LLMRefusalProvider) -> str:
             "unable to respond",
             "usage policy",
             "violat",
-        ) + _ANTHROPIC_FALLBACK_MARKERS
+        )
     else:
         provider_markers = (
             "refusal",
@@ -165,6 +222,13 @@ def _find_message(strings: list[str], provider: LLMRefusalProvider) -> str:
         lowered = item.lower()
         if any(marker in lowered for marker in provider_markers):
             return item
+    return None
+
+
+def _find_message(strings: list[str], provider: LLMRefusalProvider) -> str:
+    marker_message = _find_marker_message(strings, provider)
+    if marker_message is not None:
+        return marker_message
     for item in strings:
         if item.strip():
             return item
@@ -190,6 +254,15 @@ def _co_occurring_string(
         if required in lowered_item and any(
             alternative in lowered_item for alternative in alternatives
         ):
+            return item
+    return None
+
+
+def _find_marker_string(
+    strings: list[str], lowered_strings: list[str], markers: tuple[str, ...]
+) -> str | None:
+    for item, lowered_item in zip(strings, lowered_strings):
+        if any(marker in lowered_item for marker in markers):
             return item
     return None
 
@@ -238,11 +311,11 @@ def _detect_from_value(
     lowered_strings = [item.lower() for item in strings]
     lowered = "\n".join(lowered_strings)
     code = _find_string_field(value, {"code"})
-    stop_reason = _find_string_field(value, {"stop_reason", "stopReason"})
     finish_reason = _find_string_field(value, {"finish_reason", "finishReason"})
 
-    anthropic_fallback_hit = any(
-        marker in lowered for marker in _ANTHROPIC_FALLBACK_MARKERS
+    refusal_record = _find_refusal_record(value)
+    fallback_notice = _find_marker_string(
+        strings, lowered_strings, _ANTHROPIC_FALLBACK_MARKERS
     )
     anthropic_policy_hit = _co_occurring_string(
         strings,
@@ -252,18 +325,41 @@ def _detect_from_value(
     )
 
     if (
-        stop_reason in {"refusal", "sensitive"}
+        refusal_record is not None
         or anthropic_policy_hit is not None
-        or anthropic_fallback_hit
+        or fallback_notice is not None
     ):
+        # Every field below is read off `refusal_record` rather than the
+        # flattened trajectory, so an unrelated earlier message cannot donate
+        # its `code`/`stopReason` to the refusal.
+        record_code = (
+            _find_string_field(refusal_record, {"code"})
+            if refusal_record is not None
+            else None
+        )
+        record_stop_reason = (
+            _refusal_stop_reason(refusal_record) if refusal_record is not None else None
+        )
+        record_explanation = (
+            _find_string_field(refusal_record, _EXPLANATION_FIELDS)
+            if refusal_record is not None
+            else None
+        )
         return LLMRefusalDiagnostic(
             provider="anthropic",
-            code=code
-            or (stop_reason if stop_reason not in {None, "error"} else None)
-            or "refusal",
-            message=anthropic_policy_hit or _find_message(strings, "anthropic"),
+            code=record_code or record_stop_reason or "refusal",
+            message=(
+                record_explanation
+                or anthropic_policy_hit
+                or _find_marker_message(strings, "anthropic")
+                or _ANTHROPIC_DEFAULT_MESSAGE
+            ),
             source=source,
-            raw_excerpt=_excerpt(strings),
+            # Lead with the notice so it survives truncation: it is the only
+            # evidence of the refusal when the provider sent no explanation.
+            raw_excerpt=_excerpt(
+                strings if fallback_notice is None else [fallback_notice, *strings]
+            ),
         )
 
     if (
